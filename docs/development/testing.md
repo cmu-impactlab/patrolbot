@@ -66,8 +66,8 @@ seam; re-run them after touching the bridge, the SBC server, or the lifecycle/la
 
 ```bash
 # Observe during a test
-ssh robot-pi ./patrolbot-logs.sh           # all three services
-ssh robot-pi ./patrolbot-logs.sh status    # health + recent errors
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh           # all three services
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status    # health + recent errors
 ```
 
 ## What is **not** covered

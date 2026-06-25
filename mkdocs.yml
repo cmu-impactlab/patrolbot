@@ -13,10 +13,9 @@ theme:
   features:
     - navigation.instant
     - navigation.tracking
-    - navigation.tabs
-    - navigation.sections
     - navigation.top
     - navigation.indexes
+    - navigation.path
     - toc.follow
     - content.code.copy
     - content.code.annotate
@@ -62,10 +61,17 @@ markdown_extensions:
       custom_fences:
         - name: mermaid
           class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+          format: !!python/name:pymdownx.superfences.fence_div_format
 
 plugins:
   - search
+
+extra_css:
+  - assets/stylesheets/mermaid-zoom.css
+
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+  - assets/javascripts/mermaid-config.js
 
 extra:
   social:

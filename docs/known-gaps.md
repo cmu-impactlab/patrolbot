@@ -22,28 +22,26 @@ There are three kinds of gap here:
 
 ## SBC access gaps
 
-!!! danger "The SBC was not reachable"
-    When this documentation was generated, the SBC mount was down (`Transport endpoint is not
-    connected`) and SSH to it was out of scope. **Every SBC-side statement in this site comes from
-    the last knowledge snapshot (dated 2026-06-24), not a live read.** SBC pages are labeled
-    accordingly.
+!!! info "SBC was verified 2026-06-25, not directly accessible now"
+    The SBC was live-accessed during the 2026-06-25 session: `patrolbot_server.cpp` was read and
+    modified to add AUX telemetry (sonar/battery/flags), and the systemd unit files were confirmed.
+    The current documentation reflects that session. The SBC is not accessible right now, so the
+    state below represents the 2026-06-25 verification, not a new live read.
 
-Specifically unconfirmed (would require SSH to the SBC to verify):
+Specifically unconfirmed since the last session:
 
-- **SBC source not re-read.** `patrolbot_server.cpp` was not read live this session; its behavior is
-  described from the snapshot + the project's change log. The exact ARIA calls, the `AUX` build
-  order, the EAGAIN-guard threshold, and the keepalive/`TCP_USER_TIMEOUT` values are as last
-  recorded.
+- **SBC `linger` status.** `sudo loginctl enable-linger ros` is required once (interactively) for
+  `patrolbot-server.service` to autostart at boot. This was listed as a remaining one-time action
+  in the 2026-06-25 notes and may or may not have been run since.
+- **SBC binary currency.** The `patrolbot_server` binary was last built during the 2026-06-25
+  session after the AUX telemetry additions. If `patrolbot_server.cpp` has been modified since,
+  the binary may not match the source.
 - **SBC port assignments / baud rates** (`/dev/ttyS0` @ 9600, `/dev/ttyS2` @ 38400, socat → :7000,
-  server :7272) are from the snapshot and the ARIA `patrolbot-sh.p` profile, not a live probe.
-- **SBC `linger` status unconfirmed.** The SBC notes list `sudo loginctl enable-linger ros` as a
-  remaining one-time action; later Pi-side notes claim linger is enabled on both users. Whether
-  `patrolbot-server.service` actually autostarts on the SBC today is **not verified here**.
-- **SBC binary currency.** The `patrolbot_server` binary build date (last recorded 2026-06-18) and
-  whether it matches the current `.cpp` were not re-checked.
+  server :7272) are confirmed from the 2026-06-25 session and the ARIA `patrolbot-sh.p` profile.
 
 What is **not** affected: everything Pi-side (the bridge, Nav2, the mobile base, the launch/systemd
-setup, the maps, the FastDDS profile) was verified directly against live source on the Pi.
+setup, the maps, the FastDDS profile, `/sonar`, `/battery`, `/diagnostics`) was verified directly
+against the live Pi.
 
 ---
 

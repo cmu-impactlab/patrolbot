@@ -44,11 +44,11 @@ with a plain `Makefile` (no ROS, no colcon). See
 
 ## Access to the machines
 
-| Machine | Access |
-|---|---|
-| Pi | SSH (alias `robot-pi`), on the robot LAN |
-| SBC | SSH (alias `robot-sbc`), on the robot LAN — **may be unreachable**; see [Known Gaps](../known-gaps.md) |
-| Both | same subnet for ROS 2 DDS discovery to work without extra config |
+| Machine | SSH address | Notes |
+|---|---|---|
+| Pi | `ubuntu@patrolbot-ros.qatar.cmu.edu` | On the robot LAN; autostarts all services at boot |
+| SBC | `ros@172.20.87.231` | On the robot LAN; may not be reachable from off-site |
+| Both | same subnet | Required for ROS 2 DDS discovery without extra config |
 
 !!! note "Off-site access"
     ROS 2 discovery (for RViz) does not cross a VPN by default. On the LAN it just works; from home

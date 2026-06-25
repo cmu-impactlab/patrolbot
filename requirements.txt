@@ -4,5 +4,5 @@
 # Build static site with: mkdocs build
 
 mkdocs-material>=9.5
-# pymdownx (Material dependency) provides superfences, which renders Mermaid
-# diagrams natively — no extra Mermaid plugin required.
+# fence_div_format renders Mermaid as <div> blocks; mermaid-config.js handles
+# rendering, theme adaptation, instant-navigation re-render, and zoom/lightbox.

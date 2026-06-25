@@ -25,10 +25,10 @@ flowchart LR
 ## 2. Confirm health
 
 ```bash
-ssh robot-pi ./patrolbot-logs.sh status
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
 # Expect: patrolbot-bringup / -bridge / -navigation all "active"
 
-ssh robot-pi ./patrolbot-logs.sh topics
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics
 # Expect: /odom and /scan around 20 Hz (means the SBC link is up)
 ```
 

@@ -81,7 +81,7 @@ not in the production stack. Running it alongside the bridge causes TF and `cmd_
 ## Inspecting topics live
 
 ```bash
-ssh robot-pi ./patrolbot-logs.sh topics   # list + Hz for /odom /scan /cmd_vel /map
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics   # list + Hz for /odom /scan /cmd_vel /map
 ros2 topic hz /scan
 ros2 topic echo /diagnostics
 ```

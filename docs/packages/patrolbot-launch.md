@@ -85,7 +85,7 @@ move under navigation. See [Services](../ros2/services.md#velocity-smoother-life
 
 ```bash
 cd ~/build_backup/patrolbot-launch/launch && ros2 launch bringup.xml
-ssh robot-pi ./patrolbot-logs.sh bringup     # follow mobile-base logs
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh bringup     # follow mobile-base logs
 
 # Confirm the smoother activated and /cmd_vel is flowing
 ros2 lifecycle get /teleop_velocity_smoother

@@ -1,0 +1,8 @@
+# Documentation toolchain for the PatrolBot docs site.
+# Install with: pip install -r requirements.txt
+# Serve locally with: mkdocs serve
+# Build static site with: mkdocs build
+
+mkdocs-material>=9.5
+# pymdownx (Material dependency) provides superfences, which renders Mermaid
+# diagrams natively — no extra Mermaid plugin required.

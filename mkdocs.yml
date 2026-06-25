@@ -1,0 +1,131 @@
+site_name: PatrolBot Documentation
+site_description: >-
+  Architecture, ROS 2 reference, and operations guide for PatrolBot — a two-machine
+  (SBC + Raspberry Pi) ROS 2 patrol robot built on a Pioneer PatrolBot-SH base.
+site_author: CMU ImpactLab
+repo_name: cmu-impactlab/patrolbot
+repo_url: https://github.com/cmu-impactlab/patrolbot
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+    - search.share
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.keys
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/cmu-impactlab/patrolbot
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Building: getting-started/building.md
+      - Quickstart: getting-started/quickstart.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Software Architecture: architecture/software-architecture.md
+      - Hardware Architecture: architecture/hardware-architecture.md
+      - Communication (SBC ↔ Pi): architecture/communication-architecture.md
+      - Execution Flow: architecture/execution-flow.md
+      - Data Flow: architecture/data-flow.md
+  - ROS 2 Reference:
+      - Nodes: ros2/nodes.md
+      - Topics: ros2/topics.md
+      - Services: ros2/services.md
+      - Actions: ros2/actions.md
+      - Parameters: ros2/parameters.md
+      - Launch System: ros2/launch-system.md
+  - Devices:
+      - Device Overview: devices/device-overview.md
+      - Sensors: devices/sensors.md
+      - Actuators: devices/actuators.md
+      - Controllers: devices/controllers.md
+      - Interfaces: devices/interfaces.md
+  - Packages:
+      - Package Overview: packages/package-overview.md
+      - patrolbot_bridge: packages/patrolbot_bridge.md
+      - patrolbot_navigation: packages/patrolbot_navigation.md
+      - patrolbot-launch: packages/patrolbot-launch.md
+      - rosaria2 (legacy): packages/rosaria2.md
+      - patrolbot_hw_server (SBC): packages/patrolbot_hw_server.md
+  - Development:
+      - Workspace Setup: development/workspace-setup.md
+      - Coding Standards: development/coding-standards.md
+      - Testing: development/testing.md
+      - Debugging: development/debugging.md
+      - Profiling: development/profiling.md
+  - Deployment:
+      - Robot Deployment: deployment/robot-deployment.md
+      - Network Setup: deployment/network-setup.md
+      - Remote Operation: deployment/remote-operation.md
+      - Updates: deployment/updates.md
+  - Internals:
+      - Repository Structure: internals/repository-structure.md
+      - Component Breakdown: internals/component-breakdown.md
+      - Startup Sequence: internals/startup-sequence.md
+      - State Machines: internals/state-machines.md
+      - Legacy Components: internals/legacy-components.md
+  - Contributing:
+      - Contributing: contributing/contributing.md
+      - Pull Request Process: contributing/pull-request-process.md
+      - Release Process: contributing/release-process.md
+  - Known Gaps: known-gaps.md
+  - Glossary: glossary.md
+  - FAQ: faq.md

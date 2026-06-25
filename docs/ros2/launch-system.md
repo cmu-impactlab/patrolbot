@@ -18,7 +18,7 @@ together, and the patched Nav2 launch files that make the large map work. Boot o
 | `bridge_node` (run, not launch) | `patrolbot-bridge.service` | `patrolbot_bridge` | the TCP bridge |
 | `bringup.launch.py` | `patrolbot-navigation.service` | `patrolbot_navigation` | Nav2 (composed) + `joy_node` + `p3dxJoyTeleop` + `laser_static_tf` |
 
-## Mobile-base launch (`patrolbot-launch/launch/bringup.xml`)
+## Mobile-base launch (`patrolbot-launch/launch/bringup.xml`) { #mobile-base-launch }
 
 ```xml
 <launch>

@@ -25,7 +25,7 @@ nearest, and tells you when the robot looks "boxed in" (front < 0.25 m).
 
 ## Symptom → cause → fix
 
-### "Frame map does not exist" / blank map in RViz
+### "Frame map does not exist" / blank map in RViz { #frame-map-does-not-exist--blank-map-in-rviz }
 
 ```mermaid
 flowchart TB

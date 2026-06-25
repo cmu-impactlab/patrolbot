@@ -62,7 +62,7 @@ not via a ROS service. (The legacy [`rosaria2`](../packages/rosaria2.md) path ex
 | `collision_monitor` stop-box triggered | Velocity gated to zero before it reaches the bridge; robot holds position. |
 | **Physical SBC reboot** | Wheel odometry resets to `0,0,0`; the robot keeps reconnecting but AMCL's pose is now wrong — re-set it with *2D Pose Estimate*. This is an inherent caveat of odometry living on the SBC, not a fault. |
 
-## Scalability / tuning notes
+## Scalability / tuning notes { #scalability--tuning-notes }
 
 - The 0.26 m/s cap is an indoor-patrol safety choice, not a hardware limit. Raising it requires
   re-tuning DWB acceleration limits and re-checking the `collision_monitor` stop-box and the

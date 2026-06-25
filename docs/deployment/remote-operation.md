@@ -22,8 +22,8 @@ You should see `/map`, `/scan`, the TF tree, and be able to set an initial pose 
 gives you the rest:
 
 ```bash
-ssh robot-pi ./patrolbot-logs.sh status
-ssh robot-pi ./patrolbot-logs.sh scan
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh scan
 ```
 
 ## From home (VPN/NAT) — the problem

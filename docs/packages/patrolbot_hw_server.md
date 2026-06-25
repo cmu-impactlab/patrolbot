@@ -9,10 +9,11 @@ The SBC's entire robot software: one C++ program, `patrolbot_server`, that speak
 hardware and a plain-text protocol to the Pi. It is **not a ROS package** — just a `Makefile`
 project linked against ARIA.
 
-!!! warning "Documented from a snapshot"
-    The SBC was **not reachable** when this was written. Everything here comes from the last
-    knowledge sync (2026-06-24) — file names, flags, and behavior — not a live read of the source.
-    See [Known Gaps](../known-gaps.md).
+!!! info "Last verified 2026-06-25"
+    `patrolbot_server.cpp` was read and modified during the 2026-06-25 session (added AUX telemetry:
+    sonar/battery/flags). Port assignments, ARIA flags, and self-healing behavior were confirmed
+    live at that time. The SBC is not currently accessible — see [Known Gaps](../known-gaps.md)
+    for what remains unconfirmed since that session.
 
 | | |
 |---|---|

@@ -37,9 +37,9 @@ without an interactive login.
 | `socat-boot.service` | system | `socat file:/dev/ttyS0,b9600,raw,echo=0 tcp4-listen:7000,reuseaddr` (via `socat_loop.sh`) | expose the base serial port as TCP:7000 |
 | `patrolbot-server.service` | user (`ros`) | `patrolbot_server -rh 127.0.0.1 -rrtp 7000` | ARIA server, listens on :7272 |
 
-**One-time setup:** `sudo loginctl enable-linger ros` (requires an interactive terminal — cannot
-be done over a BatchMode SSH). Whether this was actually run on the SBC is one of the
-[unconfirmed items](../known-gaps.md).
+**One-time setup:** `sudo loginctl enable-linger ros` (requires an interactive terminal on the SBC —
+cannot be done over BatchMode SSH). This may or may not have been run since the 2026-06-25 session;
+see [Known Gaps](../known-gaps.md#sbc-access-gaps).
 
 ## Pi services
 
@@ -63,13 +63,13 @@ All three are systemd **user** services in `~/.config/systemd/user/`, each `Rest
 ```bash
 # Status / health
 systemctl --user status patrolbot-bridge.service
-ssh robot-pi ./patrolbot-logs.sh status
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
 
 # Restart a layer
 systemctl --user restart patrolbot-navigation.service
 
 # Logs
-ssh robot-pi ./patrolbot-logs.sh nav
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh nav
 journalctl --user -u patrolbot-bridge.service -f
 ```
 

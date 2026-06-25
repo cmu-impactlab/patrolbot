@@ -61,7 +61,7 @@ Short answers with links to the full story.
 ## Operations
 
 **How do I see what's going on?**
-: `ssh robot-pi ./patrolbot-logs.sh status` (health), `... topics` (rates), `... scan` (laser),
+: `ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status` (health), `... topics` (rates), `... scan` (laser),
   `... nav` (Nav2 logs). See [Debugging](development/debugging.md).
 
 **How long until the robot is ready after boot?**

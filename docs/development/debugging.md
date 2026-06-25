@@ -11,13 +11,14 @@ single most useful tool is `patrolbot-logs.sh` on the Pi.
 ## The Swiss-army tool: `patrolbot-logs.sh`
 
 ```bash
-ssh robot-pi ./patrolbot-logs.sh            # follow all three services
-ssh robot-pi ./patrolbot-logs.sh status     # service health + last 5 min of errors
-ssh robot-pi ./patrolbot-logs.sh bridge     # bridge only (SBC link)
-ssh robot-pi ./patrolbot-logs.sh nav        # Nav2 only
-ssh robot-pi ./patrolbot-logs.sh topics     # /odom /scan /cmd_vel /map rates
-ssh robot-pi ./patrolbot-logs.sh tf         # current TF tree
-ssh robot-pi ./patrolbot-logs.sh scan       # live front/left/right laser distances
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh -h         # show full usage / help
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh            # follow all three services
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status     # service health + last 5 min of errors
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh bridge     # bridge only (SBC link)
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh nav        # Nav2 only
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics     # /odom /scan /cmd_vel /map rates
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh tf         # current TF tree
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh scan       # live front/left/right laser distances
 ```
 
 `scan` is especially handy: it prints nearest obstacle to the right/front/left and the global

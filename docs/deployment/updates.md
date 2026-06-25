@@ -33,7 +33,7 @@ cd ~/ros2_ws
 colcon build --packages-select patrolbot_bridge      # or patrolbot_navigation
 source install/setup.bash
 systemctl --user restart patrolbot-bridge.service    # or patrolbot-navigation.service
-ssh robot-pi ./patrolbot-logs.sh status
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
 ```
 
 ### The mobile-base deployment step
@@ -96,7 +96,7 @@ tuned default. The pre-downsample originals are kept as `second_map_original_0.1
 ## Post-update verification
 
 ```bash
-ssh robot-pi ./patrolbot-logs.sh status     # all services active
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status     # all services active
 ros2 topic hz /odom /scan /cmd_vel          # data + commands flow
 # Set 2D Pose Estimate, then a Nav2 Goal — confirm the robot plans and moves
 ```

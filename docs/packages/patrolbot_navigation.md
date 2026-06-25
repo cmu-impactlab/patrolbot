@@ -87,7 +87,7 @@ resolutions back to 0.1.
 
 ```bash
 ros2 launch patrolbot_navigation bringup.launch.py
-ssh robot-pi ./patrolbot-logs.sh nav        # follow Nav2 logs
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh nav        # follow Nav2 logs
 
 # Tune teleop limits at runtime
 ros2 run patrolbot_navigation patrolbot_joy_teleop.py --ros-args -p max_linear:=0.3

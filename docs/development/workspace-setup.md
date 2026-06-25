@@ -16,8 +16,11 @@ single Makefile project. This page gets you to a buildable, runnable state on ea
 | **SBC** | C++ toolchain (`g++`, `make`), ARIA/AriaCoda installed at `/usr/local/Aria` |
 | **Operator laptop** | ROS 2 + RViz2 for visualization (optional) |
 
-The robot machines are reached over SSH (aliases `robot-pi`, `robot-sbc`). This documentation was
-generated against a mounted snapshot; for active development you work directly over SSH or a mount.
+The robot machines are reached over SSH:
+- **Pi:** `ssh ubuntu@patrolbot-ros.qatar.cmu.edu`
+- **SBC:** `ssh ros@172.20.87.231`
+
+For active development, work directly over SSH or a remote mount.
 
 ## Pi: the colcon workspace
 
@@ -82,7 +85,7 @@ let you exercise the bridge and probe the laser without a live robot.
 ros2 node list                 # bridge + nav2 nodes + twist_mux + teleop + joy
 ros2 topic hz /odom /scan      # ~20 Hz each when the SBC is connected
 ros2 run tf2_tools view_frames # map → odom → base_link → laser_frame
-ssh robot-pi ./patrolbot-logs.sh status
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
 ```
 
 ## Editing this documentation

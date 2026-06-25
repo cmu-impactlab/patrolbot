@@ -35,7 +35,7 @@ Loading the occupancy map's PGM with multi-threaded image decode OOM-kills the p
 Measure:
 
 ```bash
-ssh robot-pi 'free -h; cat /proc/$(pgrep -f nav2_container)/status | grep VmRSS'
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu 'free -h; cat /proc/$(pgrep -f nav2_container)/status | grep VmRSS'
 ```
 
 ### 2. File descriptors — DDS port exhaustion
@@ -48,7 +48,7 @@ participant = one set of locks. This is **why composition is mandatory** (see
 Measure:
 
 ```bash
-ssh robot-pi 'ulimit -n; ls /dev/shm | wc -l; ls -l /proc/$(pgrep -f nav2_container)/fd | wc -l'
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu 'ulimit -n; ls /dev/shm | wc -l; ls -l /proc/$(pgrep -f nav2_container)/fd | wc -l'
 ```
 
 ### 3. CPU — startup contention
@@ -60,14 +60,14 @@ lock in fast, then loads the heavy half.
 Measure:
 
 ```bash
-ssh robot-pi 'top -b -n1 | head -20'      # during startup, watch the container process
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu 'top -b -n1 | head -20'      # during startup, watch the container process
 ```
 
 ## Measuring runtime performance
 
 ```bash
 # Topic rates (quick health)
-ssh robot-pi ./patrolbot-logs.sh topics
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics
 ros2 topic hz /scan /odom /cmd_vel
 
 # End-to-end latency sanity: command issued vs. /cmd_vel published

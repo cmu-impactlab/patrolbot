@@ -95,7 +95,7 @@ ros2 run patrolbot_bridge bridge_node
 
 # As deployed
 systemctl --user status patrolbot-bridge.service
-ssh robot-pi ./patrolbot-logs.sh bridge      # follow its logs
+ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh bridge      # follow its logs
 
 # Verify it is publishing
 ros2 topic hz /odom

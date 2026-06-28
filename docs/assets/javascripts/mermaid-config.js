@@ -96,7 +96,9 @@
     overlay.className = 'mz-overlay';
 
     var clone = sourceSvg.cloneNode(true);
-    clone.className = 'mz-svg';
+    clone.removeAttribute('data-mz-bound');
+    clone.removeAttribute('style');
+    clone.setAttribute('class', 'mz-svg');
 
     var btn = document.createElement('button');
     btn.className = 'mz-close';

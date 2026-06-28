@@ -112,7 +112,6 @@
     overlay.className = 'mz-overlay';
 
     var clone = sourceSvg.cloneNode(true);
-    clone.removeAttribute('id');
     clone.removeAttribute('data-mz-bound');
     clone.removeAttribute('style');
     clone.setAttribute('class', 'mz-svg');

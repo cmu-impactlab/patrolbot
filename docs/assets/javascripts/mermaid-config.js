@@ -29,7 +29,7 @@
 
   function buildCfg() {
     return Object.assign(
-      { startOnLoad: false, securityLevel: 'loose' },
+      { startOnLoad: false, securityLevel: 'antiscript' },
       isDark() ? DARK : LIGHT
     );
   }

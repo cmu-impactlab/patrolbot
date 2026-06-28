@@ -1,15 +1,12 @@
 (function () {
   'use strict';
 
-  // ── Theme palettes ────────────────────────────────────────────────────────
-  // Use 'default' / 'dark' as base so Mermaid handles text contrast internally;
-  // we only override primary accent colours to match the Material indigo palette.
   var LIGHT = {
     theme: 'default',
     themeVariables: {
-      primaryColor:       '#3f51b5',   // indigo-600
+      primaryColor:       '#3f51b5',
       primaryTextColor:   '#ffffff',
-      primaryBorderColor: '#283593',   // indigo-900
+      primaryBorderColor: '#283593',
       lineColor:          '#546e7a',
       fontSize:           '15px'
     }
@@ -18,34 +15,31 @@
   var DARK = {
     theme: 'dark',
     themeVariables: {
-      primaryColor:       '#5c7cfa',   // bright indigo
+      primaryColor:       '#5c7cfa',
       primaryTextColor:   '#e8eaf6',
       primaryBorderColor: '#748ffc',
-      lineColor:          '#90caf9',   // light blue arrows
+      lineColor:          '#90caf9',
       fontSize:           '15px'
     }
   };
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
   function isDark() {
     return document.body.getAttribute('data-md-color-scheme') === 'slate';
   }
 
   function buildCfg() {
     return Object.assign(
-      { startOnLoad: false, securityLevel: 'antiscript' },
+      { startOnLoad: false, securityLevel: 'loose' },
       isDark() ? DARK : LIGHT
     );
   }
 
-  // Save raw diagram source before Mermaid replaces the div's content with SVG.
   function saveSources() {
     document.querySelectorAll('.mermaid:not([data-mz-src])').forEach(function (el) {
       el.setAttribute('data-mz-src', el.textContent.trim());
     });
   }
 
-  // Restore raw source so the diagram can be re-rendered (e.g. after theme toggle).
   function restoreSources() {
     document.querySelectorAll('.mermaid[data-mz-src]').forEach(function (el) {
       el.textContent = el.getAttribute('data-mz-src');
@@ -53,15 +47,54 @@
     });
   }
 
+  // ── Zoom binding ──────────────────────────────────────────────────────────
+  // Track bound SVG ELEMENT OBJECTS (not HTML attributes, which survive
+  // element replacement when the DOM is cloned/re-parsed by Material).
+  var boundSvgs = typeof WeakSet !== 'undefined' ? new WeakSet() : null;
+
+  function isBound(svg) {
+    return boundSvgs ? boundSvgs.has(svg) : svg.getAttribute('data-mz-bound') === '1';
+  }
+
+  function markBound(svg) {
+    if (boundSvgs) boundSvgs.add(svg);
+    svg.setAttribute('data-mz-bound', '1'); // keep for debug visibility only
+  }
+
+  function attachZoomToSvgs() {
+    document.querySelectorAll('.mermaid svg').forEach(function (svg) {
+      if (isBound(svg)) return;
+      markBound(svg);
+      svg.style.cursor = 'zoom-in';
+      svg.addEventListener('click', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openLightbox(svg);
+      });
+    });
+  }
+
+  // Observe DOM additions so we catch SVGs that appear after render() resolves.
+  var domObserver = new MutationObserver(function (mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var nodes = mutations[i].addedNodes;
+      for (var j = 0; j < nodes.length; j++) {
+        if (nodes[j].nodeType === 1) { attachZoomToSvgs(); return; }
+      }
+    }
+  });
+  domObserver.observe(document.body, { childList: true, subtree: true });
+
   // ── Rendering ─────────────────────────────────────────────────────────────
   function render() {
     if (typeof mermaid === 'undefined') return;
     saveSources();
     mermaid.initialize(buildCfg());
     var result = mermaid.run({ querySelector: '.mermaid' });
-    // mermaid.run() returns a Promise in v10+; add a polling fallback for safety.
     if (result && typeof result.then === 'function') {
-      result.then(null, null); // attach nothing — zoom is handled by delegation below
+      result.then(function () { attachZoomToSvgs(); }, null);
+    } else {
+      setTimeout(attachZoomToSvgs, 200);
     }
   }
 
@@ -71,24 +104,7 @@
     render();
   }
 
-  // ── Zoom / lightbox — event delegation ───────────────────────────────────
-  // A single listener on document catches every .mermaid click, regardless of
-  // when diagrams finish rendering.  No per-element attachment needed.
-  document.addEventListener('click', function (e) {
-    // Ignore clicks that are already inside an open lightbox.
-    if (e.target.closest('.mz-overlay')) return;
-
-    var container = e.target.closest('.mermaid');
-    if (!container) return;
-
-    var svg = container.querySelector('svg');
-    if (!svg) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-    openLightbox(svg);
-  });
-
+  // ── Lightbox ──────────────────────────────────────────────────────────────
   function openLightbox(sourceSvg) {
     if (document.querySelector('.mz-overlay')) return;
 
@@ -96,7 +112,10 @@
     overlay.className = 'mz-overlay';
 
     var clone = sourceSvg.cloneNode(true);
-    clone.className = 'mz-svg';
+    clone.removeAttribute('id');
+    clone.removeAttribute('data-mz-bound');
+    clone.removeAttribute('style');
+    clone.setAttribute('class', 'mz-svg');
 
     var btn = document.createElement('button');
     btn.className = 'mz-close';
@@ -129,8 +148,7 @@
     svg.style.cursor = 'grab';
 
     function apply() {
-      svg.style.transform =
-        'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')';
+      svg.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + scale + ')';
     }
 
     svg.addEventListener('mousedown', function (e) {
@@ -162,14 +180,10 @@
   // ── Boot ──────────────────────────────────────────────────────────────────
   render();
 
-  // Re-render after Material instant-navigation page swaps.
   if (typeof document$ !== 'undefined') {
-    document$.subscribe(function () {
-      setTimeout(render, 0);
-    });
+    document$.subscribe(function () { setTimeout(render, 0); });
   }
 
-  // Re-render when user toggles light ↔ dark mode.
   new MutationObserver(function (mutations) {
     for (var i = 0; i < mutations.length; i++) {
       if (mutations[i].attributeName === 'data-md-color-scheme') {

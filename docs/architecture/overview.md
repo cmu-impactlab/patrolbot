@@ -50,7 +50,7 @@ flowchart TB
     subgraph HW["Robot hardware"]
         BASE["Pioneer base\n/dev/ttyS0 @ 9600"]
         LASER["SICK LMS-200\n/dev/ttyS2 @ 38400"]
-        SONAR["16-sonar ring"]
+        SONAR["4 rear sonar sensors"]
     end
 
     BASE -- ARIA --> SERVER
@@ -59,7 +59,7 @@ flowchart TB
 
     subgraph PI["Raspberry Pi — ROS 2 Jazzy · ROS_DOMAIN_ID=0"]
         BRIDGE["patrolbot_bridge\n(TCP client)"]
-        NAVCON["nav2_container\nAMCL · DWB · collision_monitor · planner · BT"]
+        NAVCON["nav2_container\nAMCL · RPP · collision_monitor · planner · BT"]
         MUX["twist_mux + velocity smoother\n(mobile base)"]
         JOY["joy_node + patrolbot_joy_teleop"]
         TF["laser_static_tf"]
@@ -76,8 +76,7 @@ flowchart TB
 
 ### SBC (robot main PC)
 
-Documented from the last sync (2026-06-24); not live-verifiable this session — see
-[Known Gaps](../known-gaps.md).
+Verified live 2026-06-29 via SSH.
 
 - Runs one C++ program, [`patrolbot_server`](../packages/patrolbot_hw_server.md), linked against
   ARIA. It connects to the Pioneer base and the SICK laser, enables motors and sonar, and serves
@@ -111,7 +110,7 @@ sequenceDiagram
     HW->>SBC: encoder odometry + laser ranges (ARIA)
     SBC->>BR: TCP "ODOM:..|LASER:.." @20 Hz
     BR->>NAV: /odom, /scan, TF odom→base_link
-    NAV->>NAV: AMCL localizes, DWB plans, collision_monitor gates
+    NAV->>NAV: AMCL localizes, RPP plans, collision_monitor gates
     NAV->>MUX: input/navi (priority 5)
     MUX->>BR: /cmd_vel (winning command, smoothed)
     BR->>SBC: TCP "DRIVE:linear:angular"

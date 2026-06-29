@@ -36,8 +36,10 @@ Short answers with links to the full story.
   [Debugging](development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz).
 
 **I changed `patrolbot-launch` and nothing happened.**
-: The mobile base runs from `~/build_backup/patrolbot-launch/`, not `src`. Update the `build_backup`
-  copy. See [Updates](deployment/updates.md#the-mobile-base-deployment-step).
+: Rebuild and reinstall the package, then restart the service:
+  `colcon build --packages-select patrolbot-launch && systemctl --user restart patrolbot-bringup.service`.
+  The `~/build_backup/` path referenced in older notes was removed — the service now uses the
+  installed package directly. See [Updates](deployment/updates.md#the-mobile-base-deployment-step).
 
 **The robot localizes but won't drive to a goal.**
 : Walk the `cmd_vel` chain. Most often the `teleop_velocity_smoother` isn't `active` (the
@@ -45,8 +47,9 @@ Short answers with links to the full story.
   [Debugging](development/debugging.md#robot-wont-move-under-navigation-but-localization-is-fine).
 
 **The laser scan looks mirrored.**
-: Known, unresolved. The live launch applies `roll=π` to un-mirror; older notes say `yaw=π`. Needs a
-  visual RViz check. See [Known Gaps](known-gaps.md#laser-transform-orientation).
+: The live static TF applies `roll=π` at `x=0.037, z=0.2` to un-mirror the flipped SICK scan.
+  Confirmed from live TF data (quaternion `x≈1, w≈0`). If the scan still looks wrong,
+  re-check the `LaserFlipped` param in `patrolbot-sh.p` or confirm walls align in RViz.
 
 **`/odom` and `/scan` stopped.**
 : The SBC link dropped. The bridge reconnects every 3 s. If the SBC was physically rebooted,
@@ -72,8 +75,9 @@ Short answers with links to the full story.
 : Yes — autonomy continues; a running goal isn't interrupted. The joystick is the local override.
 
 **Why is the robot capped at 0.26 m/s?**
-: An indoor-patrol safety choice (DWB `max_vel_x`), not a hardware limit. Raising it means re-tuning
-  accel limits and re-checking the `base_shift_correction: False` assumption. See
+: An indoor-patrol safety choice (RPP `desired_linear_vel`), not a hardware limit. Raising it means
+  re-tuning the lookahead distance and accel limits and re-checking the
+  `base_shift_correction: False` assumption. See
   [Actuators](devices/actuators.md#scalability--tuning-notes).
 
 **Why is the battery percentage `NaN`?**
@@ -83,7 +87,7 @@ Short answers with links to the full story.
 ## Development
 
 **Why are there two velocity smoothers?**
-: One inside `nav2_container` (smooths DWB output to `cmd_vel_smoothed`) and one in the mobile base
+: One inside `nav2_container` (smooths RPP output to `cmd_vel_smoothed`) and one in the mobile base
   (`teleop_velocity_smoother`, the final stage before the bridge). The overlapping topic names come
   from remaps. See
   [Software Architecture → cmd_vel chain](architecture/software-architecture.md#the-cmd_vel-arbitration-chain).

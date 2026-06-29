@@ -11,10 +11,9 @@ rate. The logical/software view is in [Software Architecture](software-architect
 protocol on the wire between the machines is in
 [Communication Architecture](communication-architecture.md).
 
-!!! warning "SBC details are a snapshot"
-    The SBC was not reachable when this was written. Port assignments, baud rates, and the wiring
-    below come from the last knowledge sync (2026-06-24) and the ARIA parameter file
-    `patrolbot-sh.p`, not a live probe. See [Known Gaps](../known-gaps.md).
+!!! tip "SBC verified live 2026-06-29"
+    The SBC was SSH-accessible and fact-checked directly on this date. Port assignments, baud
+    rates, services, and the wiring below are confirmed against the live machine.
 
 ## Hardware topology
 
@@ -22,7 +21,7 @@ protocol on the wire between the machines is in
 flowchart TB
     subgraph CHASSIS["Pioneer PatrolBot-SH chassis"]
         BASEMCU["Base microcontroller\n(differential drive, encoders)"]
-        SONAR["16-sonar ring"]
+        SONAR["4 rear sonar sensors"]
         LMS["SICK LMS-200 laser\n(mounted flipped)"]
         BATT["Battery pack"]
     end
@@ -61,7 +60,7 @@ The guiding principle: **heavy sensing and the base live on the SBC; compute liv
 |---|---|---|---|---|
 | Pioneer base (drive + encoders) | **SBC** | `/dev/ttyS0` @ 9600 (through a boot-time `socat` → TCP:7000 shim) | 20 Hz odom | bridge → `/odom`, TF `odom→base_link` |
 | SICK LMS-200 laser | **SBC** | `/dev/ttyS2` @ 38400 | ~20 Hz | bridge → `/scan` |
-| 16-sonar ring | **SBC** (via base) | base bus, read by ARIA | ~4–5 Hz | bridge → `/sonar` |
+| Sonar (4 rear sensors) | **SBC** (via base) | base bus, read by ARIA | ~4–5 Hz | bridge → `/sonar` |
 | Battery / charge state | **SBC** (via base) | base bus, read by ARIA | ~4–5 Hz | bridge → `/battery` |
 | Base flags / faults / stall | **SBC** (via base) | base bus, read by ARIA | ~4–5 Hz | bridge → `/diagnostics` |
 | Logitech gamepad | **Pi** | USB | event-driven | `joy_node` → `/joy` |
@@ -77,9 +76,12 @@ A differential-drive research platform configured by the ARIA parameter file `pa
 
 - **Footprint:** ~425 mm wide; modeled in Nav2 as a `robot_radius` of **0.22 m**.
 - **Drive:** two driven wheels + casters, controlled by the base microcontroller. Top speed is
-  capped in software to **0.26 m/s** linear (DWB `max_vel_x`) for indoor patrol.
-- **Sonar:** a 16-transducer ring around the body; ARIA reports each return in robot-frame
-  coordinates, which the bridge republishes as a `/sonar` point cloud in `base_link`.
+  capped in software to **0.26 m/s** linear (RPP `desired_linear_vel`) for indoor patrol.
+- **Sonar:** the base physically carries **4 rear-facing sonar sensors** (ARIA param file
+  `patrolbot-sh.p` defines a generic 16-unit ring, but 12 positions are unpopulated and always
+  report max-range 5000 mm — those are filtered out in `patrolbot_server.cpp` so `/sonar` carries
+  only real detections). ARIA reports each valid return in robot-frame coordinates; the bridge
+  republishes them as a `/sonar` point cloud in `base_link`.
 - **Sensing for safety:** stall and fault flags from the base feed `/diagnostics`. Note that the
   bumper bit-fields are reported **raw, for reference only** — on this PatrolBot-SH a reserved bit
   reads high even when idle, so bumpers do not drive the alarm level (only fault flags and motor
@@ -98,13 +100,8 @@ Full device pages: [Actuators](../devices/actuators.md) (base drive),
   a static transform that **rolls `laser_frame` 180° about the forward axis** (`roll = π`),
   re-correcting left/right while keeping front as front.
 
-!!! danger "Laser orientation is unverified"
-    The live launch applies **`roll = π`** at `x=0.037, z=0.2` (an un-mirror correction). Older
-    written notes describe this as `yaw = π` ("sensor facing rearward"), which is a different
-    rotation. The live source is authoritative, but the *correct* orientation is still pending a
-    visual RViz check (scan dots aligned to real walls). Tracked in
-    [Known Gaps](../known-gaps.md#laser-transform-orientation). See also
-    [Devices → Sensors](../devices/sensors.md#sick-lms-200-laser).
+!!! tip "Laser orientation confirmed 2026-06-29"
+    Live TF from the Pi: `base_link → laser_frame` at `x=0.037, z=0.2`, quaternion `(x≈1, y=0, z=0, w≈0)` — that is **`roll = π`**, confirmed. Older notes claiming `yaw = π` were wrong. `LaserFlipped=true` in `patrolbot-sh.p` is consistent: the flip corrects ARIA's mirrored scan order, and the roll corrects the spatial orientation. See [Devices → Sensors](../devices/sensors.md#sick-lms-200-laser).
 
 ## The two compute units
 

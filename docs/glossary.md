@@ -102,8 +102,13 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
   rolling window for immediate obstacle avoidance.
 
 **DWB**
-: The default Nav2 local controller (Dynamic Window Approach, B-variant) — samples velocity
-  trajectories and scores them with "critics." PatrolBot caps `max_vel_x` at 0.26 m/s.
+: Dynamic Window Approach (B-variant) — the Nav2 local controller PatrolBot previously used.
+  Replaced by RPP on 2026-06-29.
+
+**RPP (Regulated Pure Pursuit)**
+: The Nav2 local controller PatrolBot currently uses
+  (`nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController`). Follows a lookahead
+  point on the global plan; `desired_linear_vel: 0.22 m/s` (capped to 0.26 m/s hardware max).
 
 **NavFn**
 : The global planner PatrolBot uses (`GridBased`) — computes a path over the global costmap.

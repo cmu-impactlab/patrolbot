@@ -24,7 +24,7 @@ flowchart TB
             MAPSRV["map_server"]
             AMCL["amcl"]
             PLANNER["planner_server (NavFn)"]
-            CONTROLLER["controller_server (DWB)"]
+            CONTROLLER["controller_server (RPP)"]
             VSMOOTH["velocity_smoother"]
             COLMON["collision_monitor"]
             BT["bt_navigator"]
@@ -79,7 +79,7 @@ The software falls into four layers, each a clean boundary:
    `/diagnostics`, and the `odom→base_link` transform; converts `/cmd_vel` into `DRIVE` commands.
    Everything above it is pure ROS 2 and hardware-agnostic.
 2. **Autonomy layer — Nav2 (`nav2_container`).** Localization (AMCL), global planning (NavFn),
-   local control (DWB), behaviors (spin/back-up/wait), and collision gating. All composed into one
+   local control (RPP), behaviors (spin/back-up/wait), and collision gating. All composed into one
    process.
 3. **Arbitration layer — mobile base ([`patrolbot-launch`](../packages/patrolbot-launch.md)).** A
    `twist_mux` decides whose velocity command wins (joystick vs. navigation) and a velocity
@@ -96,7 +96,7 @@ consumes.
 
 ```mermaid
 flowchart LR
-    DWB["controller_server\n(DWB)"] -->|cmd_vel| VS["velocity_smoother\n(in nav2_container)"]
+    RPP["controller_server\n(RPP)"] -->|cmd_vel| VS["velocity_smoother\n(in nav2_container)"]
     VS -->|cmd_vel_smoothed| CM["collision_monitor\nstop-box 0.6×0.6 m"]
     CM -->|input/navi · prio 5| TM{{"twist_mux"}}
     JT["patrolbot_joy_teleop"] -->|input/joy · prio 8| TM
@@ -107,7 +107,7 @@ flowchart LR
 
 Reading it carefully:
 
-- Inside `nav2_container`, DWB publishes `cmd_vel`; the Nav2 `velocity_smoother` republishes
+- Inside `nav2_container`, RPP publishes `cmd_vel`; the Nav2 `velocity_smoother` republishes
   `cmd_vel_smoothed`; `collision_monitor` reads `cmd_vel_smoothed`, applies its stop-box, and
   emits the result on **`input/navi`** at twist_mux priority **5**.
 - `patrolbot_joy_teleop` emits on **`input/joy`** at priority **8** — *higher* than navigation —
@@ -119,7 +119,7 @@ Reading it carefully:
 
 !!! note "Two smoothers, similar names"
     There are two velocity smoothers with overlapping topic names. The one *inside* `nav2_container`
-    smooths DWB output to `cmd_vel_smoothed`. The one in the mobile-base launch
+    smooths RPP output to `cmd_vel_smoothed`. The one in the mobile-base launch
     (`teleop_velocity_smoother`) remaps `/cmd_vel → /cmd_vel_out` (input) and `cmd_vel_smoothed →
     cmd_vel` (output), so its final output is the real `/cmd_vel`. The remaps are why the names look
     circular. See [Launch System](../ros2/launch-system.md#mobile-base-launch).

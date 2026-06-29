@@ -32,7 +32,7 @@ flowchart TB
         BR -->|"/diagnostics · DiagnosticArray · ~5 Hz"| VIZ
 
         AMCL --> PLAN["planner_server (NavFn)"]
-        COST --> CTRL["controller_server (DWB)"]
+        COST --> CTRL["controller_server (RPP)"]
         PLAN --> CTRL
         CTRL -->|"cmd_vel"| VS["velocity_smoother"]
         VS -->|"cmd_vel_smoothed"| CM["collision_monitor"]
@@ -61,8 +61,9 @@ Two details that matter downstream:
 - **TF is decoupled from scans.** The bridge publishes `odom→base_link` on its own 50 Hz timer,
   not when a scan arrives. This guarantees a TF entry is always buffered *before* any scan reaches
   a costmap message filter, avoiding "dropping message — queue full" churn.
-- **The scan is pre-filtered.** Returns below 0.2 m are forced to `+inf` so the laser grazing the
-  robot's own body cannot paint a phantom obstacle inside the 0.22 m footprint.
+- **The scan is pre-filtered.** Returns below 0.25 m are forced to `+inf` (`SCAN_RANGE_MIN = 0.25`
+  in `bridge_node.py` — 0.22 m footprint + 0.03 m margin for the 0.037 m laser mount offset) so
+  the laser grazing the robot's own body cannot paint a phantom obstacle inside the footprint.
 
 ## The TF tree
 
@@ -77,7 +78,7 @@ flowchart TB
 |---|---|---|
 | `map → odom` | `amcl` | Requires `/scan` flowing + an initial pose; this is what "Frame map does not exist" means is missing |
 | `odom → base_link` | `patrolbot_bridge` | 50 Hz, from `ODOM:` |
-| `base_link → laser_frame` | `laser_static_tf` | Static; `roll=π` un-mirrors the flipped SICK scan (orientation unverified — see [Known Gaps](../known-gaps.md#laser-transform-orientation)) |
+| `base_link → laser_frame` | `laser_static_tf` | Static; `roll=π` un-mirrors the flipped SICK scan. Confirmed from live TF 2026-06-29. |
 
 ## Outbound: operator goal → motor command
 
@@ -85,7 +86,7 @@ A goal set in RViz (in the `map` frame) flows down the [`cmd_vel` arbitration
 chain](software-architecture.md#the-cmd_vel-arbitration-chain):
 
 1. `bt_navigator` runs the behavior tree; `planner_server` (NavFn) computes a global path in `map`.
-2. `controller_server` (DWB) produces `cmd_vel` at 5 Hz, sampling trajectories against the local
+2. `controller_server` (RPP) produces `cmd_vel` at 5 Hz, sampling trajectories against the local
    costmap.
 3. The Nav2 `velocity_smoother` shapes it to `cmd_vel_smoothed`.
 4. `collision_monitor` applies the 0.6×0.6 m stop-box and emits `input/navi` (priority 5).

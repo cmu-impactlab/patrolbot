@@ -29,7 +29,7 @@ flowchart LR
     subgraph PI["Raspberry Pi — ROS 2 Jazzy navigation computer"]
         direction TB
         BRIDGE["patrolbot_bridge"]
-        NAV["Nav2 stack\n(AMCL + DWB + collision monitor)"]
+        NAV["Nav2 stack\n(AMCL + RPP + collision monitor)"]
         BASECTRL["mobile base\n(twist_mux + velocity smoother)"]
         JOY["joystick teleop"]
         BRIDGE --> NAV
@@ -61,7 +61,7 @@ seam in detail.
 ## What the system does
 
 1. **Localizes** against a pre-built occupancy map using AMCL and the laser scan.
-2. **Plans** a global path (NavFn) and **follows** it (DWB controller) toward an operator goal.
+2. **Plans** a global path (NavFn) and **follows** it (RPP controller) toward an operator goal.
 3. **Avoids collisions** with a `collision_monitor` stop-box and costmap obstacle layers fed
    by the laser.
 4. **Reports** sonar, battery, and base diagnostics for monitoring.
@@ -80,9 +80,8 @@ seam in detail.
 | Diagnose a problem | [Debugging](development/debugging.md) |
 | Know what's unverified | [Known Gaps](known-gaps.md) |
 
-!!! warning "Documentation status"
-    The **SBC was not reachable** when this documentation was generated. Everything about the
-    SBC reflects a static knowledge snapshot from its last sync (2026-06-24), not a live audit.
-    The Raspberry Pi side was verified directly against live source. See
-    [Known Gaps](known-gaps.md) for the specific items that are unconfirmed, and for the small
-    set of places where the live Pi source contradicts the older written notes.
+!!! tip "Documentation status — verified 2026-06-29"
+    Both the SBC and Raspberry Pi were verified live via SSH on 2026-06-29. Key corrections
+    applied this session: sonar count (4 rear sensors, not 16), controller (RPP not DWB),
+    linger and binary currency confirmed on SBC, laser TF orientation confirmed as `roll=π`.
+    See [Known Gaps](known-gaps.md) for remaining open questions.

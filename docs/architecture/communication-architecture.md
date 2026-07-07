@@ -64,10 +64,9 @@ ARIA works in mm/deg internally; the SBC converts to m/rad **before** sending. T
 line to:
 
 - `/odom` (`nav_msgs/Odometry`) — pose + twist, stamped with the Pi's clock.
-- `/scan` (`sensor_msgs/LaserScan`) — `angle_min=-π/2`, `angle_max=+π/2`, `range_min=0.2`,
-  `range_max=8.0`. Returns below 0.2 m are forced to `+inf` (self-occlusion filter; the SICK
-  grazes the robot's own frame and would otherwise paint a permanent phantom obstacle inside the
-  0.22 m footprint).
+- `/scan` (`sensor_msgs/LaserScan`) — `angle_min=-π/2`, `angle_max=+π/2`, `range_min=0.25`,
+  `range_max=8.0`. Returns below 0.25 m are forced to `+inf` (footprint-clearance filter; do not
+  raise this much higher because real close obstacles can appear at 0.25-0.40 m).
 - TF `odom→base_link` — published at **50 Hz** by a timer, *decoupled* from scan arrival so a TF
   entry is always in the buffer before any scan reaches a costmap message filter.
 

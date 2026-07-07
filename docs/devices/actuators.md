@@ -19,8 +19,8 @@ mentions a PTZ VCC4 camera, but it is not integrated — see
 | **Connection** | base microcontroller on `/dev/ttyS0` @ 9600 baud, bridged to `TCP:7000` by a boot-time `socat`; ARIA connects over that socket (`-rh 127.0.0.1 -rrtp 7000`) |
 | **Command protocol (from ROS)** | `/cmd_vel` → bridge → `DRIVE:linear:angular` text line → ARIA `setVel`/`setRotVel` |
 | **ROS interface** | subscribes the final `/cmd_vel` (`geometry_msgs/Twist`) |
-| **Footprint** | ~425 mm wide; modeled as `robot_radius = 0.22 m` |
-| **Speed cap** | `max_vel_x = 0.26 m/s`, `max_vel_theta = 1.0 rad/s` (DWB) |
+| **Footprint** | octagon from 510 mm length, 425 mm width, and 0.29 m swing radius |
+| **Speed cap** | RPP `desired_linear_vel = 0.22 m/s`; velocity smoother cap `0.26 m/s` |
 
 ### How a command reaches the wheels
 
@@ -35,7 +35,7 @@ flowchart LR
 
 The full arbitration that produces `/cmd_vel` is the [`cmd_vel`
 chain](../architecture/software-architecture.md#the-cmd_vel-arbitration-chain). By the time a
-command reaches the bridge it has already passed through DWB → smoother → collision-monitor
+command reaches the bridge it has already passed through RPP → smoother → collision-monitor
 stop-box → twist_mux → teleop smoother, so the bridge forwards a single, already-safe velocity.
 
 ### Motors and enabling
@@ -49,14 +49,14 @@ not via a ROS service. (The legacy [`rosaria2`](../packages/rosaria2.md) path ex
 - **Odometry** is produced by the base's wheel encoders and integrated by ARIA on the SBC; the
   bridge republishes it verbatim as `/odom` and TF `odom→base_link`. There is no odometry
   calibration on the Pi side.
-- **Velocity limits** are enforced in software at three layers: DWB (`max_vel_x`), the Nav2
+- **Velocity limits** are enforced in software at three layers: RPP (`desired_linear_vel`), the Nav2
   velocity smoother, and the teleop velocity smoother. The base's own firmware is the final limit.
 
 ## Failure conditions
 
 | Condition | Behavior |
 |---|---|
-| `/cmd_vel` stops arriving | The base's command **watchdog** stops the wheels (the legacy driver used a 600 ms watchdog; the base firmware also halts on command starvation). The robot does not run away on a dead link. |
+| `/cmd_vel` stops arriving | The SBC command watchdog stops the wheels after 750 ms without `DRIVE`, and the server also stops the base on Pi disconnect. The robot does not run away on a dead link. |
 | Bridge can't send `DRIVE` (socket down) | Send is best-effort and dropped silently; no command reaches the base → watchdog stop. |
 | Motor stall / fault | Reported on `/diagnostics` as `ERROR` ("motor stall / fault"); see [Controllers](controllers.md). |
 | `collision_monitor` stop-box triggered | Velocity gated to zero before it reaches the bridge; robot holds position. |
@@ -65,7 +65,7 @@ not via a ROS service. (The legacy [`rosaria2`](../packages/rosaria2.md) path ex
 ## Scalability / tuning notes { #scalability--tuning-notes }
 
 - The 0.26 m/s cap is an indoor-patrol safety choice, not a hardware limit. Raising it requires
-  re-tuning DWB acceleration limits and re-checking the `collision_monitor` stop-box and the
+  re-tuning RPP lookahead / rotation behavior and re-checking the `collision_monitor` stop-box and the
   `base_shift_correction: False` assumption (which is "safe because motion per scan is ~1 cm at
   0.26 m/s").
 - All velocity shaping is software-side on the Pi; the SBC simply executes the last `DRIVE`

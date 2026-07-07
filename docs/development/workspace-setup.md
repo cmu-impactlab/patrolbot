@@ -1,6 +1,6 @@
 ---
 title: Workspace Setup
-description: Setting up a development environment for PatrolBot — the colcon workspace on the Pi, the SBC build, and the build_backup gotcha that catches everyone once.
+description: Setting up a development environment for PatrolBot — the colcon workspace on the Pi, the SBC build, and the Docker migration target.
 ---
 
 # Workspace Setup
@@ -43,13 +43,9 @@ source install/setup.bash          # also done by ~/.bashrc on login
 export ROS_DOMAIN_ID=0
 ```
 
-!!! danger "The `build_backup/` gotcha — read this before you edit anything"
-    The **mobile-base** package that actually runs at boot is launched from
-    `~/build_backup/patrolbot-launch/`, **not** from `~/ros2_ws/src/patrolbot-launch/` or
-    `install/`. Editing the `src` copy and rebuilding does **not** change what
-    `patrolbot-bringup.service` runs. To make a mobile-base change take effect you must update the
-    `build_backup` copy. The `src` copy is the source of truth; treat `build_backup` as the
-    deployment target. See [Repository Structure](../internals/repository-structure.md).
+!!! success "No `build_backup/` runtime copy"
+    `patrolbot-bringup.service` now runs `ros2 launch patrolbot-launch bringup.xml`. Older notes that
+    say to copy `patrolbot-launch` into `~/build_backup/` are stale.
 
 !!! warning "Two nested git repos"
     `patrolbot_navigation/` and `rosaria2/` each contain their own `.git/`. They are versioned

@@ -61,6 +61,7 @@ flowchart TB
 
     JOYNODE -->|"/joy"| JOYTELEOP
     JOYTELEOP -->|"input/joy (prio 8)"| TWISTMUX
+    WATCHDOG["patrolbot_safety_watchdog"] -->|"input/safety_controller (prio 10)"| TWISTMUX
 
     TWISTMUX -->|"cmd_vel_out"| TELEOPSMOOTH
     TELEOPSMOOTH -->|"/cmd_vel"| BRIDGE
@@ -124,10 +125,10 @@ Reading it carefully:
     cmd_vel` (output), so its final output is the real `/cmd_vel`. The remaps are why the names look
     circular. See [Launch System](../ros2/launch-system.md#mobile-base-launch).
 
-!!! warning "Configured but unused mux inputs"
-    `mux.yaml` also defines `input/safety_controller` (prio 10), `input/teleop` (prio 8), and
-    `input/switch` (prio 6). **No node currently publishes to these** — only `input/joy` and
-    `input/navi` are wired. They are reserved priority slots, not active paths.
+!!! warning "Configured but mostly unused mux inputs"
+    `input/safety_controller` is active: `patrolbot_safety_watchdog.py` publishes zero Twist at
+    priority 10 when `/scan` or `/odom` goes stale. `input/teleop` (prio 8) and `input/switch`
+    (prio 6) are reserved and have no current publisher.
 
 **Failure mode — `cmd_vel_in_topic` mismatch.** Earlier, `collision_monitor` read `cmd_vel_raw`,
 which had no publisher, so navigation commands silently never reached the robot. It now reads
@@ -180,7 +181,7 @@ The map is the dominant scaling pressure on the Pi, and several decisions exist 
 
 | Decision | Reason | Tradeoff |
 |---|---|---|
-| **Downsample map 0.1 → 0.2 m/px** (4× fewer cells) | Nav2 startup fell from ~8 min to ~2.5 min | Coarser global costmap; local costmap kept at 0.1 m for fine avoidance |
+| **Confirmed map scale: 3192×2205 @ 0.075 m/px** | Operator-verified laser-vs-map overlay; do not change the map scale casually | Global costmap remains coarser at 0.2 m for planning speed; local costmap is 0.1 m |
 | **`bond_timeout: 0.0`** in the patched lifecycle managers | Inflating the huge map starves `map_server`'s bond heartbeat past the default 4 s, aborting the lifecycle manager → no AMCL → blank map | Loses bond-based liveness detection of lifecycle nodes |
 | **`MAGICK_THREAD_LIMIT=1`, `OMP_NUM_THREADS=1`** | Multi-threaded image decode of the large PGM OOM-kills the process on the Pi | Slightly slower one-time map load |
 | **Local copies of the nav2_bringup launches** | Upstream `bringup_launch.py` hard-codes `bond_timeout: 4.0` and never reads our params | Must re-sync if upstream changes |
@@ -189,8 +190,7 @@ The map is the dominant scaling pressure on the Pi, and several decisions exist 
     The trailing comment block in `nav2_params.yaml` claims the stack avoids bond starvation by
     launching with `use_composition:=False` (separate processes). **This is stale and contradicts the
     actual launch.** The live `bringup.launch.py` uses `use_composition:=True` and applies
-    `bond_timeout: 0.0` in the patched launch files. Treat the launch file as authoritative. This is
-    tracked in [Known Gaps](../known-gaps.md#contradictions-live-pi-source-vs-written-notes).
+    `bond_timeout: 0.0` in the patched launch files. Treat the launch file as authoritative.
 
 ## Reliability properties
 
@@ -205,6 +205,9 @@ out its loss without operator intervention:
 - **Reconnect TF skew:** `collision_monitor` runs with `base_shift_correction: False`, so a scan
   stamped just before the rebuilt TF cache no longer throws an uncaught extrapolation exception that
   would SIGABRT the whole container.
+- **Sensor stale safe-hold:** `patrolbot_safety_watchdog.py` publishes to
+  `input/safety_controller` if `/scan` or `/odom` is stale for more than 0.5 s, holding the robot
+  through the highest-priority `twist_mux` input until fresh data returns.
 
 The one case software cannot mask is a **physical SBC reboot**, which resets ARIA odometry to
 `0,0,0`; AMCL's pose is then wrong and the operator must re-set it with *2D Pose Estimate*. See

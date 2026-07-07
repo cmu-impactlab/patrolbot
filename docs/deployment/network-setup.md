@@ -1,6 +1,6 @@
 ---
 title: Network Setup
-description: PatrolBot's network topology — the SBC↔Pi TCP link, ROS 2 / FastDDS discovery on the LAN, ROS_DOMAIN_ID, and the prepared (not-yet-wired) discovery server for VPN access.
+description: PatrolBot's network topology — the SBC↔Pi TCP link, ROS 2 / FastDDS multicast discovery on the LAN, ROS_DOMAIN_ID, and why VPN RViz is currently out of scope.
 ---
 
 # Network Setup
@@ -60,20 +60,16 @@ Multicast discovery **does not cross** a VPN or NAT. From home (e.g. a VM behind
 Cisco VPN), RViz sees *nothing* — no TF, no map, "Frame map does not exist". The robot's graph is
 healthy; the client simply can't discover it. This is a **transport** problem, not a data problem.
 
-The prepared fix is a **FastDDS Discovery Server** (unicast, TCP transport, NAT-friendly):
+The previous FastDDS Discovery Server experiment for VPN RViz was reverted on 2026-06-29. The unit
+file and old XML profiles may still exist as backups, but they are **not the current runtime state**:
 
 | Component | Status |
 |---|---|
-| Pi-side profile `patrolbot_fastdds_pi.xml` (Pi nodes become discovery-server **clients**, TCP transport) | **validated** |
-| Discovery server (`fastdds discovery -i 0 -t 0.0.0.0 -q 11811`, GUID prefix `44.53.00.5f...`) | **validated** |
-| Wired into the production systemd services (`FASTRTPS_DEFAULT_PROFILES_FILE`) | **not yet** — deferred so it can't risk the live nav stack |
+| `patrolbot-discovery.service` | on disk but disabled |
+| `FASTRTPS_DEFAULT_PROFILES_FILE` in ROS 2 services | not set |
+| Current discovery mode | default SIMPLE multicast on the LAN |
 
-The full operator-side recipe is on [Remote Operation](remote-operation.md).
-
-!!! warning "Discovery server is prepared, not active"
-    The XML profile comments say it is "applied via `FASTRTPS_DEFAULT_PROFILES_FILE` in the systemd
-    user services," but the live unit files do **not** set that variable yet. Treat the discovery
-    server as a tested-but-not-deployed mechanism. Tracked in [Known Gaps](../known-gaps.md).
+Treat VPN RViz as a future re-enable project, not as a configured feature.
 
 ## Firewall / ports summary
 
@@ -81,8 +77,6 @@ The full operator-side recipe is on [Remote Operation](remote-operation.md).
 |---|---|---|
 | 7000 | SBC | socat → base serial (localhost use by ARIA) |
 | 7272 | SBC | telemetry server (Pi connects) |
-| 11811 | Pi | FastDDS discovery server (when enabled) — TCP |
-| ephemeral TCP | Pi | per-participant DDS data ports (discovery-server mode) |
 | DDS multicast/UDP | LAN | default ROS 2 discovery on the subnet |
 
 ## Checklist
@@ -90,5 +84,4 @@ The full operator-side recipe is on [Remote Operation](remote-operation.md).
 - [ ] Pi and SBC on the same LAN; Pi can reach `172.20.87.231:7272`.
 - [ ] `ROS_DOMAIN_ID=0` everywhere (robot and any LAN operator tools).
 - [ ] On the LAN, RViz works with no extra config.
-- [ ] For off-site, plan to enable the [discovery server](remote-operation.md) — it is not on by
-      default.
+- [ ] For off-site RViz, plan a fresh discovery-server or relay design; it is not active today.

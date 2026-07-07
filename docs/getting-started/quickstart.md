@@ -19,7 +19,7 @@ flowchart LR
     PWR["power on"] --> SBC["SBC: socat + patrolbot_server (:7272)"]
     PWR --> PI["Pi: bringup → bridge → navigation"]
     SBC -. ":7272" .-> PI
-    PI --> READY["map + pose in seconds;\ngoals in ~2.5 min"]
+    PI --> READY["map + pose in seconds;\ngoals after staged activation"]
 ```
 
 ## 2. Confirm health
@@ -63,7 +63,7 @@ require the full navigation stack.
 
 ## 5. Send a navigation goal
 
-Once the navigation half is active (~2.5 min after boot):
+Once the navigation half is active (expected around ~70 s after the boot-time network-wait fix):
 
 1. Click **Nav2 Goal** in RViz.
 2. Click a destination and drag for the final heading.
@@ -95,8 +95,8 @@ Max 0.4 m/s / 0.8 rad/s under teleop. See [Interfaces](../devices/interfaces.md#
 | RViz shows nothing | [Debugging](../development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz) |
 | Goal rejected / aborts | [Actions](../ros2/actions.md#failure-modes) |
 | Robot localizes but won't drive | [Debugging](../development/debugging.md#robot-wont-move-under-navigation-but-localization-is-fine) |
-| Scan looks mirrored | [Known Gaps](../known-gaps.md#laser-transform-orientation) |
-| A change didn't take effect | [Updates](../deployment/updates.md#the-mobile-base-deployment-step) |
+| Scan looks mirrored | [Sensors](../devices/sensors.md#sick-lms-200-laser) |
+| A change didn't take effect | [Updates](../deployment/updates.md) |
 
 ## After a physical SBC reboot
 

@@ -14,7 +14,8 @@ day-one run-through is on [Quickstart](quickstart.md).
 
 | Machine | Needs |
 |---|---|
-| **Raspberry Pi** | Ubuntu, **ROS 2 Jazzy**, `colcon`, Nav2 (`nav2_bringup`, `nav2_msgs`), `twist_mux`, `joy`, `slam_toolbox`, `nav2_velocity_smoother` |
+| **Raspberry Pi 4 production** | Ubuntu, **ROS 2 Jazzy**, `colcon`, Nav2 (`nav2_bringup`, `nav2_msgs`), `twist_mux`, `joy`, `slam_toolbox`, `nav2_velocity_smoother` |
+| **Raspberry Pi 5 migration target** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose, same `~/ros2_ws/src` packages |
 | **SBC** | C++ toolchain (`g++`, `make`), **ARIA/AriaCoda** at `/usr/local/Aria`, `socat` |
 | **Operator laptop** (optional) | ROS 2 + RViz2 for visualization/commanding |
 
@@ -51,8 +52,9 @@ with a plain `Makefile` (no ROS, no colcon). See
 | Both | same subnet | Required for ROS 2 DDS discovery without extra config |
 
 !!! note "Off-site access"
-    ROS 2 discovery (for RViz) does not cross a VPN by default. On the LAN it just works; from home
-    you need the prepared discovery server — see [Remote Operation](../deployment/remote-operation.md).
+    ROS 2 discovery (for RViz) uses plain LAN multicast. On the LAN it just works; from home over a
+    VPN/NAT it generally does not. The FastDDS discovery-server experiment was reverted on
+    2026-06-29 — see [Remote Operation](../deployment/remote-operation.md).
 
 ## Documentation toolchain (this site)
 

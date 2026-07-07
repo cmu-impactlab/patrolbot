@@ -1,6 +1,6 @@
 ---
 title: Building
-description: Build PatrolBot from source — the Pi colcon workspace, the SBC ARIA server, and the build_backup deployment step the mobile base requires.
+description: Build PatrolBot from source — the Pi colcon workspace, the SBC ARIA server, and the Docker image used for the Pi 5 migration.
 ---
 
 # Building
@@ -30,14 +30,12 @@ The workspace has four packages:
 |---|---|---|
 | `patrolbot_bridge` | ament_python | the TCP bridge |
 | `patrolbot_navigation` | ament_cmake | Nav2 + teleop + TF (**own `.git/`**) |
-| `patrolbot-launch` | ament_python | mobile base (source; deployed copy is in `build_backup/`) |
+| `patrolbot-launch` | ament_python | mobile base (`twist_mux` + final velocity smoother) |
 | `rosaria2` | ament_cmake | legacy; needs ARIA (`~/ARIA/lib/libAria.so`) to build (**own `.git/`**) |
 
-!!! danger "Mobile-base builds need the `build_backup` step"
-    `colcon build` updates `install/`, but `patrolbot-bringup.service` runs the mobile base from
-    **`~/build_backup/patrolbot-launch/`**. After changing `patrolbot-launch`, copy the launch/param
-    files into `build_backup` (see [Updates](../deployment/updates.md#the-mobile-base-deployment-step)),
-    or the change won't run. This is the #1 build gotcha in the workspace.
+`patrolbot-bringup.service` now launches the mobile-base package by name:
+`ros2 launch patrolbot-launch bringup.xml`. The old `~/build_backup/patrolbot-launch/` deployment
+target was removed on 2026-06-28 and should not be recreated.
 
 !!! warning "Two nested git repos"
     Commit `patrolbot_navigation` and `rosaria2` changes in *their* repos, not the workspace's.
@@ -50,8 +48,23 @@ make            # g++ -I/usr/local/Aria/include -lAria -lArNetworking -lpthread
 ```
 
 Produces the `patrolbot_server` binary. No colcon, no ROS. See
-[`patrolbot_hw_server`](../packages/patrolbot_hw_server.md). (The SBC may be unreachable — see
-[Known Gaps](../known-gaps.md).)
+[`patrolbot_hw_server`](../packages/patrolbot_hw_server.md). When the SBC is unavailable, use
+`SKILLS/sbc-architecture.md` in the source workspace as the current truth source for documented
+behavior.
+
+## Docker image for the Pi 5 migration
+
+The Docker stack is built natively on the Raspberry Pi 5 migration target from the same
+`~/ros2_ws/src` tree:
+
+```bash
+cd ~/docker
+docker buildx build --load -f Dockerfile -t patrolbot:jazzy "$PATROLBOT_WS/src"
+```
+
+See [Docker Deployment](../deployment/docker.md) for prerequisites, cutover, verification, and
+rollback. The Pi 4 production path remains the bare-metal systemd services until cutover is
+explicitly performed.
 
 ## Verifying the build
 

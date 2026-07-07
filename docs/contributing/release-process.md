@@ -15,7 +15,7 @@ A release pins, together:
 
 - The Pi packages (`patrolbot_bridge`, `patrolbot_navigation`, `patrolbot-launch`) at known commits
   — remembering `patrolbot_navigation` and `rosaria2` have their **own** git repos.
-- The deployed `build_backup/patrolbot-launch` copy (it must match `src` at release time).
+- The deployed `patrolbot-launch` package and `patrolbot-bringup.service` command.
 - The SBC `patrolbot_server` source + the binary build date.
 - The active map and the matching costmap resolution.
 - The systemd units on both machines.
@@ -40,9 +40,9 @@ close them:
 - [ ] Fix scaffold-default manifest metadata (`maintainer: ubuntu@todo.todo`, `description: TODO`,
       `license: TODO` in `patrolbot_bridge`/`patrolbot-launch`; `joao@todo.todo` in `rosaria2`).
 - [ ] Remove [dead code / editor temp files](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
-- [ ] Reconcile doc/source mismatches (laser TF orientation, map resolution) — ideally after the
-      hardware verification.
-- [ ] Confirm `src/patrolbot-launch` and `build_backup/patrolbot-launch` are in sync.
+- [ ] Confirm current fixed facts are still true: `roll=π`, `second_map` at `0.075 m/px`, RPP
+      controller, Pi 4 production / Pi 5 Docker target.
+- [ ] Confirm `patrolbot-bringup.service` launches `ros2 launch patrolbot-launch bringup.xml`.
 - [ ] Confirm the stale `nav2_params.yaml` trailing comment is corrected or removed.
 - [ ] `colcon test` clean; resilience matrix green.
 
@@ -51,7 +51,7 @@ close them:
 ```mermaid
 flowchart LR
     A["hygiene checklist"] --> B["bump versions"]
-    B --> C["sync build_backup ← src"]
+    B --> C["restart services / containers"]
     C --> D["full resilience + nav test"]
     D --> E["tag each repo"]
     E --> F["record SBC binary + map + units"]
@@ -59,7 +59,8 @@ flowchart LR
 ```
 
 1. Complete the hygiene checklist and bump versions.
-2. Ensure `build_backup` matches `src`.
+2. Ensure the package build, service commands, and Docker image (if used) match the source being
+   released.
 3. Run the full [test set](../development/testing.md): lint, a real navigate-to-goal, and the
    freeze/resume resilience matrix.
 4. **Tag** each repository at the release commit (Pi workspace, `patrolbot_navigation`, `rosaria2`
@@ -70,17 +71,18 @@ flowchart LR
 
 ## Capturing reproducible state
 
-Because key runtime facts live outside git (the `build_backup` copy, the SBC binary, the map, the
+Because key runtime facts live outside git (the SBC binary, Docker image, active map, and service
 units), a release note should explicitly capture them:
 
 ```text
 Release vX.Y.Z
 - Pi workspace @ <commit>; patrolbot_navigation @ <commit>
-- build_backup/patrolbot-launch synced to src @ <commit>
+- patrolbot-launch service command: ros2 launch patrolbot-launch bringup.xml
 - SBC patrolbot_server built <date> from <commit/snapshot>
-- Active map: second_map.{pgm,yaml} @ 0.2 m/px; global_costmap resolution 0.2
+- Active map: second_map.{pgm,yaml} @ 0.075 m/px; global_costmap resolution 0.2
 - systemd units: <list, both machines>
-- Discovery server: <enabled/disabled>
+- Docker image / Compose state: <tag, running/not running>
+- Discovery server: disabled unless deliberately re-enabled
 ```
 
 ## Documentation releases

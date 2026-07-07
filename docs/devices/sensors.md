@@ -1,6 +1,6 @@
 ---
 title: Sensors
-description: PatrolBot's sensors — the SICK LMS-200 laser, the 16-sonar ring, and the battery monitor — with connection, protocol, ROS interface, rates, calibration, and failure conditions.
+description: PatrolBot's sensors — the SICK LMS-200 laser, the rear sonar sensors, and the battery monitor — with connection, protocol, ROS interface, rates, calibration, and failure conditions.
 ---
 
 # Sensors
@@ -21,7 +21,7 @@ The primary perception sensor: localization and obstacle avoidance both depend o
 | **Protocol (to ROS)** | SBC parses ARIA ranges → `LASER:r1,...,rN` text line → bridge → `/scan` |
 | **ROS topic** | `/scan` (`sensor_msgs/LaserScan`), frame `laser_frame` |
 | **Field of view** | 180° forward: `angle_min = -π/2`, `angle_max = +π/2` |
-| **Range** | `range_min = 0.2 m`, `range_max = 8.0 m` |
+| **Range** | `range_min = 0.25 m`, `range_max = 8.0 m` |
 | **Update rate** | ~20 Hz |
 
 ### Calibration / mounting
@@ -31,15 +31,12 @@ The primary perception sensor: localization and obstacle avoidance both depend o
   ARIA returns readings in flipped order, so the scan arrives mirrored left↔right. The live launch
   corrects this with **`roll = π`** about the forward axis (front stays front; left/right swap is
   undone).
-- **Self-occlusion cutoff:** the bridge forces any return `< 0.2 m` to `+inf`. The SICK grazes the
-  robot's own frame near one edge of the fan (~0.15 m), which would otherwise paint a permanent
-  phantom obstacle inside the 0.22 m footprint and freeze Nav2.
+- **Footprint-clearance cutoff:** the bridge forces any return `< 0.25 m` to `+inf`. Do not raise
+  this much higher; nearby real obstacles can appear in the 0.25-0.40 m range.
 
-!!! danger "Orientation is unverified"
-    Three claims exist in the project's history: `roll = π` (live launch, "un-mirror"), `yaw = π`
-    (older notes, "facing rearward"), and identity (an even-earlier note). The live launch is what
-    runs, but the *correct* rotation is still pending a visual RViz check — align scan dots to real
-    walls, then lock it in. Tracked in [Known Gaps](../known-gaps.md#laser-transform-orientation).
+!!! success "Orientation confirmed"
+    `roll = π` is the correct static TF for the flipped SICK mount. It is consistent with
+    `LaserFlipped=true` in `patrolbot-sh.p`; older `yaw = π` notes are stale.
 
 ### Failure conditions
 
@@ -47,22 +44,24 @@ The primary perception sensor: localization and obstacle avoidance both depend o
 |---|---|---|
 | Laser unplugged / SBC can't open `/dev/ttyS2` | `LASER:` field empty or absent | bridge publishes no/short `/scan`; costmaps clear, AMCL can't update → `map→odom` stops |
 | SBC down | no `/scan` at all | bridge reconnects every 3 s; resumes on return |
-| Scan appears mirrored in RViz | walls on wrong side | orientation issue — see the danger box above |
+| Scan appears mirrored in RViz | walls on wrong side | re-check `LaserFlipped` and the `roll=π` static TF |
 | Phantom obstacle hugging the robot | nav refuses to move | check `SCAN_RANGE_MIN`; run `./patrolbot-logs.sh scan` |
 
-## Sonar ring
+## Sonar
 
 | Field | Value |
 |---|---|
-| **Hardware** | 16-transducer sonar ring on the Pioneer base |
+| **Hardware** | 4 rear-facing sonar sensors on the Pioneer base |
 | **Host machine** | **SBC** (read by ARIA; enabled at startup via `robot.enableSonar()`) |
 | **Connection** | base bus → ARIA → `AUX:SONAR=x,y;...` text line |
 | **ROS topic** | `/sonar` (`sensor_msgs/PointCloud2`), frame `base_link` |
 | **Update rate** | ~4–5 Hz (every 5th nav frame) |
-| **Calibration** | geometry from ARIA `patrolbot-sh.p`; ARIA reports each return's local X/Y in the robot frame (meters) |
+| **Calibration** | geometry from ARIA `patrolbot-sh.p`; the SBC computes each valid echo as a point in `base_link` |
 
 The sonar feeds **visualization/monitoring**, not the costmaps — obstacle avoidance is laser-based.
-The 16 points are useful as a secondary close-range awareness layer in RViz.
+The ARIA param file defines a generic 16-position ring, but the robot physically has 4 rear sensors
+and the 12 unpopulated entries sit at max range. The SBC publishes only valid echoes
+(`getRange() < 4335 mm`), so `/sonar` width is the live detection count, often 0-2.
 
 **Failure conditions:** a malformed `SONAR` section is dropped in isolation (the `AUX` line is
 parsed section-by-section), so a sonar glitch never disturbs `/scan` or `/odom`. If the base does

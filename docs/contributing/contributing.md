@@ -14,8 +14,8 @@ working against a **live robot**.
 1. Read the [Architecture Overview](../architecture/overview.md) and
    [Communication Architecture](../architecture/communication-architecture.md). Almost every change
    touches the SBC↔Pi seam in some way.
-2. Know [where code lives](../internals/repository-structure.md) — especially the `build_backup`
-   deployment quirk and the nested git repos.
+2. Know [where code lives](../internals/repository-structure.md), including the Pi 4 production
+   workspace, the Pi 5 Docker migration target, and the nested git repos.
 3. Skim [Known Gaps](../known-gaps.md) so you don't "fix" something that is intentionally the way it
    is (or re-introduce a bug a comment is preventing).
 
@@ -26,7 +26,7 @@ working against a **live robot**.
 | **Read-only on the robot unless the change is the task.** | Investigation and docs work must never modify the running robot. |
 | **Don't run `rosaria2` alongside the bridge.** | TF and cmd_vel conflicts — see [rosaria2](../packages/rosaria2.md). |
 | **Keep `base_shift_correction: False`, `bond_timeout: 0.0`, `MAGICK_THREAD_LIMIT=1`.** | Each prevents a specific crash/OOM. Don't remove "defaults that look removable." |
-| **Update `build_backup` for mobile-base changes.** | Otherwise your change doesn't run. |
+| **Restart the right service or container after changes.** | Otherwise the running robot keeps the old launch/params/scripts. |
 | **Keep docs in sync.** | Doc drift is why [Known Gaps](../known-gaps.md) exists. |
 
 ## Workflow
@@ -34,7 +34,7 @@ working against a **live robot**.
 ```mermaid
 flowchart LR
     A["Pick up an issue / gap"] --> B["Branch in the right repo"]
-    B --> C["Change src (+ build_backup if mobile base)"]
+    B --> C["Change src / Docker files"]
     C --> D["colcon test (lint) + build"]
     D --> E["Manual + resilience tests"]
     E --> F["Update README + docs"]
@@ -57,15 +57,15 @@ The lowest-risk, highest-value tasks, several drawn straight from [Known Gaps](.
 - Fix the scaffold-default package manifests (`maintainer`, `description`, `license` `TODO`s).
 - Remove the [dead launch files and editor temp files](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
 - Add pytest coverage for the bridge's `_parse_telemetry` / `_parse_aux` (pure string functions).
-- Reconcile the doc/source mismatches (laser TF, map resolution) once verified on hardware.
-- Make `patrolbot-bringup.service` launch from `install/` so the `build_backup` quirk goes away.
+- Clean up stale comments and dead files now that `patrolbot-bringup.service` launches by package
+  name.
+- Keep Docker migration docs current as the Pi 5 moves toward production.
 
 ## Things that need hardware
 
 Some work can only be validated on the robot (and the SBC is sometimes unreachable — see
 [Known Gaps](../known-gaps.md)):
 
-- The **laser orientation** question (`roll=π` vs `yaw=π`) needs a visual RViz check.
 - Changes to the SBC server need the SBC.
 - Resilience tests need a live link to freeze/resume.
 

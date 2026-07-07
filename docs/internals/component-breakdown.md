@@ -21,12 +21,13 @@ once as cleanup candidates and nowhere else.
 | `patrolbot_bridge` / `bridge_node` | Pi | TCP↔ROS bridge | [package](../packages/patrolbot_bridge.md) |
 | `patrolbot_navigation` (launch, params, maps) | Pi | Nav2 stack | [package](../packages/patrolbot_navigation.md) |
 | `patrolbot_localization_launch.py` / `patrolbot_navigation_launch.py` | Pi | patched Nav2 launches (`bond_timeout: 0.0`) | [launch](../ros2/launch-system.md) |
-| `second_map.{pgm,yaml}` | Pi | active 0.2 m/px map | [package](../packages/patrolbot_navigation.md) |
+| `second_map.{pgm,yaml}` | Pi | active 3192×2205 map at 0.075 m/px | [package](../packages/patrolbot_navigation.md) |
 | `patrolbot_joy_teleop.py` | Pi | Xinput teleop | [node](../ros2/nodes.md#patrolbot_joy_teleop) |
 | `laser_static_tf` | Pi | `base_link→laser_frame` | [node](../ros2/nodes.md#laser_static_tf) |
-| `patrolbot-launch` (`build_backup` copy) | Pi | mobile base | [package](../packages/patrolbot-launch.md) |
+| `patrolbot-launch` | Pi | mobile base | [package](../packages/patrolbot-launch.md) |
 | `mux.yaml`, `smoother.yaml`, `lifecycle_mgr.py` | Pi | mux + smoother config/mgr | [package](../packages/patrolbot-launch.md) |
 | three `patrolbot-*.service` units | Pi | autostart | [deployment](../deployment/robot-deployment.md) |
+| `docker/` | Pi 5 target | Docker Compose migration stack | [deployment](../deployment/docker.md) |
 | `patrolbot-logs.sh` | Pi | diagnostics helper | [debugging](../development/debugging.md) |
 | `ARIA/` (lib + headers + `patrolbot-sh.p`) | Pi | ARIA runtime/build for `rosaria2` build | here |
 
@@ -43,7 +44,7 @@ These are real but not part of the running stack. Each is one line in
 | `patrolbot_nav.rviz` | operator RViz layout (manual use) |
 | `maps/cmuq_1st_floor.{yaml,pgm}` | older map, not in active launch |
 | `ARIA/maps/`, `ARIA/bin/` | ARIA reference data/binaries |
-| `second_map_original_0.1.{pgm,yaml}.bak` | pre-downsample backups (revert path) |
+| `second_map_original_0.1.{pgm,yaml}.bak` | historical map backup, not the active scale |
 
 ## Not Used — dead code / cleanup candidates
 

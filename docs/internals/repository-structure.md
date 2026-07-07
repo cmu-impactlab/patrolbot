@@ -1,6 +1,6 @@
 ---
 title: Repository Structure
-description: The on-robot filesystem layout — the Pi colcon workspace, the build_backup deployment quirk, the nested git repos, and the SBC project directory.
+description: The on-robot filesystem layout — the Pi colcon workspace, the Docker migration files, the nested git repos, and the SBC project directory.
 ---
 
 # Repository Structure
@@ -20,27 +20,22 @@ edit and which copy actually runs.
 │   │   ├── patrolbot-launch/         # ament_python — mobile base (SOURCE)
 │   │   └── rosaria2/                 # ament_cmake  — legacy  (OWN .git/)
 │   ├── build/  install/  log/        # colcon artifacts — NOT source of truth
-├── build_backup/
-│   └── patrolbot-launch/             # the mobile base that ACTUALLY RUNS
 ├── ARIA/                             # AriaCoda library (libAria.so, headers, params)
 ├── .config/systemd/user/             # the three Pi services
-├── patrolbot_fastdds_pi.xml          # prepared FastDDS discovery-server profile
+├── docker/                           # Docker Compose migration stack on Pi 5
 ├── patrolbot-logs.sh                 # live log/diagnostics helper
 ├── patrolbot-sh.p                    # ARIA hardware profile (PatrolBot-SH)
 └── yousef/                           # dev tools (mock_sbc_server.py, test_laser.py)
 ```
 
-### Three filesystem traps
+### Filesystem traps
 
-!!! danger "1. The mobile base runs from `build_backup/`"
-    `patrolbot-bringup.service` launches `~/build_backup/patrolbot-launch/launch/bringup.xml`. The
-    `ros2_ws/src/patrolbot-launch/` copy is the **source of truth**, but editing it changes nothing
-    at runtime until the `build_backup` copy is updated. This catches everyone exactly once. See
-    [Updates](../deployment/updates.md#the-mobile-base-deployment-step).
+!!! success "1. `build_backup/` is no longer a runtime target"
+    `patrolbot-bringup.service` now launches `ros2 launch patrolbot-launch bringup.xml`. Older notes
+    that say `~/build_backup/patrolbot-launch/` is the deployed mobile-base copy are stale.
 
 !!! warning "2. `build/`, `install/`, `log/` are not source"
-    Standard colcon rule: never treat generated directories as canonical. `src/` (and, for the
-    mobile base, `build_backup/`) is what you edit.
+    Standard colcon rule: never treat generated directories as canonical. `src/` is what you edit.
 
 !!! warning "3. Nested git repositories"
     `patrolbot_navigation/` and `rosaria2/` each contain their own `.git/`. They are versioned
@@ -48,7 +43,8 @@ edit and which copy actually runs.
 
 ## SBC filesystem (`/home/ros`)
 
-Snapshot from the last sync; not live-verifiable here (see [Known Gaps](../known-gaps.md)).
+The SBC is currently documented from `SKILLS/sbc-architecture.md` in the source workspace when live
+SSH is unavailable.
 
 ```
 /home/ros/
@@ -83,8 +79,9 @@ The documentation repo contains **no robot code** — the source lives on the ma
 |---|---|---|
 | Bridge behavior | `ros2_ws/src/patrolbot_bridge/...` | `colcon build`, restart bridge |
 | Nav2 params / launch / map | `ros2_ws/src/patrolbot_navigation/...` (own git) | `colcon build`, restart nav |
-| Mobile base (twist_mux/smoother) | `ros2_ws/src/patrolbot-launch/...` **and** copy to `build_backup/` | restart bringup |
+| Mobile base (twist_mux/smoother) | `ros2_ws/src/patrolbot-launch/...` | restart bringup; rebuild if adding files |
 | SBC server | `patrolbot_hw_server/patrolbot_server.cpp` (on SBC) | `make`, restart server |
+| Docker migration | `docker/...` and `ros2_ws/src/...` on Pi 5 | rebuild/restart Compose |
 | These docs | `docs/...` in this repo | `mkdocs serve` to preview |
 
 See [Component Breakdown](component-breakdown.md) for what each of these components does.

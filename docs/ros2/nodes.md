@@ -22,6 +22,7 @@ flowchart LR
     TM["twist_mux"]:::pi
     TVS["teleop_velocity_smoother"]:::pi
     LC["lifecycle_mgr.py"]:::pi
+    SW["patrolbot_safety_watchdog"]:::pi
     NAV["nav2_container\n(amcl, planner, controller,\nvelocity_smoother, collision_monitor,\nbt_navigator, behavior_server, ...)"]:::pi
     classDef pi fill:#eef,stroke:#5566aa;
 ```
@@ -46,7 +47,7 @@ flowchart LR
 **Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`).
 **Services / actions:** none.
 **Parameters:** none declared; the SBC endpoint (`172.20.87.231:7272`), `RECV_TIMEOUT=3.0`, and
-`SCAN_RANGE_MIN=0.2` are module constants.
+`SCAN_RANGE_MIN=0.25` are module constants.
 **Lifecycle:** plain (non-lifecycle) node. A background thread owns the socket; a 50 Hz timer
 publishes TF; the main thread spins callbacks.
 
@@ -78,8 +79,8 @@ systemctl --user status patrolbot-bridge.service
 | **Executable** | `twist_mux` (package `twist_mux`), launched as node name `cmd_vel_mux` |
 | **Purpose** | Single velocity arbiter. Selects the highest-priority active input and republishes it. |
 
-**Subscribers:** `input/joy` (prio 8), `input/navi` (prio 5), plus configured-but-unused
-`input/safety_controller` (10), `input/teleop` (8), `input/switch` (6).
+**Subscribers:** `input/safety_controller` (prio 10), `input/joy` (prio 8), `input/navi` (prio 5),
+plus configured-but-unused `input/teleop` (8), `input/switch` (6).
 **Publishers:** `cmd_vel_out`.
 **Parameters:** from `param/defaults/mux.yaml` (see [Parameters](parameters.md#twist_mux-muxyaml)).
 **Failure modes:** if an input goes silent past its `timeout`, twist_mux drops it and the next
@@ -107,11 +108,11 @@ move under navigation — which is exactly what `lifecycle_mgr.py` exists to pre
 |---|---|
 | **Host** | Raspberry Pi |
 | **Executable** | `lifecycle_mgr.py` (package `patrolbot-launch`), node name `lifecycle_manager_script` |
-| **Purpose** | One-shot: calls `/teleop_velocity_smoother/change_state` to `configure` then `activate` the smoother, then exits. |
+| **Purpose** | Keeps `/teleop_velocity_smoother` configured and active, including after smoother respawn. |
 
 **Clients:** `/teleop_velocity_smoother/change_state` (`lifecycle_msgs/ChangeState`).
 **Failure mode:** waits for the service in a 1 s loop; if the smoother never appears it logs and
-keeps waiting. If a transition fails it logs an error (non-fatal to the rest of the stack).
+keeps waiting. If the smoother respawns unconfigured, it re-applies configure/activate.
 
 ---
 
@@ -157,10 +158,22 @@ the joy input out (1 s) and navigation resumes.
 **Arguments:** `x=0.037, y=0, z=0.2, yaw=0, pitch=0, roll=3.14159`. The `roll=π` un-mirrors the
 flipped SICK scan (see [Sensors](../devices/sensors.md#sick-lms-200-laser)).
 
-!!! warning
-    The orientation is unverified — older notes say `yaw=π`. The live launch is authoritative
-    (`roll=π`), but the correct value awaits a visual RViz check. See
-    [Known Gaps](../known-gaps.md#laser-transform-orientation).
+`roll=π` is confirmed by live TF and the ARIA `LaserFlipped=true` hardware profile. Older notes that
+say `yaw=π` are stale.
+
+### patrolbot_safety_watchdog
+
+| Field | Value |
+|---|---|
+| **Host** | Raspberry Pi |
+| **Executable** | `patrolbot_safety_watchdog.py` (package `patrolbot_navigation`) |
+| **Purpose** | Holds the robot if `/scan` or `/odom` goes stale. |
+
+**Subscribers:** `/scan`, `/odom`.
+**Publishers:** `/input/safety_controller` (`geometry_msgs/Twist`, zero command, twist_mux priority
+10).
+**Failure mode:** launched with `respawn=True`; if the script is not executable the navigation
+launch restart-loops, so executable permissions are safety-relevant.
 
 ---
 
@@ -176,8 +189,8 @@ managers patched with `bond_timeout: 0.0`.
 | `map_server` | Serves the occupancy grid | Pub `/map`; the large map flows to costmaps intra-process |
 | `amcl` | Adaptive Monte-Carlo localization (differential model) | Sub `/scan`, `/odom`; pub TF `map→odom`; `set_initial_pose: true` |
 | `planner_server` | Global planner `GridBased` = NavFn | Action `compute_path_to_pose`; uses global costmap |
-| `controller_server` | Local controller DWB @ 5 Hz, `max_vel_x` 0.26 | Action `follow_path`; pub `cmd_vel` |
-| `velocity_smoother` | Smooths DWB output | Sub `cmd_vel`; pub `cmd_vel_smoothed` |
+| `controller_server` | Local controller RPP @ 5 Hz, `desired_linear_vel` 0.22 | Action `follow_path`; pub `cmd_vel` |
+| `velocity_smoother` | Smooths RPP output | Sub `cmd_vel`; pub `cmd_vel_smoothed` |
 | `collision_monitor` | Stop-box 0.6×0.6 m safety gate, `base_shift_correction: False` | Sub `cmd_vel_smoothed`, `/scan`; pub `input/navi` |
 | `bt_navigator` | Behavior-tree orchestration | Actions `navigate_to_pose`, `navigate_through_poses` |
 | `behavior_server` | Recovery behaviors: spin, backup, drive_on_heading, wait | Action servers per behavior |
@@ -206,5 +219,6 @@ direct reason `collision_monitor` runs with `base_shift_correction: False`. See
 | `lifecycle_manager_script` | Pi |
 | `joy_node` | Pi |
 | `p3dxJoyTeleop` | Pi |
+| `patrolbot_safety_watchdog` | Pi |
 | `laser_static_tf` | Pi |
 | all `nav2_container` nodes | Pi |

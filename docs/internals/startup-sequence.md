@@ -32,7 +32,7 @@ sequenceDiagram
     Nav->>Nav: localization loads (map_server + amcl) — map + map→odom in a few seconds
     Note over Nav: TimerAction waits 20 s
     Nav->>Nav: navigation loads (costmaps, planner, controller, ...)
-    Note over Nav: costmaps inflate large map — full activation ~2.5 min
+	    Note over Nav: costmaps inflate large map — goals become available after staged activation
 ```
 
 ## Stage-by-stage
@@ -67,8 +67,9 @@ If the SBC isn't up when the Pi starts, nothing breaks — the bridge just retri
    a few seconds; *2D Pose Estimate* works almost immediately.
 4. **A 20 s `TimerAction` delays navigation** so costmap inflation doesn't starve localization
    during the container's sequential composable-node loading.
-5. Navigation loads — costmaps, planner, controller, behaviors, collision monitor. Full activation
-   takes **~2.5 min** (was ~8 min before the map downsample). *Nav2 Goal* becomes available here.
+5. Navigation loads — costmaps, planner, controller, behaviors, collision monitor. After the
+   boot-time network-wait fix, *Nav2 Goal* is expected around ~70 s from power-on; older cold-boot
+   measurements were around ~3 min. *Nav2 Goal* becomes available here.
 6. `joy_node`, `p3dxJoyTeleop`, and `laser_static_tf` also start under this service.
 
 ## Readiness checkpoints
@@ -78,7 +79,7 @@ If the SBC isn't up when the Pi starts, nothing breaks — the bridge just retri
 | See `/odom`, `/scan` | the bridge connects (Stage 2) |
 | See the map, set *2D Pose Estimate* | localization activates (Stage 3.3, seconds) |
 | Drive with the joystick | the mobile base + bridge are up (Stages 1–2) |
-| Send a *Nav2 Goal* | navigation fully activates (Stage 3.5, ~2.5 min) |
+| Send a *Nav2 Goal* | navigation fully activates (Stage 3.5, roughly ~70 s expected after the boot-time network-wait fix) |
 
 ## Why the ordering matters
 

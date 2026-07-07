@@ -11,9 +11,9 @@ rate. The logical/software view is in [Software Architecture](software-architect
 protocol on the wire between the machines is in
 [Communication Architecture](communication-architecture.md).
 
-!!! tip "SBC verified live 2026-06-29"
-    The SBC was SSH-accessible and fact-checked directly on this date. Port assignments, baud
-    rates, services, and the wiring below are confirmed against the live machine.
+!!! info "SBC truth source while down"
+    The SBC is currently down, so this page follows `SKILLS/sbc-architecture.md` from the source
+    workspace for SBC service, port, watchdog, and wire-protocol details.
 
 ## Hardware topology
 
@@ -74,7 +74,8 @@ back to the SBC. The only peripheral wired to the Pi is the gamepad.
 
 A differential-drive research platform configured by the ARIA parameter file `patrolbot-sh.p`:
 
-- **Footprint:** ~425 mm wide; modeled in Nav2 as a `robot_radius` of **0.22 m**.
+- **Footprint:** modeled in Nav2 as an octagon from `RobotLength 510 mm`, `RobotWidth 425 mm`, and
+  the 0.29 m swing radius.
 - **Drive:** two driven wheels + casters, controlled by the base microcontroller. Top speed is
   capped in software to **0.26 m/s** linear (RPP `desired_linear_vel`) for indoor patrol.
 - **Sonar:** the base physically carries **4 rear-facing sonar sensors** (ARIA param file
@@ -94,7 +95,7 @@ Full device pages: [Actuators](../devices/actuators.md) (base drive),
 
 - **Attached to the SBC** on `/dev/ttyS2` at 38400 baud, read by ARIA's `ArLaserConnector`.
 - The bridge publishes the scan as `/scan` with a **180° forward** field of view
-  (`angle_min = -π/2`, `angle_max = +π/2`), `range_min` 0.2 m, `range_max` 8.0 m.
+  (`angle_min = -π/2`, `angle_max = +π/2`), `range_min` 0.25 m, `range_max` 8.0 m.
 - **Mounting:** the SICK is mounted **flipped** (`LaserFlipped=true` in `patrolbot-sh.p`), and
   ARIA returns its readings in flipped order, so the scan arrives mirrored left↔right. The fix is
   a static transform that **rolls `laser_frame` 180° about the forward axis** (`roll = π`),
@@ -114,13 +115,15 @@ wired to the base and laser. It runs no ROS 2 — just the `socat` serial shim a
 
 ### Raspberry Pi
 
-An Ubuntu Raspberry Pi running ROS 2 Jazzy as user `ubuntu` (home `/home/ubuntu`). It hosts the
-entire autonomy stack. Its relevant resource constraints shape the software:
+The production navigation computer is a Raspberry Pi 4 running ROS 2 Jazzy as user `ubuntu` (home
+`/home/ubuntu`). A Raspberry Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`, Ubuntu 24.04.4 LTS,
+aarch64) is provisioned as the Docker migration target but is not yet production. The Pi 4's
+resource constraints shape the software:
 
 - **`ulimit -n = 1024`** — forces Nav2 composition into one container (see
   [Software Architecture](software-architecture.md#the-composed-nav2_container-and-why-composition-is-mandatory)).
 - **Limited RAM** — forces single-threaded map decode (`MAGICK_THREAD_LIMIT=1`,
-  `OMP_NUM_THREADS=1`) and motivated the map downsample.
+  `OMP_NUM_THREADS=1`) and motivates keeping the global costmap coarser than the static map.
 
 ## Network and power
 

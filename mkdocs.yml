@@ -119,6 +119,7 @@ nav:
       - Profiling: development/profiling.md
   - Deployment:
       - Robot Deployment: deployment/robot-deployment.md
+      - Docker Deployment: deployment/docker.md
       - Network Setup: deployment/network-setup.md
       - Remote Operation: deployment/remote-operation.md
       - Updates: deployment/updates.md

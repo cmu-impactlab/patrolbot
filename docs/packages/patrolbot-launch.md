@@ -1,6 +1,6 @@
 ---
 title: patrolbot-launch
-description: The mobile-base package — twist_mux velocity arbitration plus the velocity smoother and its lifecycle manager. Why the running copy lives in build_backup.
+description: The mobile-base package — twist_mux velocity arbitration plus the velocity smoother and its lifecycle manager.
 ---
 
 # patrolbot-launch
@@ -13,9 +13,9 @@ bridge.
 |---|---|
 | **Deploys to** | **Raspberry Pi** |
 | **Build type** | `ament_python` |
-| **Entry launch** | `bringup.xml` (run from `build_backup/`, see below) |
+| **Entry launch** | `bringup.xml` (`ros2 launch patrolbot-launch bringup.xml`) |
 | **Source** | `ros2_ws/src/patrolbot-launch/` |
-| **Installed/running copy** | `~/build_backup/patrolbot-launch/` |
+| **Runtime source** | installed package; symlink-install points back to `src/` |
 
 ## Purpose
 
@@ -26,7 +26,7 @@ hands a single `/cmd_vel` to the bridge.
 ## Dependencies
 
 `twist_mux`, `nav2_velocity_smoother`, `rclpy`, `ros2launch`. (Manifest carries scaffold-default
-maintainer/license — see [Known Gaps](../known-gaps.md#code-hygiene-observations).)
+maintainer/license — see [Known Gaps](../known-gaps.md#code-hygiene).)
 
 ## Package layout (active files)
 
@@ -74,17 +74,15 @@ Because `nav2_velocity_smoother` is a lifecycle node, `lifecycle_mgr.py` calls `
 (configure → activate) at startup; without it the smoother never publishes and the robot won't
 move under navigation. See [Services](../ros2/services.md#velocity-smoother-lifecycle-transition).
 
-!!! danger "The running copy is in `build_backup/`"
-    `patrolbot-bringup.service` launches `~/build_backup/patrolbot-launch/launch/bringup.xml`, **not**
-    this `src` directory. The `src` copy is the source of truth, but **changes here do nothing at
-    runtime until copied to `build_backup` / rebuilt.** This is the single most common
-    "why didn't my change take effect" trap in the workspace. See
-    [Repository Structure](../internals/repository-structure.md).
+!!! success "No `build_backup` runtime copy"
+    `patrolbot-bringup.service` launches the package by name:
+    `ros2 launch patrolbot-launch bringup.xml`. The old `~/build_backup/patrolbot-launch/` target was
+    removed on 2026-06-28.
 
 ## Example usage
 
 ```bash
-cd ~/build_backup/patrolbot-launch/launch && ros2 launch bringup.xml
+ros2 launch patrolbot-launch bringup.xml
 ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh bringup     # follow mobile-base logs
 
 # Confirm the smoother activated and /cmd_vel is flowing

@@ -1,13 +1,13 @@
 ---
 title: Remote Operation
-description: Operating PatrolBot from off-site — why RViz over a VPN sees nothing, the FastDDS Discovery Server fix that is prepared but not yet wired in, and the LAN fallback.
+description: Operating PatrolBot from off-site — why RViz over a VPN sees nothing, the reverted FastDDS Discovery Server experiment, and the LAN fallback.
 ---
 
 # Remote Operation
 
-Operating PatrolBot on the **LAN** is straightforward; operating it **from home over a VPN** is the
-hard case, because ROS 2's default multicast discovery does not survive VPN/NAT. This page covers
-both, and the in-progress discovery-server fix.
+Operating PatrolBot on the **LAN** is straightforward; operating it **from home over a VPN** is not
+currently supported for RViz, because ROS 2's default multicast discovery does not survive VPN/NAT.
+The FastDDS Discovery Server experiment was reverted on 2026-06-29.
 
 ## On the LAN (the easy path)
 
@@ -38,42 +38,21 @@ Running RViz from home (a VM behind VMware NAT + a Cisco VPN) shows **nothing**:
 ```mermaid
 flowchart LR
     PI["Pi ROS graph (healthy)"] -. "multicast discovery\nblocked by VPN/NAT" .-> HOME["Home RViz\n(sees nothing)"]
-    PI ==>|"unicast TCP via\ndiscovery server"| HOME2["Home RViz\n(with discovery server)"]
+    PI ==>|"future unicast/relay design"| HOME2["Home RViz\n(not active today)"]
 ```
 
-## The fix: FastDDS Discovery Server (prepared, not yet wired in)
+## Discovery Server Status
 
-The plan replaces multicast discovery with a **unicast, TCP** discovery server — NAT-friendly,
-because TCP is bidirectional once the client initiates the connection.
+The robot is back on plain LAN multicast discovery:
 
 | Piece | Where | Status |
 |---|---|---|
-| Pi nodes become discovery-server **clients**, expose a TCP transport | `patrolbot_fastdds_pi.xml` | **validated** |
-| Discovery server on the Pi | `fastdds discovery -i 0 -t 0.0.0.0 -q 11811` (GUID prefix `44.53.00.5f.45.50.52.4f.53.49.4d.41`, TCP :11811, ephemeral data ports) | **validated** |
-| Applied to the production services via `FASTRTPS_DEFAULT_PROFILES_FILE` | the three systemd user units | **not yet** — deferred so it can't risk the live nav stack |
+| `patrolbot-discovery.service` | Pi user service directory | **disabled** |
+| `FASTRTPS_DEFAULT_PROFILES_FILE` | three production ROS 2 services | **not set** |
+| FastDDS XML profiles | backups / old files | **not runtime state** |
 
-### Profile highlights (`patrolbot_fastdds_pi.xml`)
-
-- A `TCPv4` transport with `listening_ports: 0` (OS-assigned ephemeral port per process — a fixed
-  port can't be shared by the many Pi processes; each participant registers its real TCP locator
-  with the discovery server).
-- `discoveryProtocol: CLIENT`, pointing at the local discovery server at `127.0.0.1:11811`.
-- Builtin SHM+UDP transports kept for fast intra-Pi traffic; TCP only for remote participants.
-
-!!! warning "Not active by default"
-    The live systemd units do **not** set `FASTRTPS_DEFAULT_PROFILES_FILE`, so the discovery server
-    is **not** in effect today. Enabling it is a deliberate, separate step (it was intentionally left
-    until last so it couldn't destabilize the production nav stack). Tracked in
-    [Known Gaps](../known-gaps.md).
-
-### Enabling it (when ready)
-
-1. Start the discovery server on the Pi (or as its own service).
-2. Set `FASTRTPS_DEFAULT_PROFILES_FILE=/home/ubuntu/patrolbot_fastdds_pi.xml` for the ROS nodes
-   (the three user services).
-3. On the remote client, point at the same discovery server (its reachable address over the VPN)
-   and use a matching TCP client profile.
-4. Verify TF/map appear in remote RViz.
+If VPN RViz is needed again, re-enable it as a deliberate project from backups, then verify LAN RViz,
+on-Pi ROS CLI, TF, map QoS, and Nav2 goals before considering it production.
 
 ## Remote RViz noise (harmless)
 

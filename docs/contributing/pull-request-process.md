@@ -14,8 +14,8 @@ robust, and does it leave the docs accurate. This page is the checklist.
 - **A description** stating: which machine(s) it affects, what was tested, and whether it touches
   the SBC↔Pi seam or the Nav2 lifecycle/launch.
 - **Doc updates** for any structural or factual change (package `README.md` + this site).
-- **`build_backup` note** if it changes the mobile base — say explicitly that the deployment copy
-  was updated.
+- **Runtime note** if it changes launch/params/services/Docker — say which service or container was
+  restarted and how it was verified.
 
 ## Author checklist
 
@@ -47,7 +47,7 @@ robust, and does it leave the docs accurate. This page is the checklist.
 | SBC `patrolbot_server.cpp` | the re-accept loop, EAGAIN guard, keepalive/user-timeout |
 | `nav2_params.yaml` | the load-bearing flags; the stale trailing comment |
 | `bringup.launch.py` / patched launches | composition, `bond_timeout: 0.0`, the OnProcessExit handler, the 20 s timer |
-| mobile base | the cmd_vel remaps and that `build_backup` was updated |
+| mobile base | the cmd_vel remaps and that `patrolbot-bringup.service` was restarted |
 | maps | costmap resolution matches the map resolution |
 
 ## Merge and deploy
@@ -57,7 +57,7 @@ robust, and does it leave the docs accurate. This page is the checklist.
   --strict` and publishes to GitHub Pages. **A docs PR that fails `--strict` (e.g. a broken internal
   link) will fail the build** — preview locally with `mkdocs serve` first.
 - Robot code does **not** auto-deploy. Code changes are applied to the machines per
-  [Updates](../deployment/updates.md) — including the manual `build_backup` step for the mobile base.
+  [Updates](../deployment/updates.md), including service restarts or Docker Compose restarts.
 
 ## Commit and PR style
 

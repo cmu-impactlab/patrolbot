@@ -1,6 +1,6 @@
 ---
 title: Launch System
-description: How PatrolBot starts — the three Pi launch entry points, the patched Nav2 launches, the remaps that wire the cmd_vel chain, and the build_backup gotcha.
+description: How PatrolBot starts — the three Pi launch entry points, the patched Nav2 launches, and the remaps that wire the cmd_vel chain.
 ---
 
 # Launch System
@@ -14,7 +14,7 @@ together, and the patched Nav2 launch files that make the large map work. Boot o
 
 | Launch | Service | Package | Brings up |
 |---|---|---|---|
-| `bringup.xml` | `patrolbot-bringup.service` | `patrolbot-launch` (from `build_backup/`) | mobile base: `twist_mux` + `teleop_velocity_smoother` + `lifecycle_mgr.py` |
+| `bringup.xml` | `patrolbot-bringup.service` | `patrolbot-launch` | mobile base: `twist_mux` + `teleop_velocity_smoother` + `lifecycle_mgr.py` |
 | `bridge_node` (run, not launch) | `patrolbot-bridge.service` | `patrolbot_bridge` | the TCP bridge |
 | `bringup.launch.py` | `patrolbot-navigation.service` | `patrolbot_navigation` | Nav2 (composed) + `joy_node` + `p3dxJoyTeleop` + `laser_static_tf` |
 
@@ -44,11 +44,9 @@ mobile-base smoother consume `twist_mux`'s `cmd_vel_out` and emit the final `/cm
 forwards to the SBC. `lifecycle_mgr.py` then `configure`s + `activate`s the smoother so it actually
 publishes.
 
-!!! danger "The `build_backup/` gotcha"
-    `patrolbot-bringup.service` launches this from **`~/build_backup/patrolbot-launch/launch/`**,
-    not from `ros2_ws/src`. The `src` copy is the source of truth, but editing it changes nothing at
-    runtime until you re-install (copy to `build_backup` / rebuild). See
-    [Repository Structure](../internals/repository-structure.md).
+!!! success "Package-name launch"
+    `patrolbot-bringup.service` launches `ros2 launch patrolbot-launch bringup.xml`. Older
+    `build_backup/` notes are stale.
 
 ## Navigation launch (`patrolbot_navigation/launch/bringup.launch.py`)
 
@@ -61,7 +59,8 @@ This is a hand-built launch — it deliberately does **not** call `nav2_bringup`
    systemd restarts a fresh, fully-populated stack — a respawned container comes back empty).
 4. Includes the patched **localization** launch immediately.
 5. Includes the patched **navigation** launch after a 20 s `TimerAction`.
-6. Starts `joy_node`, `p3dxJoyTeleop` (remap `/cmd_vel_joy → /input/joy`), and `laser_static_tf`.
+6. Starts `joy_node`, `p3dxJoyTeleop` (remap `/cmd_vel_joy → /input/joy`),
+   `patrolbot_safety_watchdog.py`, and `laser_static_tf`.
 
 ```mermaid
 flowchart TB
@@ -93,9 +92,8 @@ so every lifecycle node loads into the single shared container. (This is the val
 ['0.037','0','0.2','0','0','3.14159', 'base_link', 'laser_frame']
 ```
 
-`roll = π` un-mirrors the flipped SICK scan. **Orientation is unverified** — older notes say
-`yaw = π`; the live launch is authoritative but a visual RViz check is still pending. See
-[Known Gaps](../known-gaps.md#laser-transform-orientation).
+`roll = π` un-mirrors the flipped SICK scan. This is confirmed against live TF and the ARIA
+`LaserFlipped=true` hardware profile; older notes that say `yaw = π` are stale.
 
 ## Commented-out / non-active launch fragments
 
@@ -110,7 +108,7 @@ Present in the `patrolbot-launch` package but not part of the active stack:
 ## Manual launch (development)
 
 ```bash
-cd ~/build_backup/patrolbot-launch/launch && ros2 launch bringup.xml   # mobile base
+ros2 launch patrolbot-launch bringup.xml                               # mobile base
 ros2 run patrolbot_bridge bridge_node                                   # bridge
 ros2 launch patrolbot_navigation bringup.launch.py                     # Nav2
 ```

@@ -25,8 +25,8 @@ Real components retained as fallbacks or references, but not part of the running
   active twist_mux runs from `patrolbot-launch`'s `mux.yaml`.
 - **`patrolbot_nav.rviz`** — operator RViz layout for manual visualization.
 - **`maps/cmuq_1st_floor.{yaml,pgm}`** — an older CMU-Q floor map, not loaded by the active launch.
-- **`second_map_original_0.1.{pgm,yaml}.bak`** — pre-downsample map backups, retained as the revert
-  path for the 0.2 → 0.1 m/px change.
+- **`second_map_original_0.1.{pgm,yaml}.bak`** — historical map backup, not the active
+  operator-confirmed scale.
 - **`ARIA/maps/`, `ARIA/bin/`** — ARIA reference map data and utility binaries.
 
 ## Known Dead Code — cleanup candidates { #known-dead-code--cleanup-candidates }

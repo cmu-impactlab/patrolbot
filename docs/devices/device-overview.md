@@ -20,7 +20,7 @@ robot hardware.
 |---|---|---|---|---|---|
 | Pioneer PatrolBot-SH base | Actuator | **SBC** | `/dev/ttyS0` @ 9600 (via socat→TCP:7000) | `/cmd_vel` → bridge → `DRIVE` → ARIA | [Actuators](actuators.md) |
 | SICK LMS-200 laser | Sensor | **SBC** | `/dev/ttyS2` @ 38400 | bridge → `/scan` | [Sensors](sensors.md) |
-| 16-sonar ring | Sensor | **SBC** (via base) | base bus, ARIA | bridge → `/sonar` | [Sensors](sensors.md#sonar-ring) |
+| 4 rear sonar sensors | Sensor | **SBC** (via base) | base bus, ARIA | bridge → `/sonar` | [Sensors](sensors.md#sonar) |
 | Battery / charge | Sensor | **SBC** (via base) | base bus, ARIA | bridge → `/battery` | [Sensors](sensors.md#battery) |
 | Base flags / stall / fault | Status | **SBC** (via base) | base bus, ARIA | bridge → `/diagnostics` | [Controllers](controllers.md) |
 | Logitech gamepad | Input | **Pi** | USB (Xinput) | `joy_node` → `/joy` | [Interfaces](interfaces.md) |
@@ -33,7 +33,7 @@ flowchart TB
     subgraph ROBOT["Robot hardware (on the SBC)"]
         BASE["Pioneer base\n/dev/ttyS0"]
         LASER["SICK LMS-200\n/dev/ttyS2"]
-        SONAR["16-sonar ring"]
+        SONAR["4 rear sonar sensors"]
         BATT["battery"]
     end
 
@@ -61,8 +61,8 @@ misbehaves:
 
 - **Host = SBC:** the device, its serial port, its ARIA driver, and the telemetry that carries it
   all live on the SBC. If `/scan` or `/odom` is missing on the Pi but the bridge is connected,
-  the problem is upstream on the SBC — but **the SBC is not remotely diagnosable in this
-  documentation's snapshot** (see [Known Gaps](../known-gaps.md)).
+  the problem is upstream on the SBC. When the SBC is down, use the project
+  `SKILLS/sbc-architecture.md` as the documented truth source until live access returns.
 - **Host = Pi:** the gamepad is the only device you can inspect directly on the Pi
   (`/dev/input/js*`, `ros2 topic echo /joy`).
 
@@ -70,9 +70,9 @@ misbehaves:
 
 | Item | Where defined | Note |
 |---|---|---|
-| Robot radius | `nav2_params.yaml` (`robot_radius: 0.22`) | drives costmap footprint |
+| Robot footprint | `nav2_params.yaml` octagon | derived from 510 mm length, 425 mm width, 0.29 m swing radius |
 | Laser mount offset | `laser_static_tf` (`x=0.037, z=0.2`) | from ARIA `LaserX` |
-| Laser orientation | `laser_static_tf` (`roll=π`) | un-mirror; **unverified**, see [Sensors](sensors.md#sick-lms-200-laser) |
-| Laser self-occlusion cutoff | `bridge_node.py` (`SCAN_RANGE_MIN=0.2`) | drops returns inside the footprint |
-| Sonar geometry | ARIA `patrolbot-sh.p` | 16-transducer layout, reported in `base_link` |
+| Laser orientation | `laser_static_tf` (`roll=π`) | confirmed correction for flipped SICK scan |
+| Laser self-occlusion cutoff | `bridge_node.py` (`SCAN_RANGE_MIN=0.25`) | drops returns inside/at the footprint; do not raise much higher |
+| Sonar geometry | ARIA `patrolbot-sh.p` + SBC filtering | 4 physical rear sensors; only valid echoes published |
 | Base hardware profile | `patrolbot-sh.p` | dimensions, sonar, laser port, PTZ camera |

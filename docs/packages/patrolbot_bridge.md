@@ -26,7 +26,7 @@ an abrupt loss of the SBC without operator action.
 
 `rclpy`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`, `std_msgs`, `diagnostic_msgs`, `tf2_ros`.
 (Manifest still carries scaffold-default maintainer/license — see
-[Known Gaps](../known-gaps.md#code-hygiene-observations).)
+[Known Gaps](../known-gaps.md#code-hygiene).)
 
 ## Public interfaces
 
@@ -72,8 +72,8 @@ Three concerns, cleanly separated by two locks:
 ### Parsing
 
 - `_parse_telemetry`: splits `ODOM:...|LASER:...`, builds `/odom` and `/scan`. The scan is
-  180° forward (`±π/2`), `range_min 0.2`, `range_max 8.0`, with sub-0.2 m returns forced to `+inf`
-  (self-occlusion filter).
+  180° forward (`±π/2`), `range_min 0.25`, `range_max 8.0`, with sub-0.25 m returns forced to
+  `+inf` (footprint-clearance filter).
 - `_parse_aux`: splits `AUX:SONAR=..|BATT=..|FLAGS=..` and publishes `/sonar`, `/battery`,
   `/diagnostics` **each in isolation** — a malformed section skips only its own topic.
 

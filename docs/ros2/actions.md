@@ -23,7 +23,7 @@ sequenceDiagram
     participant Op as Operator (RViz)
     participant BT as bt_navigator
     participant Plan as planner_server
-    participant Ctrl as controller_server (DWB)
+    participant Ctrl as controller_server (RPP)
 
     Op->>BT: navigate_to_pose goal (map frame)
     BT->>Plan: compute_path_to_pose
@@ -42,7 +42,7 @@ These are invoked by the behavior tree inside `bt_navigator`, not usually by an 
 | Action | Type | Server | Role |
 |---|---|---|---|
 | `compute_path_to_pose` | `nav2_msgs/action/ComputePathToPose` | `planner_server` | global plan (NavFn) |
-| `follow_path` | `nav2_msgs/action/FollowPath` | `controller_server` | local control (DWB) |
+| `follow_path` | `nav2_msgs/action/FollowPath` | `controller_server` | local control (RPP) |
 | `smooth_path` | `nav2_msgs/action/SmoothPath` | `smoother_server` | path smoothing |
 | `spin` | `nav2_msgs/action/Spin` | `behavior_server` | recovery |
 | `backup` | `nav2_msgs/action/BackUp` | `behavior_server` | recovery |
@@ -60,14 +60,14 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
 
 !!! warning "Goals require the navigation half to be active"
     Localization activates within seconds, but the navigation half (costmaps, planner, controller)
-    is delayed ~20 s and takes ~2.5 min to fully activate after launch. A `navigate_to_pose` goal
+    is delayed ~20 s and becomes available after staged activation. A `navigate_to_pose` goal
     sent before then is rejected. Setting an initial pose (*2D Pose Estimate*) does **not** require
     the navigation half. See [Execution Flow](../architecture/execution-flow.md#nav2-staged-activation).
 
 ## Failure modes
 
 - **"No valid trajectories" / goal aborts.** Historically caused by `local_costmap` updating at
-  1 Hz while DWB ran at 5 Hz → "Costmap timed out waiting for update". Fixed by raising
+  1 Hz while the controller ran at 5 Hz → "Costmap timed out waiting for update". Fixed by raising
   `local_costmap update_frequency` to 5.0. See [Debugging](../development/debugging.md).
 - **Goal rejected immediately.** Navigation half not yet active (see warning above).
 - **Robot "boxed in".** Laser shows obstacles within the footprint; the `collision_monitor`

@@ -48,10 +48,10 @@ flowchart TB
 
 Two facts about this workspace routinely surprise people:
 
-1. **The active `patrolbot-launch` runs from `build_backup/`, not `install/` or `src/`.** The
-   systemd service launches `~/build_backup/patrolbot-launch/launch/bringup.xml`. The `src` copy is
-   the source of truth; editing it does nothing until re-installed. See
-   [Repository Structure](../internals/repository-structure.md).
+1. **`patrolbot-launch` now runs by package name.** The service launches
+   `ros2 launch patrolbot-launch bringup.xml`; old notes about `build_backup/` are stale. Existing
+   symlink-install launch/param edits apply after restarting `patrolbot-bringup.service`; adding new
+   files still needs a build.
 2. **`patrolbot_navigation` has its own `.git/`.** It is version-controlled separately from the
    rest of the workspace (as is `rosaria2`).
 
@@ -67,4 +67,4 @@ Several packages still carry scaffold-default manifest metadata (`maintainer: ub
 `description: TODO`, `license: TODO` in `patrolbot_bridge` and `patrolbot-launch`; `joao@todo.todo`
 in `rosaria2`). This is cosmetic but worth cleaning up before any public release — see
 [Release Process](../contributing/release-process.md) and
-[Known Gaps](../known-gaps.md#code-hygiene-observations).
+[Known Gaps](../known-gaps.md#code-hygiene).

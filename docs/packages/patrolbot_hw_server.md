@@ -1,6 +1,6 @@
 ---
 title: patrolbot_hw_server (SBC)
-description: The SBC's standalone C++ ARIA server — the hardware data source that streams telemetry to the Pi over TCP. Documented from the last sync; not live-verifiable.
+description: The SBC's standalone C++ ARIA server — the hardware data source that streams telemetry to the Pi over TCP.
 ---
 
 # patrolbot_hw_server (SBC)
@@ -9,17 +9,16 @@ The SBC's entire robot software: one C++ program, `patrolbot_server`, that speak
 hardware and a plain-text protocol to the Pi. It is **not a ROS package** — just a `Makefile`
 project linked against ARIA.
 
-!!! info "Last verified 2026-06-25"
-    `patrolbot_server.cpp` was read and modified during the 2026-06-25 session (added AUX telemetry:
-    sonar/battery/flags). Port assignments, ARIA flags, and self-healing behavior were confirmed
-    live at that time. The SBC is not currently accessible — see [Known Gaps](../known-gaps.md)
-    for what remains unconfirmed since that session.
+!!! info "SBC source of truth while the machine is down"
+    The SBC is currently down, so this page follows `SKILLS/sbc-architecture.md` from the source
+    workspace. That file records the current `patrolbot_server` behavior, services, wire protocol,
+    command watchdog, stale-laser handling, and e-stop diagnostics.
 
 | | |
 |---|---|
 | **Deploys to** | **SBC** (robot main PC, `172.20.87.231`) |
 | **Build** | `Makefile` (`g++ -I/usr/local/Aria/include -lAria -lArNetworking -lpthread`) |
-| **Binary** | `patrolbot_server` (last built 2026-06-18, ~19 KB) |
+| **Binary** | `patrolbot_server` (recorded as last built 2026-06-28 in `SKILLS/sbc-architecture.md`) |
 | **Source** | `patrolbot_hw_server/patrolbot_server.cpp` (on the SBC) |
 | **Runs ROS 2?** | **No** |
 
@@ -69,6 +68,13 @@ flowchart TB
 - **Self-healing:** a consecutive-`EAGAIN` guard (~3 s) plus `SO_KEEPALIVE` + `TCP_USER_TIMEOUT
   = 5000 ms` detect a silently-gone Pi and break to re-`accept()` promptly (instead of spinning on
   a full send buffer for minutes).
+- **Command watchdog:** if no `DRIVE` arrives for 750 ms, the server commands zero velocity. It also
+  stops the base on Pi disconnect before accepting the next client.
+- **Stale laser handling:** stale cached SICK readings are not streamed as live data. When the laser
+  is disconnected or stale, the server emits an empty `LASER:` field so the Pi safety path detects
+  sensor loss.
+- **Diagnostics:** the `FLAGS` section includes motors-enabled and e-stop state; a latched hardware
+  e-stop cannot be overridden in software.
 
 ## Why the serial bridge (`socat`)?
 
@@ -84,10 +90,8 @@ resolves the serial conflict cleanly.
 | `socat-boot.service` | systemd **system** | bridge `/dev/ttyS0` → TCP:7000 at boot |
 | `patrolbot-server.service` | systemd **user** | run `patrolbot_server -rh 127.0.0.1 -rrtp 7000` at boot |
 
-The user service needs `loginctl enable-linger ros` (once, interactively) to start without a
-login. See [Robot Deployment](../deployment/robot-deployment.md) and
-[Known Gaps](../known-gaps.md) — whether the linger was actually enabled on the SBC is one of the
-unconfirmed items.
+The user service needs `loginctl enable-linger ros` once to start without a login. The architecture
+notes record this as done.
 
 ## Building (on the SBC)
 
@@ -101,4 +105,4 @@ make                       # g++ ... -lAria -lArNetworking -lpthread
 
 - The protocol in full: [Communication Architecture](../architecture/communication-architecture.md).
 - The Pi end: [`patrolbot_bridge`](patrolbot_bridge.md).
-- What's unverified about the SBC: [Known Gaps](../known-gaps.md).
+- Current open verification items: [Known Gaps](../known-gaps.md).

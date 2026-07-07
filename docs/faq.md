@@ -36,14 +36,15 @@ Short answers with links to the full story.
   [Debugging](development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz).
 
 **I changed `patrolbot-launch` and nothing happened.**
-: Rebuild and reinstall the package, then restart the service:
+: Restart `patrolbot-bringup.service` after editing existing launch/param/script files. Rebuild only
+  when adding files or changing package metadata:
   `colcon build --packages-select patrolbot-launch && systemctl --user restart patrolbot-bringup.service`.
-  The `~/build_backup/` path referenced in older notes was removed — the service now uses the
-  installed package directly. See [Updates](deployment/updates.md#the-mobile-base-deployment-step).
+  The `~/build_backup/` path referenced in older notes was removed — the service now uses
+  `ros2 launch patrolbot-launch bringup.xml`. See [Updates](deployment/updates.md).
 
 **The robot localizes but won't drive to a goal.**
 : Walk the `cmd_vel` chain. Most often the `teleop_velocity_smoother` isn't `active` (the
-  `lifecycle_mgr.py` step), or a goal was sent before navigation finished activating (~2.5 min). See
+  `lifecycle_mgr.py` step), or a goal was sent before navigation finished activating. See
   [Debugging](development/debugging.md#robot-wont-move-under-navigation-but-localization-is-fine).
 
 **The laser scan looks mirrored.**
@@ -68,7 +69,8 @@ Short answers with links to the full story.
   `... nav` (Nav2 logs). See [Debugging](development/debugging.md).
 
 **How long until the robot is ready after boot?**
-: Map + pose estimate in a few seconds; full navigation (goals) in ~2.5 min. See
+: Map + pose estimate in a few seconds; full navigation goals are expected around ~70 s after the
+  boot-time network-wait fix, with older cold-boot measurements around ~3 min. See
   [Startup Sequence](internals/startup-sequence.md).
 
 **Does the robot keep running if I lose my RViz/SSH connection?**
@@ -102,5 +104,6 @@ Short answers with links to the full story.
   See [rosaria2](packages/rosaria2.md).
 
 **What's unverified in this documentation?**
-: Everything SBC-side (the SBC wasn't reachable), plus a handful of doc/source mismatches. See
+: The SBC is currently down, so SBC behavior is documented from the project
+  `SKILLS/sbc-architecture.md` truth source instead of fresh live SSH. See
   [Known Gaps](known-gaps.md).

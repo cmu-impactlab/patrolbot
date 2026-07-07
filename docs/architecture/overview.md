@@ -136,9 +136,10 @@ ends. Each row is detailed on [Communication Architecture](communication-archite
 ## Scalability notes
 
 - **Single robot, single map.** The architecture targets one robot on one floor. The map is the
-  main scaling pressure on the Pi: the original 0.1 m/px map drove ~8-minute Nav2 startup and
-  forced single-threaded image decoding to avoid OOM. Downsampling to 0.2 m/px (4× fewer cells)
-  cut that to ~2.5 minutes. See [Software Architecture](software-architecture.md#the-large-map-problem).
+  main scaling pressure on the Pi: the current operator-confirmed `second_map` is
+  `3192×2205 @ 0.075 m`. Nav2 keeps the global costmap coarser at `0.2 m` and the local costmap at
+  `0.1 m`, with single-threaded image decoding to avoid OOM. See
+  [Software Architecture](software-architecture.md#the-large-map-problem).
 - **The TCP protocol is point-to-point and single-client.** The SBC server re-accepts one Pi at
   a time. Fleet scaling would require either a broker or moving the SBC onto the ROS 2 graph.
 - **The Pi is resource-constrained.** Composition into a single `nav2_container` is mandatory

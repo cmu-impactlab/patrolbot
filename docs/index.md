@@ -7,8 +7,8 @@ description: A two-machine ROS 2 patrol robot. Start here for the system overvie
 
 PatrolBot is an autonomous indoor **patrol robot** built on a Pioneer **PatrolBot-SH**
 differential-drive base. It localizes against a known map, plans and follows paths with
-[Nav2](https://docs.nav2.org/), avoids obstacles using a laser scanner and a sonar ring,
-and accepts manual joystick override at any time.
+[Nav2](https://docs.nav2.org/), avoids obstacles using a laser scanner, reports rear-sonar
+detections for monitoring, and accepts manual joystick override at any time.
 
 The single most important thing to understand before reading anything else: **PatrolBot is
 not one computer.**
@@ -26,7 +26,7 @@ flowchart LR
         LASER --- ARIA
     end
 
-    subgraph PI["Raspberry Pi — ROS 2 Jazzy navigation computer"]
+    subgraph PI["Raspberry Pi 4 — production ROS 2 Jazzy navigation computer"]
         direction TB
         BRIDGE["patrolbot_bridge"]
         NAV["Nav2 stack\n(AMCL + RPP + collision monitor)"]
@@ -50,6 +50,11 @@ flowchart LR
 | **Talks to** | Pioneer base + SICK laser (serial) | The SBC (TCP), the operator (DDS) |
 | **Software** | One C++ ARIA server (`patrolbot_server`) | ROS 2 Jazzy: bridge, Nav2, mobile base |
 | **Runs ROS 2?** | **No** | Yes |
+
+The current production navigation computer is the **Raspberry Pi 4** (`robot-pi`). A
+**Raspberry Pi 5** (`robot-pi2`, hostname `patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64)
+is provisioned for the Dockerized migration path documented in
+[Docker Deployment](deployment/docker.md), but it has not replaced the Pi 4 yet.
 
 The SBC reads odometry and laser ranges from the hardware and **streams them over a single
 TCP socket** as plain text. The Pi turns that stream into native ROS 2 messages (`/odom`,
@@ -75,13 +80,15 @@ seam in detail.
 | Understand the design at a glance | [Architecture Overview](architecture/overview.md) |
 | Understand how the SBC and Pi talk | [Communication (SBC ↔ Pi)](architecture/communication-architecture.md) |
 | Bring the robot up | [Quickstart](getting-started/quickstart.md) |
+| Understand the Pi 5 Docker migration | [Docker Deployment](deployment/docker.md) |
 | Look up a node, topic, or parameter | [ROS 2 Reference](ros2/nodes.md) |
 | Understand the sensors and the base | [Devices](devices/device-overview.md) |
 | Diagnose a problem | [Debugging](development/debugging.md) |
 | Know what's unverified | [Known Gaps](known-gaps.md) |
 
-!!! tip "Documentation status — verified 2026-06-29"
-    Both the SBC and Raspberry Pi were verified live via SSH on 2026-06-29. Key corrections
-    applied this session: sonar count (4 rear sensors, not 16), controller (RPP not DWB),
-    linger and binary currency confirmed on SBC, laser TF orientation confirmed as `roll=π`.
-    See [Known Gaps](known-gaps.md) for remaining open questions.
+!!! tip "Documentation status — refreshed 2026-07-07"
+    The SBC is currently treated from `SKILLS/sbc-architecture.md` because the machine is down.
+    The Pi architecture notes and a read-only SSH check of `robot-pi2` confirm the Pi 5 migration
+    target (`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64, Docker installed). Current corrections:
+    Pi 4 remains production, Pi 5 is the Docker target, sonar publishes real rear detections only,
+    controller is RPP, the map is `3192×2205 @ 0.075 m`, and laser TF orientation is `roll=π`.

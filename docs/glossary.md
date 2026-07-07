@@ -1,6 +1,6 @@
 ---
 title: Glossary
-description: ROS 2, Nav2, and robotics terms a new PatrolBot contributor might not know — plus the project-specific terms (SBC, the bridge, build_backup, the AUX line).
+description: ROS 2, Nav2, and robotics terms a new PatrolBot contributor might not know — plus the project-specific terms (SBC, the bridge, Docker migration, the AUX line).
 ---
 
 # Glossary
@@ -15,25 +15,28 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
   the name.
 
 **Pi** **(PatrolBot)**
-: The Raspberry Pi running ROS 2 Jazzy — the entire navigation stack. Home is `/home/ubuntu`.
+: The Raspberry Pi running ROS 2 Jazzy — the entire navigation stack. The live production board is
+  the Pi 4 (`robot-pi`); the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`) is the Docker migration
+  target. Home is `/home/ubuntu`.
 
 **The bridge** **(PatrolBot)**
 : `patrolbot_bridge` / `bridge_node` — the Pi node that translates the SBC's TCP text stream into
   ROS 2 topics + TF and forwards `/cmd_vel` back as `DRIVE` commands.
 
-**The seam** **(PatrolBot)**
+**SBC-Pi TCP link** **(PatrolBot)**
 : The single TCP socket (SBC `:7272`) where the two machines meet. They share no ROS graph.
 
 **`AUX` line** **(PatrolBot)**
 : The lower-rate (~5 Hz) telemetry line carrying sonar, battery, and base flags — separate from and
   independent of the `ODOM|LASER` navigation line.
 
-**`build_backup`** **(PatrolBot)**
-: `~/build_backup/patrolbot-launch/` — the **deployed** copy of the mobile-base package that
-  actually runs at boot, distinct from the `src` source of truth.
+**Docker migration** **(PatrolBot)**
+: The Raspberry Pi 5 deployment path under `docker/`. It builds one `patrolbot:jazzy` image and runs
+  the three active services with Docker Compose. It is provisioned but has not replaced the Pi 4
+  production stack yet.
 
 **Self-occlusion filter** **(PatrolBot)**
-: The bridge rule that forces laser returns < 0.2 m to `+inf`, preventing the laser grazing the
+: The bridge rule that forces laser returns < 0.25 m to `+inf`, preventing the laser grazing the
   robot's own body from painting a phantom obstacle inside the footprint.
 
 ## ROS 2
@@ -132,7 +135,8 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
 ## Hardware
 
 **Pioneer PatrolBot-SH**
-: The differential-drive mobile base. Modeled as a 0.22 m-radius circle.
+: The differential-drive mobile base. Modeled in Nav2 as an octagonal footprint derived from the
+  ARIA dimensions and 0.29 m swing radius.
 
 **ARIA / AriaCoda**
 : The C++ library for controlling Pioneer/MobileRobots bases. Runs only on the SBC.
@@ -141,7 +145,9 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
 : The planar laser scanner; on PatrolBot it gives a 180° forward scan, mounted flipped.
 
 **Sonar ring**
-: 16 ultrasonic transducers around the base, published as `/sonar`.
+: The robot physically has 4 rear sonar sensors. The ARIA parameter file defines a generic
+  16-position ring, but the 12 unpopulated positions are filtered out; `/sonar` publishes only real
+  detections.
 
 **Differential drive**
 : A two-driven-wheel base that steers by varying wheel speeds (linear `x` + angular `z` only).

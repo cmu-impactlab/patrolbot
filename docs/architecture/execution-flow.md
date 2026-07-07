@@ -50,16 +50,13 @@ Three ordered systemd **user** services (`~/.config/systemd/user/`), each `Resta
 
 | Service | `After` / `Wants` | `ExecStart` (sourced under `ros2_ws/install/setup.bash`) | RestartSec |
 |---|---|---|---|
-| `patrolbot-bringup.service` | `network-online.target` | `ros2 launch .../build_backup/patrolbot-launch/launch/bringup.xml` | 5 |
+| `patrolbot-bringup.service` | `network-online.target` | `ros2 launch patrolbot-launch bringup.xml` | 5 |
 | `patrolbot-bridge.service` | After/Wants bringup | `ros2 run patrolbot_bridge bridge_node` | 3 |
 | `patrolbot-navigation.service` | After bringup + bridge | `ros2 launch patrolbot_navigation bringup.launch.py` | 5 |
 
-!!! note "The installed launch lives in `build_backup/`"
-    `patrolbot-bringup.service` runs the mobile-base launch from
-    `~/build_backup/patrolbot-launch/launch/bringup.xml`, **not** from `ros2_ws/src`. The `src`
-    copy is the source of truth; the `build_backup` copy is what actually runs. Editing `src`
-    without re-installing changes nothing at runtime. See
-    [Repository Structure](../internals/repository-structure.md).
+!!! success "Mobile-base launch target"
+    `patrolbot-bringup.service` launches the installed package by name. The old
+    `~/build_backup/patrolbot-launch/` target was removed on 2026-06-28.
 
 !!! info "This supersedes older 'manual launch' notes"
     Earlier written notes describe the Pi stack as started by hand after SSH. The live system uses
@@ -72,7 +69,7 @@ If running by hand (e.g., during development), the three services map to:
 
 ```bash
 # 1. Mobile base — twist_mux + velocity smoother
-cd ~/build_backup/patrolbot-launch/launch && ros2 launch bringup.xml
+ros2 launch patrolbot-launch bringup.xml
 
 # 2. TCP bridge to the SBC
 ros2 run patrolbot_bridge bridge_node
@@ -97,7 +94,7 @@ sequenceDiagram
     Loc-->>Loc: map + map→odom ready in a few seconds
     Note over Launch: TimerAction waits 20 s
     Launch->>Nav: load composable nodes (after 20 s)
-    Nav-->>Nav: costmaps inflate large map (~2.5 min total)
+    Nav-->>Nav: costmaps inflate large map (goal-ready after staged activation)
     Note over Cont: if container exits → EmitEvent(Shutdown) → systemd restarts launch
 ```
 
@@ -106,8 +103,9 @@ The staging matters operationally:
 - **Localization is usable in seconds.** Map display and *2D Pose Estimate* work almost
   immediately, because `map_server` + `amcl` load first.
 - **Navigation lags by design.** The heavy half is delayed 20 s so costmap inflation does not
-  starve localization during the container's sequential node loading; full activation takes
-  **~2.5 min** (down from ~8 min before the map was downsampled).
+  starve localization during the container's sequential node loading. After the boot-time
+  network-wait fix, goal readiness is expected around ~70 s from power-on; older cold-boot
+  measurements were around ~3 min.
 - **Setting a Nav2 *Goal* requires navigation active**; the map and pose estimate do not.
 
 The detailed timeline is on [Startup Sequence](../internals/startup-sequence.md); the lifecycle
@@ -122,7 +120,7 @@ flowchart LR
     A["SBC streams ODOM|LASER @20 Hz"] --> B["bridge → /odom /scan + TF"]
     B --> C["AMCL: map→odom"]
     B --> D["costmaps mark/clear from /scan"]
-    C --> E["DWB @5 Hz computes cmd_vel"]
+    C --> E["RPP @5 Hz computes cmd_vel"]
     D --> E
     E --> F["velocity_smoother → collision_monitor stop-box"]
     F --> G["twist_mux (joy can override) → teleop smoother"]
@@ -130,8 +128,8 @@ flowchart LR
     H --> A
 ```
 
-Loop rates worth knowing: DWB controller **5 Hz**, `local_costmap` update **5 Hz** (raised from
-1 Hz to match DWB — a mismatch previously caused "Costmap timed out" goal aborts), velocity
+Loop rates worth knowing: RPP controller **5 Hz**, `local_costmap` update **5 Hz** (raised from
+1 Hz to match the controller — a mismatch previously caused "Costmap timed out" goal aborts), velocity
 smoothers **20 Hz**, bridge TF **50 Hz**.
 
 ## Restart and recovery flows

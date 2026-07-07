@@ -46,9 +46,9 @@ flowchart TB
 
 ### Nav2 Goal aborts: "No valid trajectories" / "Costmap timed out"
 
-- Root cause historically: `local_costmap update_frequency` (1 Hz) below DWB's 5 Hz. Already fixed
-  to 5.0 — if it recurs, re-check `local_costmap update_frequency: 5.0` and `publish_frequency: 2.0`
-  in `nav2_params.yaml`.
+- Root cause historically: `local_costmap update_frequency` (1 Hz) below the controller's 5 Hz.
+  Already fixed to 5.0 — if it recurs, re-check `local_costmap update_frequency: 5.0` and
+  `publish_frequency: 2.0` in `nav2_params.yaml`.
 - Confirm the robot isn't boxed in: `./patrolbot-logs.sh scan`.
 
 ### Robot won't move under navigation, but localization is fine
@@ -69,10 +69,9 @@ ros2 topic hz /cmd_vel                          # bridge input — the final com
 
 ### Scan appears mirrored / walls on the wrong side
 
-This is the unresolved **laser orientation** issue. The live launch uses `roll=π` to un-mirror;
-older notes say `yaw=π`. Do a visual RViz check (scan dots on real walls) and lock in whichever is
-correct. See [Sensors](../devices/sensors.md#sick-lms-200-laser) and
-[Known Gaps](../known-gaps.md#laser-transform-orientation).
+The current truth is `roll=π`, confirmed against live TF and `LaserFlipped=true` in the ARIA
+hardware profile. If scan dots do not align with real walls, verify `LaserFlipped` and the static
+transform. See [Sensors](../devices/sensors.md#sick-lms-200-laser).
 
 ### `/odom` and `/scan` stopped
 

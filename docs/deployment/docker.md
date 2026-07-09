@@ -50,6 +50,13 @@ docker compose up -d
 docker compose ps
 ```
 
+If running Compose from the repository root instead of `~/patrolbot-repo/docker`,
+pass the env file explicitly:
+
+```bash
+docker compose --env-file docker/.env -f docker/docker-compose.yml config
+```
+
 Only the `navigation` service declares the build because all three services
 share the same immutable image tag. The build context is the repository root.
 Existing launch, parameter, map, and script files can be tuned through the bind

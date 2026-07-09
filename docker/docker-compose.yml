@@ -1,7 +1,7 @@
 name: patrolbot
 
 x-common: &common
-  image: ${PATROLBOT_IMAGE:-patrolbot:jazzy}
+  image: ${PATROLBOT_IMAGE:?set PATROLBOT_IMAGE in docker/.env or pass --env-file docker/.env}
   network_mode: host
   init: true
   restart: unless-stopped
@@ -54,7 +54,7 @@ services:
       dockerfile: docker/Dockerfile
       args:
         ROS_DISTRO: jazzy
-        PATROLBOT_REVISION: ${PATROLBOT_REVISION:-unknown}
+        PATROLBOT_REVISION: ${PATROLBOT_REVISION:?set PATROLBOT_REVISION in docker/.env or pass --env-file docker/.env}
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp

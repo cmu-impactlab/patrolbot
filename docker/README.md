@@ -19,6 +19,13 @@ docker compose config
 docker compose build navigation
 ```
 
+If running Compose from the repository root instead of `docker/`, pass the env
+file explicitly:
+
+```bash
+docker compose --env-file docker/.env -f docker/docker-compose.yml config
+```
+
 Only the `navigation` service declares the build because all three services
 share the same immutable image tag. The build context is the repository root.
 Source is also bind-mounted read-only from `PATROLBOT_ROOT`, so edits to

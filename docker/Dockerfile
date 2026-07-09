@@ -3,7 +3,6 @@ ARG ROS_DISTRO=jazzy
 
 FROM ros:${ROS_DISTRO}-ros-base
 ARG ROS_DISTRO
-ARG PATROLBOT_REVISION=unknown
 
 RUN --mount=type=tmpfs,target=/var/cache/apt/archives \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -41,8 +40,9 @@ RUN printf '%s\n' \
       'exec "$@"' \
       > /entrypoint.sh && chmod +x /entrypoint.sh
 
+ENTRYPOINT ["/entrypoint.sh"]
+
+ARG PATROLBOT_REVISION=unknown
 LABEL org.opencontainers.image.title="PatrolBot ROS 2 stack" \
       org.opencontainers.image.source="https://github.com/cmu-impactlab/patrolbot" \
       org.opencontainers.image.revision="${PATROLBOT_REVISION}"
-
-ENTRYPOINT ["/entrypoint.sh"]

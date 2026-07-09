@@ -43,5 +43,3 @@ The site deploys to GitHub Pages automatically on push to `main`
 | `requirements.txt` | Documentation build toolchain |
 | `.github/workflows/deploy.yml` | GitHub Pages deploy workflow |
 
-This repository is the canonical source for the Pi stack. The SBC's ARIA hardware
-server remains machine-local until its live source can be imported and verified.

@@ -1,0 +1,20 @@
+build/
+install/
+log/
+.vscode/
+
+# ROS 2 and local runtime artifacts
+.ros/
+*.bag
+*.db3
+*.sqlite3
+*.log
+
+# Python and editor temporary files
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
+*~
+.pytest_cache/
+.coverage

@@ -24,16 +24,13 @@ The SBC architecture is treated as known from `SKILLS/sbc-architecture.md`:
 When the SBC is reachable again, re-check service status, binary timestamp, listening ports, and a
 short sample of the TCP stream.
 
-### Docker Cutover Not Performed
+### Pi 5 Hardware Acceptance Pending
 
-`robot-pi2` is provisioned as the Raspberry Pi 5 Docker migration target and was verified by
-read-only SSH on 2026-07-07 (`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, `aarch64`, Docker installed,
-expected `~/ros2_ws/src` packages present). The Docker stack has not replaced the Pi 4 production
-services yet.
-
-Before calling Docker production, perform the cutover and rollback runbook in
-[Docker Deployment](deployment/docker.md), with the robot in a safe clear space and a local operator
-at the joystick deadman / emergency stop.
+`robot-pi2` runs the monorepo Docker stack. Container liveness and SBC-off degraded
+behavior are validated, but the SBC and Pi 4 are currently off and Pi 5 `eth0` has no
+link. Before calling the migration complete, perform the hardware checks in
+[Docker Deployment](deployment/docker.md), with the robot in a clear space and a
+local operator at the joystick deadman/emergency stop.
 
 ### Code Hygiene
 
@@ -55,8 +52,8 @@ Minor cleanup items from source review:
 
 | Fact | Current truth |
 |---|---|
-| Production navigation board | Raspberry Pi 4 (`robot-pi`) |
-| Migration target | Raspberry Pi 5 (`robot-pi2`, `patrolbot-rpi5`) running Docker path |
+| Active migration board | Raspberry Pi 5 (`robot-pi2`, `patrolbot-rpi5`) |
+| Rollback board/path | Raspberry Pi 4 bare-metal deployment, currently off |
 | Active map | `second_map.{yaml,pgm}` = `3192×2205 @ 0.075 m`, origin `[-1,-1,0]` |
 | Controller | RPP (`nav2_regulated_pure_pursuit_controller`), not DWB |
 | Planner | NavFn |

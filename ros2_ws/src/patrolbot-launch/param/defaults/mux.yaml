@@ -1,0 +1,24 @@
+cmd_vel_mux:             # Must match the 'name' in your launch file
+  ros__parameters:
+    use_stamped: false
+    topics:              # Changed from 'subscribers'
+      safety_controller: # Unique key for each source
+        topic: "input/safety_controller"
+        timeout: 0.2
+        priority: 10
+      teleop:
+        topic: "input/teleop"
+        timeout: 1.0
+        priority: 8
+      joy:
+        topic: "input/joy"
+        timeout: 1.0
+        priority: 8
+      switch:
+        topic: "input/switch"
+        timeout: 1.0
+        priority: 6
+      navigation:
+        topic: "input/navi"
+        timeout: 1.0
+        priority: 5

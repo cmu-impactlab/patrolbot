@@ -1,0 +1,7 @@
+<launch>
+    <!-- Include a launch file from the current package's 'launch' directory -->
+    <!--<include file="$(find-pkg-share patrolbot-launch)/launch/rosaria2.xml"/> NOT NEEDED IF PATROLBOT LIDAR SERVER IS RAN-->
+    <include file="$(find-pkg-share patrolbot-launch)/launch/mobile_base.xml"/>
+    <include file="$(find-pkg-share patrolbot-launch)/launch/smoother.xml"/>
+    <!--<include file="$(find-pkg-share patrolbot-launch)/launch/joy.xml"/>-->
+</launch>

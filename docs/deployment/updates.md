@@ -5,9 +5,8 @@ description: How to safely update PatrolBot in place — updating each package, 
 
 # Updates
 
-Updating PatrolBot means changing code or config on a live robot. The production Pi 4 path is
-conventional colcon/systemd; the Pi 5 migration path uses Docker Compose and is covered in
-[Docker Deployment](docker.md).
+Update the canonical monorepo first, validate it, then deploy that exact revision.
+The Pi 5 path uses Docker Compose and is covered in [Docker Deployment](docker.md).
 
 ## Update map
 
@@ -75,13 +74,14 @@ cannot see.
 
 ## Updating the Docker stack
 
-For the Pi 5 migration target:
+For the Pi 5:
 
 ```bash
-cd ~/docker
-docker buildx build --load -f Dockerfile -t patrolbot:jazzy "$PATROLBOT_WS/src"
-docker compose restart
+cd ~/patrolbot-repo/docker
+docker compose build
+docker compose up -d
 docker compose ps
+./patrolbot-status
 ```
 
 If the change only edits existing bind-mounted launch, params, maps, or scripts, a targeted
@@ -91,7 +91,7 @@ If the change only edits existing bind-mounted launch, params, maps, or scripts,
 
 | Change | Roll back by |
 |---|---|
-| Pi package | `git` revert in the package's repo (note `patrolbot_navigation`/`rosaria2` have their own `.git/`), `colcon build`, restart |
+| Pi package | revert the monorepo commit, rebuild, and restart |
 | Mobile base | `git` revert in `patrolbot-launch`, rebuild if needed, restart `patrolbot-bringup` |
 | Map change | restore the previous `second_map.{pgm,yaml}` and restart `patrolbot-navigation` |
 | Docker stack | `docker compose down`, then re-enable the bare-metal systemd services |

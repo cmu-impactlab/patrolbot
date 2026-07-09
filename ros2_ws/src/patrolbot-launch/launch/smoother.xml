@@ -1,0 +1,20 @@
+<launch>
+  <!-- respawn: the smoother sits in the cmd_vel path (twist_mux -> smoother ->
+       bridge); if it dies the robot can't be driven. It's a LIFECYCLE node, so a
+       respawn returns UNCONFIGURED — lifecycle_mgr.py runs persistently and
+       re-configures+activates it within ~2 s. -->
+  <node pkg="nav2_velocity_smoother" exec="velocity_smoother" name="teleop_velocity_smoother"
+        respawn="true" respawn_delay="2.0">
+
+    <param from="$(find-pkg-share patrolbot-launch)/param/defaults/smoother.yaml" />
+
+    <remap from="/cmd_vel" to="/cmd_vel_out"/>
+    <remap from="cmd_vel_smoothed" to="cmd_vel"/>
+  </node>
+   <!-- Persistent: keeps the smoother ACTIVE, re-activating it after any respawn. -->
+   <node pkg="patrolbot-launch" exec="lifecycle_mgr.py" name="lifecycle_manager_script"
+         output="screen" respawn="true" respawn_delay="2.0">
+  </node>
+</launch>  
+
+

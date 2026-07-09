@@ -1,0 +1,59 @@
+<!--
+  Based on nav2's default navigate_to_pose_w_replanning_and_recovery.xml. Stock
+  behavior: RecoveryFallback (ClearCostmaps -> Spin -> Wait -> BackUp round-robin)
+  only runs if WouldAControllerRecoveryHelp/WouldAPlannerRecoveryHelp classify the
+  failure error_code as recoverable. On this robot the lidar/map can drift out of
+  alignment (CAD-artifact phantom obstacles, AMCL drift) and make a path look
+  genuinely blocked; a "dead end" that isn't real. That failure mode isn't always
+  classified as recoverable, so the stock tree can go straight to "Goal failed"
+  without ever backing up + spinning to re-scan and check.
+
+  Change from stock: the WouldA*RecoveryHelp gate is replaced with AlwaysSuccess,
+  so ANY navigate/control failure always runs the full ClearCostmaps -> Spin ->
+  Wait -> BackUp round-robin before giving up, regardless of error classification.
+  number_of_retries raised 6 -> 9 (over 2 full round-robin cycles) to give the
+  backup+re-scan a real chance to clear a false dead-end.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="9" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            <Sequence>
+              <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
+          <Sequence>
+            <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          </Sequence>
+        </RecoveryNode>
+      </PipelineSequence>
+      <Sequence>
+        <!-- Stock gate here was Fallback[WouldAControllerRecoveryHelp, WouldAPlannerRecoveryHelp].
+             Always proceed to the recovery round-robin instead; see file header. -->
+        <AlwaysSuccess/>
+        <ReactiveFallback name="RecoveryFallback">
+          <GoalUpdated/>
+          <RoundRobin name="RecoveryActions">
+            <Sequence name="ClearingActions">
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+            <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
+            <Wait wait_duration="3.0"/>
+            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
+          </RoundRobin>
+        </ReactiveFallback>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

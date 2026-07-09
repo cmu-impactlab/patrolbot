@@ -46,7 +46,7 @@ flowchart LR
 (`diagnostic_msgs/DiagnosticArray`), TF `odom→base_link` (50 Hz).
 **Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`).
 **Services / actions:** none.
-**Parameters:** none declared; the SBC endpoint (`172.20.87.231:7272`), `RECV_TIMEOUT=3.0`, and
+**Parameters:** none declared; the SBC endpoint (`10.0.0.1:7272`), `RECV_TIMEOUT=3.0`, and
 `SCAN_RANGE_MIN=0.25` are module constants.
 **Lifecycle:** plain (non-lifecycle) node. A background thread owns the socket; a 50 Hz timer
 publishes TF; the main thread spins callbacks.

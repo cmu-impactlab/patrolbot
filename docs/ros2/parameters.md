@@ -17,7 +17,7 @@ The bridge declares no ROS parameters; these are module constants you would edit
 
 | Constant | Value | Why |
 |---|---|---|
-| `server_ip` | `172.20.87.231` | SBC LAN address |
+| `server_ip` | `10.0.0.1` | SBC address on the dedicated Ethernet link |
 | `server_port` | `7272` | SBC telemetry server port |
 | `RECV_TIMEOUT` | `3.0 s` | 20 Hz stream → 3 s silence ⇒ dead link ⇒ reconnect (vs. a blocking `recv()` hanging forever) |
 | `SCAN_RANGE_MIN` | `0.25 m` | footprint-clearance filter; do not raise much higher because real close obstacles can be 0.25-0.40 m away |

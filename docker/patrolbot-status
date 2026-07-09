@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+self="$(readlink -f "${BASH_SOURCE[0]}")"
+script_dir="$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)"
+
+exec "$script_dir/status.sh" "$@"

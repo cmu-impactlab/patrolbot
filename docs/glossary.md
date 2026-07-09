@@ -10,14 +10,14 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
 ## Project-specific
 
 **SBC** **(PatrolBot)**
-: The robot's "main PC" at `172.20.87.231`. Owns the hardware (base + laser) and runs the ARIA
-  `patrolbot_server`. **Runs no ROS 2.** Confusingly the *less* ROS-y of the two machines despite
-  the name.
+: The robot's "main PC". Owns the hardware (base + laser) and runs the ARIA
+  `patrolbot_server` on the dedicated Pi link at `10.0.0.1:7272`. **Runs no ROS 2.**
+  It may also be reachable for SSH on the lab LAN as `172.20.87.231`.
 
 **Pi** **(PatrolBot)**
-: The Raspberry Pi running ROS 2 Jazzy — the entire navigation stack. The live production board is
-  the Pi 4 (`robot-pi`); the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`) is the Docker migration
-  target. Home is `/home/ubuntu`.
+: The Raspberry Pi running the entire ROS 2 Jazzy navigation stack. The active migration
+  board is the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`); the Pi 4 path is retained
+  for rollback. Home is `/home/ubuntu`.
 
 **The bridge** **(PatrolBot)**
 : `patrolbot_bridge` / `bridge_node` — the Pi node that translates the SBC's TCP text stream into
@@ -31,9 +31,8 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
   independent of the `ODOM|LASER` navigation line.
 
 **Docker migration** **(PatrolBot)**
-: The Raspberry Pi 5 deployment path under `docker/`. It builds one `patrolbot:jazzy` image and runs
-  the three active services with Docker Compose. It is provisioned but has not replaced the Pi 4
-  production stack yet.
+: The Raspberry Pi 5 deployment under `docker/`. It builds one image and runs the
+  three active services with Docker Compose. Hardware-connected acceptance remains pending.
 
 **Self-occlusion filter** **(PatrolBot)**
 : The bridge rule that forces laser returns < 0.25 m to `+inf`, preventing the laser grazing the

@@ -1,0 +1,8 @@
+
+<launch>
+  <!-- teleop_twist_keyboard is the standard replacement -->
+	<node pkg="teleop_twist_keyboard" exec="teleop_twist_keyboard" name="teleop"> 
+  </node>
+</launch>
+
+

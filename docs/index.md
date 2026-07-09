@@ -17,7 +17,7 @@ not one computer.**
 
 ```mermaid
 flowchart LR
-    subgraph SBC["SBC — robot main PC (172.20.87.231)"]
+    subgraph SBC["SBC — robot main PC (10.0.0.1:7272 to Pi)"]
         direction TB
         ARIA["patrolbot_server (C++ / ARIA)"]
         BASE["Pioneer base\n/dev/ttyS0"]
@@ -26,7 +26,7 @@ flowchart LR
         LASER --- ARIA
     end
 
-    subgraph PI["Raspberry Pi 4 — production ROS 2 Jazzy navigation computer"]
+    subgraph PI["Raspberry Pi 5 — Dockerized ROS 2 Jazzy navigation computer"]
         direction TB
         BRIDGE["patrolbot_bridge"]
         NAV["Nav2 stack\n(AMCL + RPP + collision monitor)"]
@@ -51,10 +51,11 @@ flowchart LR
 | **Software** | One C++ ARIA server (`patrolbot_server`) | ROS 2 Jazzy: bridge, Nav2, mobile base |
 | **Runs ROS 2?** | **No** | Yes |
 
-The current production navigation computer is the **Raspberry Pi 4** (`robot-pi`). A
-**Raspberry Pi 5** (`robot-pi2`, hostname `patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64)
-is provisioned for the Dockerized migration path documented in
-[Docker Deployment](deployment/docker.md), but it has not replaced the Pi 4 yet.
+The active migration computer is the **Raspberry Pi 5** (`robot-pi2`, hostname
+`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64). Its Dockerized software stack is running
+and documented in [Docker Deployment](deployment/docker.md). The SBC is currently off,
+so telemetry, joystick, motion, and Nav2-goal acceptance remain pending. The former
+Raspberry Pi 4 deployment is preserved as rollback rather than treated as validated-away.
 
 The SBC reads odometry and laser ranges from the hardware and **streams them over a single
 TCP socket** as plain text. The Pi turns that stream into native ROS 2 messages (`/odom`,
@@ -86,9 +87,8 @@ seam in detail.
 | Diagnose a problem | [Debugging](development/debugging.md) |
 | Know what's unverified | [Known Gaps](known-gaps.md) |
 
-!!! tip "Documentation status — refreshed 2026-07-07"
+!!! tip "Documentation status — refreshed 2026-07-09"
     The SBC is currently treated from `SKILLS/sbc-architecture.md` because the machine is down.
-    The Pi architecture notes and a read-only SSH check of `robot-pi2` confirm the Pi 5 migration
-    target (`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64, Docker installed). Current corrections:
-    Pi 4 remains production, Pi 5 is the Docker target, sonar publishes real rear detections only,
-    controller is RPP, the map is `3192×2205 @ 0.075 m`, and laser TF orientation is `roll=π`.
+    The Pi 5 runs the monorepo Docker stack. Container liveness can be verified while the
+    SBC is off, but end-to-end readiness cannot. Sonar publishes real rear detections only,
+    the controller is RPP, the map is `3192×2205 @ 0.075 m`, and laser TF roll is `π`.

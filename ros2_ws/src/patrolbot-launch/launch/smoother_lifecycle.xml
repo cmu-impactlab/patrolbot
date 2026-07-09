@@ -1,0 +1,17 @@
+<launch>
+  <!-- In ROS 2, components can be run as standard nodes or inside a container -->
+  <node pkg="nav2_velocity_smoother" exec="velocity_smoother" name="teleop_velocity_smoother">
+    
+    <!-- Load parameters from a YAML file -->
+    <param from="$(find-pkg-share patrolbot-launch)/param/defaults/smoother.yaml" />
+
+    <!-- Remapping: note that topic names may differ in the Nav2 version -->
+    <remap from="~/smooth_cmd_vel" to="/cmd_vel_mux/input/teleop"/>
+    <remap from="~/odometry" to="/odom"/>
+    <remap from="~/robot_cmd_vel" to="/mobile_base/commands/velocity"/>
+  </node>
+
+  <!-- Automatic Lifecycle Manager (Custom Script) -->
+  <node pkg="patrolbot-launch" exec="lifecycle_mgr.py" name="lifecycle_manager_script" output="screen">
+  </node>
+</launch>

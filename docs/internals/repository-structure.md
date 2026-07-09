@@ -1,13 +1,12 @@
 ---
 title: Repository Structure
-description: The on-robot filesystem layout — the Pi colcon workspace, the Docker migration files, the nested git repos, and the SBC project directory.
+description: The canonical monorepo layout, deployed Pi workspace, Docker files, and SBC project directory.
 ---
 
 # Repository Structure
 
-PatrolBot's code is **not** in one repository — it is spread across two machines and several
-independently-versioned directories. This page maps what lives where, so you know which file to
-edit and which copy actually runs.
+The Pi source and deployment definitions live in this monorepo. Robot machines contain
+deployed copies; they are not the canonical editing location.
 
 ## Pi filesystem (`/home/ubuntu`)
 
@@ -16,9 +15,9 @@ edit and which copy actually runs.
 ├── ros2_ws/                          # the colcon workspace
 │   ├── src/
 │   │   ├── patrolbot_bridge/         # ament_python — TCP bridge
-│   │   ├── patrolbot_navigation/     # ament_cmake  — Nav2  (OWN .git/)
+│   │   ├── patrolbot_navigation/     # ament_cmake  — Nav2
 │   │   ├── patrolbot-launch/         # ament_python — mobile base (SOURCE)
-│   │   └── rosaria2/                 # ament_cmake  — legacy  (OWN .git/)
+│   │   └── rosaria2/                 # ament_cmake  — legacy
 │   ├── build/  install/  log/        # colcon artifacts — NOT source of truth
 ├── ARIA/                             # AriaCoda library (libAria.so, headers, params)
 ├── .config/systemd/user/             # the three Pi services
@@ -37,9 +36,9 @@ edit and which copy actually runs.
 !!! warning "2. `build/`, `install/`, `log/` are not source"
     Standard colcon rule: never treat generated directories as canonical. `src/` is what you edit.
 
-!!! warning "3. Nested git repositories"
-    `patrolbot_navigation/` and `rosaria2/` each contain their own `.git/`. They are versioned
-    independently of the rest of the workspace — commit in the correct repo.
+!!! warning "3. Deployed trees are not canonical"
+    Edit and commit in this monorepo, then deploy the revision. Do not create nested Git
+    repositories inside `ros2_ws/src`.
 
 ## SBC filesystem (`/home/ros`)
 
@@ -59,29 +58,27 @@ SSH is unavailable.
 The SBC has **no colcon workspace and no ROS 2** — just the Makefile project. See
 [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 
-## This documentation repository
-
-Separate from both robots:
+## This monorepo
 
 ```
 patrolbot/  (github.com/cmu-impactlab/patrolbot)
 ├── docs/                 # this site's Markdown
+├── ros2_ws/src/          # Pi ROS 2 package source
+├── docker/               # Pi 5 image, Compose, health and status tools
 ├── mkdocs.yml
 ├── requirements.txt
 └── .github/workflows/deploy.yml
 ```
 
-The documentation repo contains **no robot code** — the source lives on the machines.
-
 ## Where to edit for a given change
 
 | Change | Edit | Then |
 |---|---|---|
-| Bridge behavior | `ros2_ws/src/patrolbot_bridge/...` | `colcon build`, restart bridge |
-| Nav2 params / launch / map | `ros2_ws/src/patrolbot_navigation/...` (own git) | `colcon build`, restart nav |
+| Bridge behavior | `ros2_ws/src/patrolbot_bridge/...` | rebuild/restart bridge |
+| Nav2 params / launch / map | `ros2_ws/src/patrolbot_navigation/...` | rebuild/restart nav |
 | Mobile base (twist_mux/smoother) | `ros2_ws/src/patrolbot-launch/...` | restart bringup; rebuild if adding files |
 | SBC server | `patrolbot_hw_server/patrolbot_server.cpp` (on SBC) | `make`, restart server |
-| Docker migration | `docker/...` and `ros2_ws/src/...` on Pi 5 | rebuild/restart Compose |
-| These docs | `docs/...` in this repo | `mkdocs serve` to preview |
+| Docker deployment | `docker/...` and `ros2_ws/src/...` | build/deploy a revision |
+| These docs | `docs/...` | `mkdocs serve` to preview |
 
 See [Component Breakdown](component-breakdown.md) for what each of these components does.

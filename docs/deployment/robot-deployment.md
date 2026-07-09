@@ -5,10 +5,9 @@ description: How PatrolBot is deployed on the two machines — the systemd user 
 
 # Robot Deployment
 
-PatrolBot's current production deployment is a set of **systemd services** on the SBC and the
-Raspberry Pi 4, so the robot comes up on power without an operator. A Raspberry Pi 5 is provisioned
-as the Docker migration target; that path is documented separately on
-[Docker Deployment](docker.md).
+The SBC uses systemd services. The Raspberry Pi 5 uses the Docker Compose deployment
+documented in [Docker Deployment](docker.md). The former Raspberry Pi 4 systemd path
+is retained as rollback.
 
 ## Deployment model
 
@@ -19,17 +18,16 @@ flowchart TB
         S2["patrolbot-server.service (user, linger=ros)"]
         S1 --> S2
     end
-    subgraph PI["Pi 4 production"]
-        P1["patrolbot-bringup.service (user)"]
-        P2["patrolbot-bridge.service (user)"]
-        P3["patrolbot-navigation.service (user)"]
+    subgraph PI["Pi 5 Docker"]
+        P1["patrolbot-bringup container"]
+        P2["patrolbot-bridge container"]
+        P3["patrolbot-navigation container"]
         P1 --> P2 --> P3
     end
     S2 -. "TCP :7272" .-> P2
 ```
 
-Both machines use **systemd user services** with **linger** enabled, so services start at boot
-without an interactive login.
+Docker starts the Pi containers at boot with `restart: unless-stopped`.
 
 ## SBC services
 
@@ -41,7 +39,7 @@ without an interactive login.
 **One-time setup:** `sudo loginctl enable-linger ros`. This is recorded as done in the SBC
 architecture notes, so `patrolbot-server.service` starts at boot without a login session.
 
-## Pi services
+## Legacy Pi 4 services
 
 All three are systemd **user** services in `~/.config/systemd/user/`, each `Restart=always`:
 
@@ -100,9 +98,8 @@ journalctl --user -u patrolbot-bridge.service -f
 3. **Verify:** `./patrolbot-logs.sh status` shows all services active; `/odom` `/scan` flow; set an
    initial pose and a goal in RViz.
 
-For the Pi 5 Docker migration, do not install or start an overlapping bare-metal stack during
-cutover. Follow [Docker Deployment](docker.md), which preserves a rollback path to the services
-above.
+Do not start an overlapping bare-metal stack while Docker is active. Follow
+[Docker Deployment](docker.md), which preserves a rollback path to the services above.
 
 See [Network Setup](network-setup.md) for the LAN/DDS configuration and
 [Remote Operation](remote-operation.md) for operating from off-site.

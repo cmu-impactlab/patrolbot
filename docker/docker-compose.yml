@@ -1,0 +1,67 @@
+name: patrolbot
+
+x-common: &common
+  image: ${PATROLBOT_IMAGE:-patrolbot:jazzy}
+  network_mode: host
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 20s
+  security_opt:
+    - no-new-privileges:true
+  environment:
+    ROS_DOMAIN_ID: "0"
+    RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/patrolbot-healthcheck"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 90s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  bringup:
+    <<: *common
+    container_name: patrolbot-bringup
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      PATROLBOT_ROLE: bringup
+    command: ["ros2", "launch", "patrolbot-launch", "bringup.xml"]
+    volumes:
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot-launch:/opt/patrolbot_ws/src/patrolbot-launch:ro
+
+  bridge:
+    <<: *common
+    container_name: patrolbot-bridge
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      PATROLBOT_ROLE: bridge
+    command: ["ros2", "run", "patrolbot_bridge", "bridge_node"]
+    volumes:
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
+
+  navigation:
+    <<: *common
+    container_name: patrolbot-navigation
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        ROS_DISTRO: jazzy
+        PATROLBOT_REVISION: ${PATROLBOT_REVISION:-unknown}
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      PATROLBOT_ROLE: navigation
+    command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
+    volumes:
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
+      - /dev/input:/dev/input:ro
+    device_cgroup_rules:
+      - "c 13:* r"

@@ -52,8 +52,8 @@ Two facts about this workspace routinely surprise people:
    `ros2 launch patrolbot-launch bringup.xml`; old notes about `build_backup/` are stale. Existing
    symlink-install launch/param edits apply after restarting `patrolbot-bringup.service`; adding new
    files still needs a build.
-2. **`patrolbot_navigation` has its own `.git/`.** It is version-controlled separately from the
-   rest of the workspace (as is `rosaria2`).
+2. **All package source belongs to this monorepo.** Deployed package trees must not
+   retain historical nested `.git` directories.
 
 ## Per-package conventions
 

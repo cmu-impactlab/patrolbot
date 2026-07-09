@@ -14,8 +14,8 @@ working against a **live robot**.
 1. Read the [Architecture Overview](../architecture/overview.md) and
    [Communication Architecture](../architecture/communication-architecture.md). Almost every change
    touches the SBC↔Pi seam in some way.
-2. Know [where code lives](../internals/repository-structure.md), including the Pi 4 production
-   workspace, the Pi 5 Docker migration target, and the nested git repos.
+2. Know [where code lives](../internals/repository-structure.md): the monorepo is
+   canonical and the Pi 5 is a deployment target.
 3. Skim [Known Gaps](../known-gaps.md) so you don't "fix" something that is intentionally the way it
    is (or re-introduce a bug a comment is preventing).
 
@@ -41,8 +41,7 @@ flowchart LR
     F --> G["Open PR"]
 ```
 
-1. **Branch** in the correct repository (remember `patrolbot_navigation/` and `rosaria2/` have their
-   own `.git/`).
+1. **Branch** in this monorepo.
 2. **Make the change** following [Coding Standards](../development/coding-standards.md). Comment any
    value whose reason isn't obvious.
 3. **Test** — at minimum `colcon test` (lint) and the relevant manual/resilience checks from

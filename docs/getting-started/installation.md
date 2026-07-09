@@ -14,8 +14,8 @@ day-one run-through is on [Quickstart](quickstart.md).
 
 | Machine | Needs |
 |---|---|
-| **Raspberry Pi 4 production** | Ubuntu, **ROS 2 Jazzy**, `colcon`, Nav2 (`nav2_bringup`, `nav2_msgs`), `twist_mux`, `joy`, `slam_toolbox`, `nav2_velocity_smoother` |
-| **Raspberry Pi 5 migration target** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose, same `~/ros2_ws/src` packages |
+| **Raspberry Pi 5 active migration board** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose |
+| **Raspberry Pi 4 rollback path** | Ubuntu, ROS 2 Jazzy, colcon/systemd deployment |
 | **SBC** | C++ toolchain (`g++`, `make`), **ARIA/AriaCoda** at `/usr/local/Aria`, `socat` |
 | **Operator laptop** (optional) | ROS 2 + RViz2 for visualization/commanding |
 
@@ -47,8 +47,9 @@ with a plain `Makefile` (no ROS, no colcon). See
 
 | Machine | SSH address | Notes |
 |---|---|---|
-| Pi | `ubuntu@patrolbot-ros.qatar.cmu.edu` | On the robot LAN; autostarts all services at boot |
-| SBC | `ros@172.20.87.231` | On the robot LAN; may not be reachable from off-site |
+| Pi 5 | `ubuntu@patrolbot-ros2` | Active Docker migration board |
+| Pi 4 | `ubuntu@patrolbot-ros.qatar.cmu.edu` | Rollback board; may be powered off |
+| SBC | `ros@172.20.87.231` | Lab LAN SSH when powered; Pi runtime endpoint is `10.0.0.1:7272` |
 | Both | same subnet | Required for ROS 2 DDS discovery without extra config |
 
 !!! note "Off-site access"

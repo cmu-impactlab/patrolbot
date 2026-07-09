@@ -29,16 +29,16 @@ The workspace has four packages:
 | Package | Build type | Notes |
 |---|---|---|
 | `patrolbot_bridge` | ament_python | the TCP bridge |
-| `patrolbot_navigation` | ament_cmake | Nav2 + teleop + TF (**own `.git/`**) |
+| `patrolbot_navigation` | ament_cmake | Nav2 + teleop + TF |
 | `patrolbot-launch` | ament_python | mobile base (`twist_mux` + final velocity smoother) |
-| `rosaria2` | ament_cmake | legacy; needs ARIA (`~/ARIA/lib/libAria.so`) to build (**own `.git/`**) |
+| `rosaria2` | ament_cmake | legacy; needs external ARIA and is excluded from Docker |
 
 `patrolbot-bringup.service` now launches the mobile-base package by name:
 `ros2 launch patrolbot-launch bringup.xml`. The old `~/build_backup/patrolbot-launch/` deployment
 target was removed on 2026-06-28 and should not be recreated.
 
-!!! warning "Two nested git repos"
-    Commit `patrolbot_navigation` and `rosaria2` changes in *their* repos, not the workspace's.
+All four packages are versioned by the monorepo. Deployed Pi working trees must not
+contain nested `.git` directories.
 
 ## SBC: ARIA server
 
@@ -52,19 +52,18 @@ Produces the `patrolbot_server` binary. No colcon, no ROS. See
 `SKILLS/sbc-architecture.md` in the source workspace as the current truth source for documented
 behavior.
 
-## Docker image for the Pi 5 migration
+## Docker image for the Pi 5
 
-The Docker stack is built natively on the Raspberry Pi 5 migration target from the same
-`~/ros2_ws/src` tree:
+The image is built from the monorepo root:
 
 ```bash
-cd ~/docker
-docker buildx build --load -f Dockerfile -t patrolbot:jazzy "$PATROLBOT_WS/src"
+cd ~/patrolbot-repo/docker
+cp .env.example .env
+docker compose build
 ```
 
 See [Docker Deployment](../deployment/docker.md) for prerequisites, cutover, verification, and
-rollback. The Pi 4 production path remains the bare-metal systemd services until cutover is
-explicitly performed.
+rollback and readiness reporting.
 
 ## Verifying the build
 

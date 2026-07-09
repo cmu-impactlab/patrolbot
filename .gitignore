@@ -1,13 +1,46 @@
+# Private agent and project-memory files
+**/AGENTS.md
+**/CLAUDE.md
+**/SKILLS/
+**/TODO.md
+**/done.md
+**/.agents/
+**/.claude/
+**/.codex/
+
+# Live SSHFS mount points
+/.remote/
+
+# Local deployment configuration and credentials
+**/.env
+!**/.env.example
+*.pem
+*.key
+*credentials*
+*secret*
+
+# ROS / colcon generated output
+**/build/
+**/install/
+**/log/
+
 # MkDocs build output
 /site/
 
 # Python
-__pycache__/
+**/__pycache__/
 *.py[cod]
 .venv/
 venv/
 env/
 *.egg-info/
+.pytest_cache/
+
+# Runtime logs and backups
+*.log
+*.bak
+*.bak-*
+*.precontroller.bak
 
 # Editor / OS
 .DS_Store
@@ -15,3 +48,4 @@ env/
 .vscode/
 *.swp
 *~
+\#*\#

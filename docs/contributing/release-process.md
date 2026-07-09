@@ -41,7 +41,7 @@ close them:
       `license: TODO` in `patrolbot_bridge`/`patrolbot-launch`; `joao@todo.todo` in `rosaria2`).
 - [ ] Remove [dead code / editor temp files](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
 - [ ] Confirm current fixed facts are still true: `roll=π`, `second_map` at `0.075 m/px`, RPP
-      controller, Pi 4 production / Pi 5 Docker target.
+      controller, Pi 5 Docker deployment, and Pi 4 rollback status.
 - [ ] Confirm `patrolbot-bringup.service` launches `ros2 launch patrolbot-launch bringup.xml`.
 - [ ] Confirm the stale `nav2_params.yaml` trailing comment is corrected or removed.
 - [ ] `colcon test` clean; resilience matrix green.

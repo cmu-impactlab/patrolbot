@@ -5,8 +5,8 @@ description: Setting up a development environment for PatrolBot — the colcon w
 
 # Workspace Setup
 
-PatrolBot development spans the two machines. The Pi holds a colcon workspace; the SBC holds a
-single Makefile project. This page gets you to a buildable, runnable state on each.
+Develop the Pi stack in this monorepo and deploy revisions to the Pi. The SBC holds a
+separate Makefile project pending a verified source import.
 
 ## Prerequisites
 
@@ -17,7 +17,8 @@ single Makefile project. This page gets you to a buildable, runnable state on ea
 | **Operator laptop** | ROS 2 + RViz2 for visualization (optional) |
 
 The robot machines are reached over SSH:
-- **Pi:** `ssh ubuntu@patrolbot-ros.qatar.cmu.edu`
+- **Pi 5:** `ssh ubuntu@patrolbot-ros2`
+- **Pi 4 rollback:** `ssh ubuntu@patrolbot-ros.qatar.cmu.edu`
 - **SBC:** `ssh ros@172.20.87.231`
 
 For active development, work directly over SSH or a remote mount.
@@ -28,9 +29,9 @@ For active development, work directly over SSH or a remote mount.
 ~/ros2_ws/
   src/
     patrolbot_bridge/        # ament_python — the TCP bridge
-    patrolbot_navigation/    # ament_cmake  — Nav2 + teleop + TF   (own .git)
+    patrolbot_navigation/    # ament_cmake  — Nav2 + teleop + TF
     patrolbot-launch/        # ament_python — mobile base
-    rosaria2/                # ament_cmake  — legacy ARIA driver    (own .git)
+    rosaria2/                # ament_cmake  — legacy ARIA driver
   build/  install/  log/
 ```
 
@@ -47,9 +48,9 @@ export ROS_DOMAIN_ID=0
     `patrolbot-bringup.service` now runs `ros2 launch patrolbot-launch bringup.xml`. Older notes that
     say to copy `patrolbot-launch` into `~/build_backup/` are stale.
 
-!!! warning "Two nested git repos"
-    `patrolbot_navigation/` and `rosaria2/` each contain their own `.git/`. They are versioned
-    independently of the rest of the workspace — commit in the right place.
+!!! warning "No nested repositories"
+    All Pi packages belong to this monorepo. Do not copy their historical `.git`
+    directories into `ros2_ws/src`.
 
 ## SBC: the ARIA server
 

@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Use $(env NAME DEFAULT) to replace $(optenv NAME DEFAULT) -->
+    <arg name="port" default="$(env PATROLBOT_PORT 172.20.87.231:7000)" />
+
+    <node pkg="rosaria2" exec="rosaria2_debug" name="rosaria">
+        <!-- Use $(var NAME) to reference arguments in ROS 2 XML -->
+        <param name="seria_port" value="$(var port)" />
+	<param name="publish_aria_lasers" value="true" />
+	<param name="debug_aria" value="true" />
+        <!-- <param name="laser_port" value="/dev/ttyS3" /> 
+        <param name="laser_baud" value="9600" /> -->
+    </node>
+</launch>

@@ -14,7 +14,7 @@ teleop node, and the laser static transform.
 | **Build type** | `ament_cmake` |
 | **Maintainer** | Yousef Hussein (`yousefh@andrew.cmu.edu`), MIT license |
 | **Entry launch** | `bringup.launch.py` (`ros2 launch patrolbot_navigation bringup.launch.py`) |
-| **Note** | has its **own `.git/`**, version-controlled separately |
+| **Versioning** | part of the PatrolBot monorepo |
 
 ## Purpose
 
@@ -36,7 +36,6 @@ and the laser frame transform.
 | `launch/patrolbot_navigation_launch.py` | Patched nav2_bringup navigation (`bond_timeout: 0.0`) |
 | `config/nav2_params.yaml` | Full Nav2 parameter set ([Parameters](../ros2/parameters.md)) |
 | `maps/second_map.{yaml,pgm}` | **Active** map — 3192×2205 @ 0.075 m/px, origin `[-1,-1,0]` |
-| `maps/second_map_original_0.1.{pgm,yaml}.bak` | historical backup, not the active scale |
 | `maps/cmuq_1st_floor.{yaml,pgm}` | Older CMU-Q map — not loaded |
 | `scripts/patrolbot_joy_teleop.py` | Xinput joystick teleop node |
 | `scripts/lms200_sanitizer.py` | `/bad_scan → /good_scan` header fixer — **not in active launch** |

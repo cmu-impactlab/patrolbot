@@ -8,17 +8,19 @@ description: PatrolBot's network topology — the SBC↔Pi TCP link, ROS 2 / Fas
 PatrolBot has two distinct networking layers, and conflating them is the source of most "I can't
 see the robot" confusion:
 
-1. **SBC ↔ Pi:** a single **TCP socket** (the SBC server on :7272). This is *not* ROS — it's the
-   custom protocol, and it works as long as the two machines can reach each other on the LAN.
+1. **SBC ↔ Pi:** a dedicated Ethernet link (`10.0.0.1/24` SBC,
+   `10.0.0.2/24` Pi) carrying a single TCP socket on port 7272.
 2. **Pi ↔ operator tools (RViz):** **ROS 2 / FastDDS**, which uses multicast discovery on the LAN.
 
 ```mermaid
 flowchart LR
-    subgraph LAN["Robot LAN (same subnet)"]
-        SBC["SBC 172.20.87.231"]
-        PI["Pi"]
-        OP["Operator laptop\n(RViz2)"]
+    subgraph WIRED["Dedicated robot link"]
+        SBC["SBC 10.0.0.1"]
+        PI["Pi 10.0.0.2"]
         SBC <-->|"TCP :7272"| PI
+    end
+    subgraph LAN["Campus LAN"]
+        OP["Operator laptop\n(RViz2)"]
         PI <-->|"ROS 2 DDS multicast"| OP
     end
     HOME["Home / off-site\n(VPN + NAT)"] -. "multicast blocked" .-> PI
@@ -29,7 +31,7 @@ flowchart LR
 | Property | Value |
 |---|---|
 | Transport | TCP |
-| SBC endpoint | `172.20.87.231:7272` (server) |
+| SBC endpoint | `10.0.0.1:7272` (server) |
 | Pi role | client (the bridge) |
 | Requirement | Pi can reach the SBC's IP:port on the LAN |
 
@@ -81,7 +83,7 @@ Treat VPN RViz as a future re-enable project, not as a configured feature.
 
 ## Checklist
 
-- [ ] Pi and SBC on the same LAN; Pi can reach `172.20.87.231:7272`.
+- [ ] Pi `eth0` has `10.0.0.2/24` and can reach `10.0.0.1:7272`.
 - [ ] `ROS_DOMAIN_ID=0` everywhere (robot and any LAN operator tools).
 - [ ] On the LAN, RViz works with no extra config.
 - [ ] For off-site RViz, plan a fresh discovery-server or relay design; it is not active today.

@@ -41,7 +41,7 @@ This is the central engineering decision, and the rest of the architecture follo
 
 ```mermaid
 flowchart TB
-    subgraph SBC["SBC — main PC · 172.20.87.231 · no ROS 2"]
+    subgraph SBC["SBC — main PC · 10.0.0.1:7272 to Pi · no ROS 2"]
         SOCAT["socat-boot.service\n/dev/ttyS0 → TCP :7000"]
         SERVER["patrolbot_server (C++/ARIA)\nTCP server on :7272"]
         SOCAT --> SERVER

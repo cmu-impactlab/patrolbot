@@ -1,0 +1,22 @@
+<launch>
+  <!-- 1. Include the velocity smoother launch file -->
+  <!-- ROS 2 uses find-pkg-share instead of find -->
+	<!--include file="$(find-pkg-share patrolbot_teleop)/launch/includes/velocity_smoother.launch.xml"/> -->
+
+  <!-- 2. Start the Teleop Node -->
+  <!-- turtlebot_teleop_joy is replaced by teleop_twist_joy in ROS 2 -->
+  <node pkg="teleop_twist_joy" exec="teleop_node" name="patrolbot_teleop_joystick">
+    <param name="require_enable_button" value="true"/>
+    <param name="enable_button" value="5"/>
+
+    <param name="axis_linear.x" value="1"/>
+    <param name="scale_linear.x" value="0.5"/>  <param name="axis_angular.yaw" value="3"/>
+    <param name="scale_angular.yaw" value="1.0"/> 
+    
+    <!-- Remapping the output to the smoother's raw input -->
+    <remap from="cmd_vel" to="input/joy"/>
+  </node>
+
+  <!-- 3. Start the Joystick Driver -->
+  <node pkg="joy" exec="joy_node" name="joystick"/>
+</launch>

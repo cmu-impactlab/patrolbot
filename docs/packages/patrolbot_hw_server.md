@@ -16,7 +16,7 @@ project linked against ARIA.
 
 | | |
 |---|---|
-| **Deploys to** | **SBC** (robot main PC, `172.20.87.231`) |
+| **Deploys to** | **SBC** (robot main PC; Pi endpoint `10.0.0.1:7272`, lab SSH may be `172.20.87.231`) |
 | **Build** | `Makefile` (`g++ -I/usr/local/Aria/include -lAria -lArNetworking -lpthread`) |
 | **Binary** | `patrolbot_server` (recorded as last built 2026-06-28 in `SKILLS/sbc-architecture.md`) |
 | **Source** | `patrolbot_hw_server/patrolbot_server.cpp` (on the SBC) |

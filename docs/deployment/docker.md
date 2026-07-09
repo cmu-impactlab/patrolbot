@@ -1,133 +1,100 @@
 ---
 title: Docker Deployment
-description: The Dockerized PatrolBot stack for the Raspberry Pi 5 migration target, including build, run, verification, and rollback.
+description: Build, deploy, inspect, and roll back the Dockerized Raspberry Pi 5 stack.
 ---
 
 # Docker Deployment
 
-The Dockerized stack lives in the robot source repository under `docker/`. It packages the three
-active Pi services into one `patrolbot:jazzy` image and runs them with Docker Compose.
+The Raspberry Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`) runs the three active
+ROS 2 services from this monorepo. The SBC is currently off, so software liveness
+is validated but hardware-connected readiness and motion acceptance remain pending.
 
-!!! info "Migration state — 2026-07-07"
-    The **Raspberry Pi 4** (`robot-pi`) remains the production navigation computer and still runs the
-    bare-metal systemd services. The **Raspberry Pi 5** (`robot-pi2`, hostname `patrolbot-rpi5`,
-    Ubuntu 24.04.4 LTS, `aarch64`) is provisioned as the Docker migration target. Read-only SSH
-    verification on 2026-07-07 confirmed the expected `~/ros2_ws/src` packages, `second_map.yaml`
-    at `0.075 m/px`, a Docker directory, and Docker `29.1.3`.
+## Services
 
-## What Compose Runs
+| Service | Container | Role |
+|---|---|---|
+| `bringup` | `patrolbot-bringup` | `twist_mux` + final velocity smoother |
+| `bridge` | `patrolbot-bridge` | TCP client to `10.0.0.1:7272` |
+| `navigation` | `patrolbot-navigation` | Nav2 + joystick + safety watchdog + static TF |
 
-| Compose service | Container | Command | Role |
-|---|---|---|---|
-| `bringup` | `patrolbot-bringup` | `ros2 launch patrolbot-launch bringup.xml` | `twist_mux` + final velocity smoother |
-| `bridge` | `patrolbot-bridge` | `ros2 run patrolbot_bridge bridge_node` | TCP client to the SBC on `172.20.87.231:7272` |
-| `navigation` | `patrolbot-navigation` | `ros2 launch patrolbot_navigation bringup.launch.py` | Nav2 + joystick teleop + safety watchdog + static TF |
+All services share one image, host networking, `ROS_DOMAIN_ID=0`, and FastDDS.
+Source is bind-mounted read-only from `PATROLBOT_ROOT`. The legacy `rosaria2`
+package is versioned but deliberately excluded from the image.
 
-All three share the same image, use `network_mode: host` for ROS 2 DDS multicast, set
-`ROS_DOMAIN_ID=0`, and use `rmw_fastrtps_cpp`. The source trees are bind-mounted read-only from
-`${PATROLBOT_WS:-/home/ubuntu/ros2_ws}/src` so launch, params, maps, and scripts can be tuned on the
-host and picked up by restarting a container.
+## Relationship to the old ROS 1 Docker layout
 
-`rosaria2` is intentionally excluded. It is the legacy direct-ARIA path and must not run alongside
-`patrolbot_bridge`.
+The deprecated `~/Projects/repos/tamuq-patrolbot` ROS 1 stack is a useful
+architectural ancestor, not a literal template. The part worth preserving is the
+role split: separate long-running services for hardware/bridge, bringup, teleop,
+and navigation, all using host networking so ROS discovery and device-facing
+processes behave like native services.
 
-## Host Configuration
+The ROS 2 Pi 5 stack intentionally modernizes that shape:
 
-Create `docker/.env` next to `docker-compose.yml`:
+- no ROS 1 `roscore`;
+- no source cloning during image builds — the monorepo is the source of truth;
+- no broad `privileged: true` or whole-`/dev` mounts;
+- immutable image tags/revisions for rollback;
+- Docker health checks plus a separate readiness/status command so an offline
+  SBC is reported as degraded instead of forcing restart loops.
 
-```bash
-PATROLBOT_WS=/home/ubuntu/ros2_ws
-```
-
-The default is already `/home/ubuntu/ros2_ws`, so the `.env` file is only required if the workspace
-lives elsewhere.
-
-Install Docker and Compose on Ubuntu 24.04:
+## Build and run
 
 ```bash
-sudo apt-get install -y docker.io docker-compose-v2 docker-buildx
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
+cd ~/patrolbot-repo/docker
+cp .env.example .env
+# Set PATROLBOT_IMAGE to a unique tag and PATROLBOT_REVISION to the Git SHA.
+docker compose config
+docker compose build navigation
+docker compose up -d
+docker compose ps
 ```
 
-Log out and back in after adding the user to the `docker` group.
+Only the `navigation` service declares the build because all three services
+share the same immutable image tag. The build context is the repository root.
+Existing launch, parameter, map, and script files can be tuned through the bind
+mounts and applied with a targeted restart. Adding files requires rebuilding the
+image.
 
-## Build
-
-Build natively on the Pi 5 from the workspace `src` tree:
+## Health and readiness
 
 ```bash
-cd ~/docker
-docker buildx build --load -f Dockerfile -t patrolbot:jazzy "$PATROLBOT_WS/src"
+cd ~/patrolbot-repo/docker
+./patrolbot-status
 ```
 
-For a long SSH session, run the build detached:
+Docker health checks inspect expected processes without continuously creating
+ROS DDS participants. The on-demand status command adds SBC reachability,
+telemetry freshness, lifecycle, and TF checks:
 
-```bash
-nohup docker buildx build --load -f Dockerfile -t patrolbot:jazzy \
-  "$PATROLBOT_WS/src" > build.log 2>&1 &
-```
+- `OVERALL=ready` (exit 0): software and hardware data paths are ready.
+- `OVERALL=degraded` (exit 2): containers are healthy but hardware or ROS
+  readiness is incomplete.
+- `OVERALL=unhealthy` (exit 1): container liveness failed.
 
-Building does not start containers and does not touch the running Pi 4 production stack.
-
-## Cutover Runbook
-
-Do not run the bare-metal systemd stack and Docker stack at the same time; that creates duplicate TF
-publishers and competing velocity paths.
-
-1. Snapshot the bare-metal service state:
-
-   ```bash
-   systemctl --user status patrolbot-bringup.service patrolbot-bridge.service patrolbot-navigation.service --no-pager
-   ```
-
-2. Stop and disable the bare-metal services only when deliberately cutting over:
-
-   ```bash
-   systemctl --user disable --now \
-     patrolbot-navigation.service patrolbot-bridge.service patrolbot-bringup.service
-   ```
-
-3. Start Docker:
-
-   ```bash
-   cd ~/docker
-   docker compose up -d
-   docker compose ps
-   ```
-
-4. Verify before commanding motion:
-
-   ```bash
-   docker compose ps
-   docker logs patrolbot-bridge
-   ros2 topic hz /odom /scan /sonar /battery /diagnostics /cmd_vel
-   ros2 run tf2_ros tf2_echo odom base_link
-   ros2 run tf2_ros tf2_echo base_link laser_frame
-   ```
-
-Joystick and Nav2 goal tests require the robot in a clear space with someone at the local joystick
-deadman / emergency stop.
+With the SBC off, `degraded reason=sbc-unavailable` is the expected safe result.
 
 ## Rollback
 
-Rollback is intentionally simple:
+Never run this stack and the old bare-metal services simultaneously. During the
+migration, preserve both the previous Compose directory and its image tag:
 
 ```bash
-cd ~/docker
+cd ~/patrolbot-repo/docker
 docker compose down
-systemctl --user enable --now \
-  patrolbot-bringup.service patrolbot-bridge.service patrolbot-navigation.service
+cd ~/docker
+docker compose up -d
 ```
 
-After rollback, confirm `/odom`, `/scan`, TF, and `/cmd_vel` are flowing from the bare-metal stack.
+After the SBC returns, verify `/odom`, `/scan`, `/sonar`, `/battery`,
+`/diagnostics`, `odom → base_link`, and `base_link → laser_frame`. Joystick and
+Nav2 goal tests require a clear area and an operator at the deadman/E-stop.
 
-## Notes
+## Operational safeguards
 
-- Compose uses `/dev/input` only for the `navigation` container and grants input-subsystem major 13,
-  so the gamepad can be hot-plugged without running the whole stack privileged.
-- The first container start can be slow on SD cards because image layers are decompressed. A2-rated
-  media or NVMe/USB-SSD boot is preferred.
-- Adding a new source file requires rebuilding the image. Editing existing launch, params, maps, or
-  scripts usually needs only `docker compose restart <service>` because the source trees are
-  bind-mounted.
+- Containers use `restart: unless-stopped`, graceful shutdown, an init process,
+  and bounded JSON logs.
+- Only the navigation container receives read-only `/dev/input` access and input
+  device cgroup permission; the stack is not privileged.
+- The bridge being unable to contact a powered-off SBC does not fail container
+  liveness or create a restart loop.

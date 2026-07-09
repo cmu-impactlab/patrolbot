@@ -26,7 +26,7 @@ flowchart TB
         BATT["Battery pack"]
     end
 
-    subgraph SBCBOX["SBC — robot main PC (172.20.87.231)"]
+    subgraph SBCBOX["SBC — robot main PC (10.0.0.1 to Pi)"]
         TTYS0["/dev/ttyS0 @ 9600 baud"]
         TTYS2["/dev/ttyS2 @ 38400 baud"]
         ARIA["ARIA / patrolbot_server"]
@@ -110,15 +110,16 @@ Full device pages: [Actuators](../devices/actuators.md) (base drive),
 
 The robot's original onboard PC. It is the **only** machine that can run ARIA and the only one
 wired to the base and laser. It runs no ROS 2 — just the `socat` serial shim and the
-`patrolbot_server` C++ binary. Reachable on the LAN at **172.20.87.231**, serving TCP port
-**7272**. Details: [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
+`patrolbot_server` C++ binary. The Pi connects over the dedicated Ethernet endpoint
+**10.0.0.1:7272**; SSH access may also exist on the lab LAN at **172.20.87.231**.
+Details: [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 
 ### Raspberry Pi
 
-The production navigation computer is a Raspberry Pi 4 running ROS 2 Jazzy as user `ubuntu` (home
-`/home/ubuntu`). A Raspberry Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`, Ubuntu 24.04.4 LTS,
-aarch64) is provisioned as the Docker migration target but is not yet production. The Pi 4's
-resource constraints shape the software:
+The active migration computer is a Raspberry Pi 5 (`robot-pi2`, hostname
+`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64) running the Dockerized ROS 2 Jazzy
+stack. Hardware-connected acceptance remains pending. Earlier Pi 4 constraints still
+explain several conservative software choices:
 
 - **`ulimit -n = 1024`** — forces Nav2 composition into one container (see
   [Software Architecture](software-architecture.md#the-composed-nav2_container-and-why-composition-is-mandatory)).
@@ -127,8 +128,8 @@ resource constraints shape the software:
 
 ## Network and power
 
-- **SBC ↔ Pi:** Ethernet/Wi-Fi LAN, TCP only. On the same subnet, ROS 2 DDS multicast discovery
-  works for tools like RViz; across a VPN it does not (see
+- **SBC ↔ Pi:** dedicated Ethernet (`10.0.0.1` ↔ `10.0.0.2`), TCP only.
+  Pi ↔ operator tools use LAN DDS multicast; across a VPN it does not work (see
   [Remote Operation](../deployment/remote-operation.md)).
 - **Gamepad:** USB on the Pi, in **Xinput** mode (the X/D switch must be on X).
 - **Power:** the base battery powers the chassis and onboard electronics. A **physical SBC reboot

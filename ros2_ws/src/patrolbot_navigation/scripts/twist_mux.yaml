@@ -1,0 +1,15 @@
+# config/twist_mux.yaml
+twist_mux:
+  ros__parameters:
+    topics:
+      # Priority 100: Manual override using the Joy controller
+      joystick:
+        topic: "/cmd_vel_joy"
+        timeout: 0.5
+        priority: 100
+      
+      # Priority 50: Autonomous Nav2 Planner
+      navigation:
+        topic: "/cmd_vel_nav"
+        timeout: 1.0
+        priority: 50

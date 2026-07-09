@@ -49,7 +49,7 @@ The defining interface of the whole robot: a single TCP socket joining the two m
 
 | Field | Value |
 |---|---|
-| **Endpoint** | SBC `172.20.87.231:7272` (server); Pi bridge is the client |
+| **Endpoint** | SBC `10.0.0.1:7272` (server); Pi bridge is the client |
 | **Protocol** | plain-text lines: `ODOM|LASER` (~20 Hz), `AUX` (~5 Hz), `DRIVE` (on demand) |
 | **Framing** | newline-delimited; the Pi splits on `\n` and dispatches by prefix |
 | **Security** | none — LAN-local plaintext (assumes a trusted robot network) |
@@ -60,7 +60,7 @@ You can inspect it from any machine on the LAN:
 ```bash
 # Read the raw stream (do NOT do this while the bridge is the active client —
 # the server is single-client; use a dev/test instance instead).
-nc 172.20.87.231 7272
+nc 10.0.0.1 7272
 ```
 
 ## PTZ VCC4 camera (not integrated)

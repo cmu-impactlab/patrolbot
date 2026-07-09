@@ -18,7 +18,7 @@ The translation layer between the SBC's TCP text stream and the Pi's ROS 2 graph
 
 ## Purpose
 
-Connect to the SBC at `172.20.87.231:7272`, parse its two telemetry line types into ROS 2
+Connect to the SBC at `10.0.0.1:7272`, parse its two telemetry line types into ROS 2
 messages + TF, and forward `/cmd_vel` back to the SBC as `DRIVE` commands — all while surviving
 an abrupt loss of the SBC without operator action.
 

@@ -1,0 +1,13 @@
+
+<launch>
+  <!-- teleop_twist_keyboard is the standard replacement -->
+	<node pkg="teleop_twist_keyboard" exec="teleop_twist_keyboard" name="turtlebot_teleop_keyboard" output="screen">
+		  <param name="speed" value="0.5"/>
+  <param name="turn" value="1.5"/>
+    <!-- Remap to the Mux input defined in your earlier steps -->
+  <remap from="cmd_vel" to="/input/teleop"/>
+
+  </node>
+</launch>
+
+

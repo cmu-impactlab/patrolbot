@@ -23,7 +23,7 @@ Short answers with links to the full story.
   it on the Pi (`/odom`, `/scan`, `/sonar`, `/battery`, `/diagnostics`).
 
 **Why TCP text instead of a ROS 2 bridge over DDS?**
-: Debuggability (`nc 172.20.87.231 7272` prints readable lines), no schema/versioning burden, and
+: Debuggability (`nc 10.0.0.1 7272` prints readable lines), no schema/versioning burden, and
   the SBC needs no DDS at all. See
   [Communication → why a TCP text protocol](architecture/communication-architecture.md#why-a-tcp-text-protocol-and-not-a-ros-2-bridge).
 

@@ -20,7 +20,7 @@ so its status is unambiguous and so anyone tempted to re-enable it understands t
 | **Build type** | `ament_cmake` (with `rosidl` message generation) |
 | **Executable** | `rosaria2_debug` (built from `src/test.cpp`) |
 | **Status** | built/installed, **not in any active launch** |
-| **Note** | has its **own `.git/`** |
+| **Versioning** | source-only legacy package in the PatrolBot monorepo |
 
 ## Why it was replaced
 

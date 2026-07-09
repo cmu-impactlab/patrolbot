@@ -14,7 +14,7 @@ If you understand this page, you understand how the robot is wired together.
 
 ```mermaid
 flowchart LR
-    subgraph SBC["SBC (172.20.87.231) — TCP server"]
+    subgraph SBC["SBC (10.0.0.1:7272) — TCP server"]
         SRV["patrolbot_server\nlisten :7272\nouter accept() loop"]
     end
     subgraph PI["Raspberry Pi — TCP client"]
@@ -32,7 +32,7 @@ flowchart LR
     **Intent:** keep the SBC a dumb, ROS-free data source so the legacy ARIA toolchain and the
     modern ROS 2 stack never have to coexist on one machine or agree on a DDS version.
 
-    **Why text, not binary or DDS:** the protocol is trivially debuggable (`nc 172.20.87.231 7272`
+    **Why text, not binary or DDS:** the protocol is trivially debuggable (`nc 10.0.0.1 7272`
     prints readable lines), has zero schema-compiler/versioning burden, and survives partial
     corruption gracefully (a bad line is just skipped). The cost — a few extra bytes and float
     parsing at 20 Hz — is negligible on this hardware.
@@ -109,7 +109,7 @@ sequenceDiagram
 
     SBC->>SBC: socat opens /dev/ttyS0 → TCP:7000 at boot
     SBC->>SBC: patrolbot_server connects ARIA, listen(:7272)
-    Pi->>SBC: connect(172.20.87.231:7272)
+    Pi->>SBC: connect(10.0.0.1:7272)
     SBC->>Pi: accept() — single client
     loop steady state
         SBC-->>Pi: ODOM|LASER @20 Hz, AUX @~5 Hz

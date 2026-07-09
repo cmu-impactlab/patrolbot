@@ -79,7 +79,7 @@ The [Known Gaps](../known-gaps.md) page exists largely because of past drift —
 
 ## Git hygiene
 
-- `patrolbot_navigation/` and `rosaria2/` have their own `.git/` — commit changes in the correct
-  repository.
+- All Pi packages are versioned together in this monorepo; deployed robot trees are not
+  independent repositories.
 - Remove editor temp files (`*~`, `#file#`) and dead experiments rather than committing them;
   several are already flagged as [legacy/dead](../internals/legacy-components.md).

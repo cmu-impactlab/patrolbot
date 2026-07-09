@@ -71,5 +71,15 @@ cd ~/docker
 docker compose up -d
 ```
 
+Pi 5 repository snapshots created during deployment refreshes live under
+`~/backups/patrolbot-repo-rollbacks/`. They are rollback aids, not active
+runtime state. After supervised SBC-on acceptance passes, they may be removed to
+free space:
+
+```bash
+du -sh ~/backups/patrolbot-repo-rollbacks
+rm -rf ~/backups/patrolbot-repo-rollbacks
+```
+
 Do not run Docker and the old bare-metal services simultaneously. Joystick and
 Nav2 goal tests require a clear robot area and an operator at the deadman/E-stop.

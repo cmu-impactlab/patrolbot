@@ -93,6 +93,16 @@ cd ~/docker
 docker compose up -d
 ```
 
+Short-lived repository snapshots made during Pi 5 refreshes are grouped under
+`~/backups/patrolbot-repo-rollbacks/` on `robot-pi2`. They are rollback aids,
+not active runtime state. Keep them until the supervised SBC-on acceptance test
+passes; after that, they may be deleted to recover space:
+
+```bash
+du -sh ~/backups/patrolbot-repo-rollbacks
+rm -rf ~/backups/patrolbot-repo-rollbacks
+```
+
 After the SBC returns, verify `/odom`, `/scan`, `/sonar`, `/battery`,
 `/diagnostics`, `odom → base_link`, and `base_link → laser_frame`. Joystick and
 Nav2 goal tests require a clear area and an operator at the deadman/E-stop.

@@ -42,10 +42,14 @@ def process_commands() -> list[str]:
 
 
 def main() -> int:
-    role = os.environ.get("PATROLBOT_ROLE", "")
+    role = os.environ.get("PATROLBOT_ROLE") or (sys.argv[1] if len(sys.argv) > 1 else "")
     expected = EXPECTED_PROCESSES.get(role)
     if expected is None:
-        print(f"unknown PATROLBOT_ROLE: {role!r}", file=sys.stderr)
+        roles = ", ".join(sorted(EXPECTED_PROCESSES))
+        print(
+            f"unknown PatrolBot role: {role!r}; set PATROLBOT_ROLE or pass one of: {roles}",
+            file=sys.stderr,
+        )
         return 2
 
     commands = process_commands()

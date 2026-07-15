@@ -38,8 +38,7 @@ Short answers with links to the full story.
 **I changed `patrolbot-launch` and nothing happened.**
 : On the main Pi 5, restart `patrolbot-bringup` after editing an existing
   bind-mounted launch/param/script file. Rebuild the image when adding files or
-  changing package metadata. The Pi 4 rollback uses
-  `colcon build --packages-select patrolbot-launch` plus a systemd restart.
+  changing package metadata.
   The `~/build_backup/` path referenced in older notes was removed — the service now uses
   `ros2 launch patrolbot-launch bringup.xml`. See [Updates](deployment/updates.md).
 
@@ -106,7 +105,7 @@ Short answers with links to the full story.
 : No — it's the legacy direct-ARIA driver, kept as a fallback. Don't run it alongside the bridge.
   See [rosaria2](packages/rosaria2.md).
 
-**What's unverified in this documentation?**
-: The SBC and both Pis were live-audited on 2026-07-15. The remaining gap is the
-  Pi 5 static IPv4 configuration on the dedicated Ethernet link, followed by a
-  supervised motion test. See [Known Gaps](known-gaps.md).
+**What work remains open?**
+: The current open items are package metadata, missing manifest dependencies, and
+  dead launch references. Joystick control and commanded movement were validated on
+  2026-07-16. See [Known Gaps](known-gaps.md).

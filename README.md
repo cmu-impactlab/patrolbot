@@ -9,8 +9,7 @@ PatrolBot is a **two-machine** system:
   SICK LMS-200 laser — and streams telemetry to the Pi over a TCP text protocol.
 - A **Raspberry Pi 5** (`robot-pi2`, hostname `patrolbot-rpi5`) is the main driver and
   runs the Dockerized ROS 2 Jazzy navigation stack (Nav2, the TCP bridge, and
-  mobile-base launch). The Raspberry Pi 4 is powered and retained as the bare-metal
-  rollback path; it must not run an overlapping ROS graph during operation.
+  mobile-base launch).
 
 The two never share a ROS graph: the SBC is not a ROS node. They meet only at a single
 TCP socket. This split is the central fact of the architecture — see

@@ -1,5 +1,6 @@
 # Private agent and project-memory files
 **/AGENTS.md
+!/AGENTS.md
 **/CLAUDE.md
 **/SKILLS/
 **/TODO.md

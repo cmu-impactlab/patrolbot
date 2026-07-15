@@ -69,7 +69,7 @@ server while the bridge is active.
 
 | Setting | Value | Where |
 |---|---|---|
-| `ROS_DOMAIN_ID` | `0` | set by Compose/launch on Pi 5; also present in the Pi 4 rollback environment |
+| `ROS_DOMAIN_ID` | `0` | set by Compose/launch on Pi 5 |
 | Middleware | FastDDS | default |
 | Discovery | `SUBNET` / multicast (`ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`) | default |
 

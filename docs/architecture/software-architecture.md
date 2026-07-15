@@ -164,8 +164,7 @@ is forced by the Pi's resource limits.
 because `LoadComposableNodes` does not re-run. Instead, `bringup.launch.py` registers an
 `OnProcessExit` handler: if the container dies for any reason, it emits a launch `Shutdown`. The
 Pi 5 Docker has `restart: unless-stopped`, so the service container restarts and
-brings up a fresh, fully populated stack. The Pi 4 fallback unit provides the
-equivalent `Restart=always` behavior. This converts
+brings up a fresh, fully populated stack. This converts
 "the container died and is now a useless empty shell" into "the whole stack restarted cleanly."
 
 ### Startup ordering inside the container
@@ -197,7 +196,7 @@ out its loss without operator intervention:
   `map→odom` and 25 Hz data resume automatically when the SBC returns.
 - **Bridge crash:** Docker restarts the Pi 5 bridge container; it reconnects.
 - **Nav container/node crash:** full launch shutdown → Docker restarts the Pi 5
-  service container (or systemd restarts the Pi 4 fallback) with a fresh launch.
+  service container with a fresh launch.
 - **Reconnect TF skew:** `collision_monitor` runs with `base_shift_correction: False`, so a scan
   stamped just before the rebuilt TF cache no longer throws an uncaught extrapolation exception that
   would SIGABRT the whole container.

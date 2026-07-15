@@ -20,17 +20,14 @@ deployed copies; they are not the canonical editing location.
 │   │   └── rosaria2/                 # ament_cmake  — legacy
 │   ├── build/  install/  log/        # colcon artifacts — NOT source of truth
 ├── ARIA/                             # AriaCoda library (libAria.so, headers, params)
-├── .config/systemd/user/             # Pi 4 rollback units (not Pi 5 runtime)
 ├── patrolbot-repo/                   # Pi 5 deployed source + Compose runtime
-├── patrolbot-logs.sh                 # Pi 4 rollback diagnostics helper
 └── patrolbot-sh.p                    # ARIA hardware profile (PatrolBot-SH)
 ```
 
 ### Filesystem traps
 
 !!! success "1. `build_backup/` is no longer a runtime target"
-    The Pi 5 container and Pi 4 rollback service launch `ros2 launch
-    patrolbot-launch bringup.xml`. Older notes
+    The Pi 5 container launches `ros2 launch patrolbot-launch bringup.xml`. Older notes
     that say `~/build_backup/patrolbot-launch/` is the deployed mobile-base copy are stale.
 
 !!! warning "2. `build/`, `install/`, `log/` are not source"

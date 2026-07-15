@@ -41,8 +41,6 @@ These are real but not part of the running stack. Each is one line in
 | `patrolbot_navigation/scripts/twist_mux.yaml` | reference config; twist_mux runs from `patrolbot-launch` |
 | `patrolbot_nav.rviz` | operator RViz layout (manual use) |
 | `maps/cmuq_1st_floor.{yaml,pgm}` | older map, not in active launch |
-| three `patrolbot-*.service` units on Pi 4 | powered rollback deployment; must stay stopped during Pi 5 operation |
-| `patrolbot-logs.sh` on Pi 4 | diagnostics helper for the rollback deployment |
 
 ## Not Used — dead code / cleanup candidates
 

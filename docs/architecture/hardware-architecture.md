@@ -120,9 +120,8 @@ Details: [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 ### Raspberry Pi
 
 The main driver is a Raspberry Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`,
-Ubuntu 24.04.4 LTS, aarch64) running the Dockerized ROS 2 Jazzy stack. The Pi 4
-is powered as the isolated bare-metal rollback board. Earlier Pi 4 constraints still
-explain several conservative software choices:
+Ubuntu 24.04.4 LTS, aarch64) running the Dockerized ROS 2 Jazzy stack. Its runtime
+constraints explain several conservative software choices:
 
 - **`ulimit -n = 1024`** — forces Nav2 composition into one container (see
   [Software Architecture](software-architecture.md#the-composed-nav2_container-and-why-composition-is-mandatory)).

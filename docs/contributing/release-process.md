@@ -16,7 +16,7 @@ A release pins, together:
 
 - The monorepo commit and immutable Pi 5 image revision containing `patrolbot_bridge`,
   `patrolbot_navigation`, and `patrolbot-launch`.
-- The Pi 5 Compose configuration and image digest; record the Pi 4 rollback state separately.
+- The Pi 5 Compose configuration and image digest.
 - The SBC `patrolbot_server` source + the binary build date.
 - The active map and the matching costmap resolution.
 - The SBC systemd units and Pi 5 Compose state.
@@ -43,7 +43,7 @@ close them:
       `joao@todo.todo`/TODO values in `rosaria2/package.xml`).
 - [ ] Remove [dead launch experiments](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
 - [ ] Confirm current fixed facts are still true: `roll=π`, `second_map` at `0.075 m/px`, RPP
-      controller, Pi 5 Docker deployment, and Pi 4 rollback status.
+      controller, and Pi 5 Docker deployment.
 - [ ] Confirm the Pi 5 bringup container launches `ros2 launch patrolbot-launch bringup.xml`.
 - [ ] `colcon test` clean; resilience matrix green.
 
@@ -82,7 +82,6 @@ Release vX.Y.Z
 - Active map: second_map.{pgm,yaml} @ 0.075 m/px; global_costmap resolution 0.2
 - SBC systemd units: <list and state>
 - Pi 5 Docker image / Compose state: <tag, digest, health>
-- Pi 4 rollback services: <stopped or deliberate rollback state>
 - Discovery server: disabled unless deliberately re-enabled
 ```
 

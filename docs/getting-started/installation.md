@@ -15,11 +15,10 @@ day-one run-through is on [Quickstart](quickstart.md).
 | Machine | Needs |
 |---|---|
 | **Raspberry Pi 5 main driver** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose |
-| **Raspberry Pi 4 rollback path** | Ubuntu 24.04.4 LTS (`aarch64`), ROS 2 Jazzy, colcon/systemd deployment |
 | **SBC** | C++ toolchain (`g++`, `make`), **ARIA/AriaCoda** at `/usr/local/Aria`, `socat` |
 | **Operator laptop** (optional) | ROS 2 + RViz2 for visualization/commanding |
 
-The SBC, main Pi 5, and Pi 4 rollback board are already provisioned. You generally
+The SBC and main Pi 5 are already provisioned. You generally
 do **not** reinstall the OS or ROS; you build/deploy the PatrolBot packages on top.
 
 ## Pi prerequisites
@@ -48,7 +47,6 @@ with a plain `Makefile` (no ROS, no colcon). See
 | Machine | SSH address | Notes |
 |---|---|---|
 | Pi 5 | `robot-pi2` / `ubuntu@patrolbot-ros2` | Main Docker driver |
-| Pi 4 | `robot-pi` / `ubuntu@patrolbot-ros.qatar.cmu.edu` | Powered rollback board; isolate its ROS services during Pi 5 operation |
 | SBC | `robot-sbc` / `ros@172.20.87.231` | Hardware server; Pi runtime endpoint is `10.0.0.1:7272` |
 | Pi 5 and operator | same subnet | Required for ROS 2 DDS discovery without extra config |
 

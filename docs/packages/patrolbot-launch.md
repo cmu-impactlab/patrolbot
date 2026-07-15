@@ -77,8 +77,8 @@ Because `nav2_velocity_smoother` is a lifecycle node, `lifecycle_mgr.py` calls `
 move under navigation. See [Services](../ros2/services.md#velocity-smoother-lifecycle-transition).
 
 !!! success "No `build_backup` runtime copy"
-    The Pi 5 `patrolbot-bringup` container and the Pi 4 rollback service launch the
-    package by name: `ros2 launch patrolbot-launch bringup.xml`. The old
+    The Pi 5 `patrolbot-bringup` container launches the package by name:
+    `ros2 launch patrolbot-launch bringup.xml`. The old
     `~/build_backup/patrolbot-launch/` target was removed on 2026-06-28.
 
 ## Example usage

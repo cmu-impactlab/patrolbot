@@ -48,7 +48,7 @@ flowchart TB
 
 Two facts about this workspace routinely surprise people:
 
-1. **`patrolbot-launch` runs by package name.** The Pi 5 container and Pi 4 rollback service launch
+1. **`patrolbot-launch` runs by package name.** The Pi 5 container launches
    `ros2 launch patrolbot-launch bringup.xml`; old notes about `build_backup/` are stale. The main
    Pi 5 runtime comes from the immutable Docker image, so source changes require a rebuild/redeploy.
 2. **All package source belongs to this monorepo.** Deployed package trees must not

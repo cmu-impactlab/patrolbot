@@ -55,16 +55,13 @@ Three Compose services share one immutable image and use `restart: unless-stoppe
 | `patrolbot-bridge` | `ros2 run patrolbot_bridge bridge_node` | `unless-stopped` |
 | `patrolbot-navigation` | `ros2 launch patrolbot_navigation bringup.launch.py` | `unless-stopped` |
 
-The Pi 4 retains equivalent systemd user services as the rollback deployment. They
-must be stopped while Pi 5 is active because both boards share ROS domain 0.
-
 !!! success "Mobile-base launch target"
-    The Pi 5 bringup container and Pi 4 rollback service both launch the installed
-    package by name. The old `~/build_backup/patrolbot-launch/` target was removed.
+    The Pi 5 bringup container launches the installed package by name. The old
+    `~/build_backup/patrolbot-launch/` target was removed.
 
-!!! info "This supersedes older Pi 4 runtime notes"
-    The main Pi 5 runtime is Docker Compose. The systemd user units remain only for
-    deliberate Pi 4 rollback; the manual commands below still work for development.
+!!! info "Current runtime"
+    The main Pi 5 runtime is Docker Compose. The manual commands below still work
+    for development.
 
 ## Manual equivalent
 

@@ -26,9 +26,6 @@ ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
   'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 node list --no-daemon --spin-time 5'"
 ```
 
-`patrolbot-logs.sh` remains available on the Pi 4 rollback deployment; it is not
-the primary Pi 5 tool.
-
 ## Symptom → cause → fix
 
 ### "Frame map does not exist" / blank map in RViz { #frame-map-does-not-exist--blank-map-in-rviz }

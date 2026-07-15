@@ -1,5 +1,5 @@
 ---
-title: PatrolBot — Overview
+title: PatrolBot
 description: A two-machine ROS 2 patrol robot. Start here for the system overview, the SBC/Pi split, and where to go next.
 ---
 
@@ -53,9 +53,7 @@ flowchart LR
 
 The main driver is the **Raspberry Pi 5** (hostname `patrolbot-rpi5`, Ubuntu
 24.04.4 LTS, aarch64). Its Dockerized software stack is running and documented in
-[Docker Deployment](deployment/docker.md). The SBC and Pi 4 are also powered. The Pi 4
-is the bare-metal rollback board and must be isolated from the active ROS graph while
-the Pi 5 drives the robot.
+[Docker Deployment](deployment/docker.md).
 
 The SBC reads odometry and laser ranges from the hardware and **streams them over a single
 TCP socket** as plain text. The Pi turns that stream into native ROS 2 messages (`/odom`,
@@ -85,12 +83,13 @@ seam in detail.
 | Look up a node, topic, or parameter | [ROS 2 Reference](ros2/nodes.md) |
 | Understand the sensors and the base | [Devices](devices/device-overview.md) |
 | Diagnose a problem | [Debugging](development/debugging.md) |
-| Know what's unverified | [Known Gaps](known-gaps.md) |
+| Review current open work | [Known Gaps](known-gaps.md) |
 
-!!! tip "Documentation status — live-audited 2026-07-15"
-    All three computers were reachable during this audit. The SBC services and live
+!!! tip "Documentation status — updated 2026-07-16"
+    Both runtime computers were reachable during this audit. The SBC services and live
     `ODOM|LASER` stream were verified, and the Pi 5 containers were healthy at revision
     `fa14b9b5cedfd56beaffca746e1c37256d67d1f0`. Pi 5 `eth0` was live at
     `10.0.0.2/24`; the SBC socket, `/odom`, `/scan`, both lifecycle nodes, and both
-    required TF links were verified. No motion test was performed. See
-    [Known Gaps](known-gaps.md).
+    required TF links were verified. Joystick control and commanded movement were
+    validated on 2026-07-16. See [Known Gaps](known-gaps.md) for current code and
+    packaging work.

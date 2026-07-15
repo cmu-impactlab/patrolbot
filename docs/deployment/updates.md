@@ -14,9 +14,7 @@ The Pi 5 path uses Docker Compose and is covered in [Docker Deployment](docker.m
 flowchart TB
     EDIT["edit src / config"] --> WHICH{which package?}
     WHICH -->|Pi 5 source / Docker stack| DOCKER["rebuild image or restart target container"]
-    WHICH -->|Pi 4 rollback package| BUILD["colcon build when needed + restart rollback service"]
     WHICH -->|SBC patrolbot_server| MAKE["make on the SBC + restart"]
-    BUILD --> VERIFY["verify the selected deployment"]
     DOCKER --> VERIFY
     MAKE --> VERIFY
 ```
@@ -38,17 +36,6 @@ docker compose up -d
 
 For an existing bind-mounted file, restart only `bringup`, `bridge`, or
 `navigation`. Never edit the deployed Pi tree as the canonical source.
-
-### Pi 4 rollback package updates
-
-The older colcon/systemd flow applies only when intentionally maintaining or
-activating the rollback board:
-
-```bash
-cd ~/ros2_ws
-colcon build --packages-select patrolbot_bridge
-systemctl --user restart patrolbot-bridge.service
-```
 
 ## Updating the SBC server
 
@@ -91,7 +78,7 @@ cannot see.
 | Pi package | revert the monorepo commit, rebuild, and restart |
 | Mobile base | `git` revert in `patrolbot-launch`, rebuild if needed, restart `patrolbot-bringup` |
 | Map change | restore the previous `second_map.{pgm,yaml}` and restart `patrolbot-navigation` |
-| Docker stack | deploy the previous immutable Pi 5 image/revision; use Pi 4 services only for an explicit board rollback |
+| Docker stack | deploy the previous immutable Pi 5 image/revision |
 | SBC server | rebuild the previous `patrolbot_server.cpp` + restart |
 
 ## Post-update verification

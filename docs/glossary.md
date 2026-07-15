@@ -16,8 +16,7 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
 
 **Pi** **(PatrolBot)**
 : The Raspberry Pi running the entire ROS 2 Jazzy navigation stack. The main
-  driver is the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`); the powered Pi 4
-  path is retained as an isolated rollback deployment. Home is `/home/ubuntu`.
+  driver is the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`). Home is `/home/ubuntu`.
 
 **The bridge** **(PatrolBot)**
 : `patrolbot_bridge` / `bridge_node` — the Pi node that translates the SBC's TCP text stream into

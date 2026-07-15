@@ -88,8 +88,8 @@ retries lifecycle discovery to tolerate ROS graph startup delay. The final
 2026-07-15 audit found `/odom` and `/scan` fresh, both lifecycle nodes active,
 both required transforms ready, and the status command reported
 `OVERALL=ready`. The command also enforces one publisher for each hardware
-topic and BEST_EFFORT reliability for `/scan` and `/sonar`, so a second rollback
-bridge or an old sensor QoS deployment cannot pass readiness unnoticed.
+topic and BEST_EFFORT reliability for `/scan` and `/sonar`, so a second bridge or
+an outdated sensor QoS deployment cannot pass readiness unnoticed.
 It also requires the bridge container's Fast DDS publication mode to be
 `ASYNCHRONOUS`; the default synchronous mode can block the sensor publisher
 worker on a stalled DDS reader. Readiness also rejects unattended
@@ -99,8 +99,7 @@ back-pressures the sensor writer.
 
 ## Rollback
 
-Never run this stack and the old bare-metal services simultaneously. For rollback,
-preserve both the previous Compose directory and its image tag:
+For rollback, preserve both the previous Compose directory and its image tag:
 
 ```bash
 cd ~/patrolbot-repo/docker
@@ -111,8 +110,8 @@ docker compose up -d
 
 Short-lived repository snapshots made during Pi 5 refreshes are grouped under
 `~/backups/patrolbot-repo-rollbacks/` on `robot-pi2`. They are rollback aids,
-not active runtime state. Keep them until the supervised hardware acceptance test
-passes; after that, they may be deleted to recover space:
+not active runtime state. Retain them according to the project's rollback policy;
+remove obsolete snapshots when their image revisions are no longer supported:
 
 ```bash
 du -sh ~/backups/patrolbot-repo-rollbacks

@@ -47,7 +47,7 @@ The robot is back on plain LAN multicast discovery:
 
 | Piece | Where | Status |
 |---|---|---|
-| `patrolbot-discovery.service` | Pi 4 user-service directory | **disabled** |
+| `patrolbot-discovery.service` | historical user-service configuration | **disabled** |
 | `FASTRTPS_DEFAULT_PROFILES_FILE` | Pi 5 containers | **not set** |
 | FastDDS XML profiles | backups / old files | **not runtime state** |
 

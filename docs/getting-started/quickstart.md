@@ -12,8 +12,7 @@ starting cold, skim [Installation](installation.md) first.
 ## 1. Power on — the robot starts itself
 
 The SBC autostarts its systemd services and Docker restarts the Pi 5 containers. You
-do **not** need to launch ROS manually in normal operation. Confirm the Pi 4 rollback
-services are stopped before enabling motion.
+do **not** need to launch ROS manually in normal operation.
 
 ```mermaid
 flowchart LR

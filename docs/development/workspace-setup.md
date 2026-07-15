@@ -1,6 +1,6 @@
 ---
 title: Workspace Setup
-description: Setting up a development environment for PatrolBot — the canonical monorepo, Pi 5 Docker runtime, Pi 4 rollback workspace, and SBC build.
+description: Setting up a development environment for PatrolBot — the canonical monorepo, Pi 5 Docker runtime, and SBC build.
 ---
 
 # Workspace Setup
@@ -18,7 +18,6 @@ separate Makefile project pending a verified source import.
 
 The robot machines are reached over SSH:
 - **Pi 5:** `ssh ubuntu@patrolbot-ros2`
-- **Pi 4 rollback:** `ssh ubuntu@patrolbot-ros.qatar.cmu.edu`
 - **SBC:** `ssh ros@172.20.87.231`
 
 For active development, work directly over SSH or a remote mount.
@@ -45,8 +44,8 @@ export ROS_DOMAIN_ID=0
 ```
 
 !!! success "No `build_backup/` runtime copy"
-    The Pi 5 bringup container and Pi 4 rollback service run
-    `ros2 launch patrolbot-launch bringup.xml`. Older notes that say to copy
+    The Pi 5 bringup container runs `ros2 launch patrolbot-launch bringup.xml`.
+    Older notes that say to copy
     `patrolbot-launch` into `~/build_backup/` are stale.
 
 !!! warning "No nested repositories"

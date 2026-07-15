@@ -86,4 +86,4 @@ black box configured by the ARIA parameter file `patrolbot-sh.p`.
 
 !!! info "SBC-side detail live-audited"
     The ARIA calls and deployed `patrolbot_server.cpp` were checked over live SSH
-    on 2026-07-15. See [Known Gaps](../known-gaps.md) for the remaining Pi link issue.
+    on 2026-07-15.

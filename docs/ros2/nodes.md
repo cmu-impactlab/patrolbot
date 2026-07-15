@@ -57,8 +57,7 @@ publishes TF; the main thread spins callbacks.
   → reconnects every 3 s.
 - *SBC closes/refused:* logs and retries every 3 s.
 - *Malformed line:* swallowed; the affected message is skipped, the node keeps running.
-- *Process crash:* Docker restarts the Pi 5 service container; the Pi 4 rollback
-  unit uses `Restart=always`.
+- *Process crash:* Docker restarts the Pi 5 service container.
 
 **Example invocation**
 
@@ -204,8 +203,8 @@ managers patched with `bond_timeout: 0.0`.
 **Lifecycle:** see [State Machines](../internals/state-machines.md) for the lifecycle transition
 diagram. **Failure mode:** because all share one process, an uncaught exception in any one
 SIGABRTs the container; the launch's `OnProcessExit` handler then tears the launch
-down so Docker restarts a fresh, fully populated Pi 5 service container (the Pi 4
-rollback uses systemd). A respawned component container would come back empty. This
+down so Docker restarts a fresh, fully populated Pi 5 service container. A respawned
+component container would come back empty. This
 is the direct reason `collision_monitor` runs with `base_shift_correction: False`. See
 [Software Architecture](../architecture/software-architecture.md#crash-handling-tear-down-dont-respawn).
 

@@ -34,7 +34,7 @@ The workspace has four packages:
 | `rosaria2` | ament_cmake | legacy; needs external ARIA and is excluded from Docker |
 
 The Pi 5 `patrolbot-bringup` container launches the mobile-base package by name:
-`ros2 launch patrolbot-launch bringup.xml`. The Pi 4 rollback service uses the same command. The
+`ros2 launch patrolbot-launch bringup.xml`. The
 old `~/build_backup/patrolbot-launch/` deployment target was removed on 2026-06-28 and should not
 be recreated.
 

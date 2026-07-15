@@ -6,7 +6,7 @@ description: How PatrolBot starts — the three Pi launch entry points, the patc
 # Launch System
 
 PatrolBot's Pi stack is brought up by **three entry points**, one per Pi 5 Compose
-service (and one per Pi 4 rollback unit).
+service.
 This page explains what each launches, the non-obvious remaps that wire the `cmd_vel` chain
 together, and the patched Nav2 launch files that make the large map work. Boot ordering is on
 [Execution Flow](../architecture/execution-flow.md); per-node detail on [Nodes](nodes.md).
@@ -47,8 +47,7 @@ publishes.
 
 !!! success "Package-name launch"
     The Pi 5 `patrolbot-bringup` container launches `ros2 launch
-    patrolbot-launch bringup.xml`. The Pi 4 rollback service uses the same
-    package-name command. Older `build_backup/` notes are stale.
+    patrolbot-launch bringup.xml`. Older `build_backup/` notes are stale.
 
 ## Navigation launch (`patrolbot_navigation/launch/bringup.launch.py`)
 

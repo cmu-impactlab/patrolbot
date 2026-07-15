@@ -1,4 +1,4 @@
-site_name: PatrolBot Documentation
+site_name: PatrolBot Docs
 site_description: >-
   Architecture, ROS 2 reference, and operations guide for PatrolBot — a two-machine
   (SBC + Raspberry Pi) ROS 2 patrol robot built on a Pioneer PatrolBot-SH base.
@@ -25,20 +25,21 @@ theme:
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: indigo
-      accent: indigo
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
   icon:
     repo: fontawesome/brands/github
+  logo: assets/images/impact-lab-logo.png
 
 markdown_extensions:
   - admonition
@@ -67,6 +68,7 @@ plugins:
   - search
 
 extra_css:
+  - assets/stylesheets/brand.css
   - assets/stylesheets/mermaid-zoom.css
 
 extra_javascript:
@@ -74,6 +76,7 @@ extra_javascript:
   - assets/javascripts/mermaid-config.js
 
 extra:
+  homepage: https://cmu-impactlab.org/
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/cmu-impactlab/patrolbot

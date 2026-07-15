@@ -3,6 +3,7 @@ name: patrolbot
 x-common: &common
   image: ${PATROLBOT_IMAGE:?set PATROLBOT_IMAGE in docker/.env or pass --env-file docker/.env}
   network_mode: host
+  ipc: host
   init: true
   restart: unless-stopped
   stop_grace_period: 20s
@@ -34,6 +35,7 @@ services:
     command: ["ros2", "launch", "patrolbot-launch", "bringup.xml"]
     volumes:
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot-launch:/opt/patrolbot_ws/src/patrolbot-launch:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bringup:/root/.ros/log
 
   bridge:
     <<: *common
@@ -45,6 +47,7 @@ services:
     command: ["ros2", "run", "patrolbot_bridge", "bridge_node"]
     volumes:
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
 
   navigation:
     <<: *common
@@ -62,6 +65,7 @@ services:
     command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
     volumes:
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/navigation:/root/.ros/log
       - /dev/input:/dev/input:ro
     device_cgroup_rules:
       - "c 13:* r"

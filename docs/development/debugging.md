@@ -69,8 +69,8 @@ ros2 topic hz /cmd_vel                          # bridge input — the final com
 
 Run those commands inside the owning Pi 5 container as shown at the top of this
 page. Both lifecycle responses must contain `label='active'`. Direct `GetState`
-calls avoid the ROS CLI daemon discovery false negative seen during the 2026-07-15
-audit.
+calls are useful for one-shot diagnostics because they avoid waiting for the ROS
+CLI lifecycle command's graph discovery.
 
 - If `/teleop_velocity_smoother` is not active, inspect `patrolbot-bringup` logs
   and restart that container.

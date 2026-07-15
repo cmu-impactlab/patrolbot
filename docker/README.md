@@ -42,7 +42,9 @@ docker compose ps
 
 Docker health checks verify expected processes without continuously creating ROS
 DDS participants. `patrolbot-status` performs the heavier ROS and hardware
-readiness checks only when requested:
+readiness checks only when requested. It uses fresh `/odom` as the end-to-end
+SBC data-path check instead of opening a probe connection to the single-client
+hardware server:
 
 - exit `0`, `OVERALL=ready`: containers, SBC, telemetry, lifecycle nodes, and TF
   are ready;
@@ -50,8 +52,11 @@ readiness checks only when requested:
   readiness is incomplete;
 - exit `1`, `OVERALL=unhealthy`: one or more containers failed liveness.
 
-An unavailable SBC endpoint therefore produces a safe `degraded` result rather than an
-unhealthy restart loop.
+An unavailable SBC data path therefore produces a safe `degraded` result rather
+than an unhealthy restart loop.
+
+Compose shares the host IPC namespace for Fast DDS and stores each container's
+ROS logs separately under `logs/{bringup,bridge,navigation}` in the repository.
 
 On the Pi 5 deployment host, install an optional shell command:
 

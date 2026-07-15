@@ -35,14 +35,6 @@ if [[ "$all_healthy" != true ]]; then
   exit 1
 fi
 
-if ! timeout 2 bash -c "exec 3<>/dev/tcp/$SBC_HOST/$SBC_PORT" 2>/dev/null; then
-  printf '\nSBC readiness\n'
-  printf '  tcp://%s:%s unavailable\n' "$SBC_HOST" "$SBC_PORT"
-  printf '  telemetry and odom->base_link checks skipped\n'
-  printf '\nOVERALL=degraded reason=sbc-unavailable\n'
-  exit 2
-fi
-
 ros_exec() {
   local container=$1
   shift
@@ -66,25 +58,46 @@ tf_is_ready() {
 }
 
 lifecycle_is_active() {
-  local container=$1 node=$2 output
-  output=$(ros_exec "$container" \
-    "ros2 service call '$node/get_state' lifecycle_msgs/srv/GetState '{}' 2>&1") ||
-    return 1
-  grep -Eq "label='active'|label: active" <<<"$output"
+  local container=$1 node=$2 output attempt
+  # Retry with the ROS 2 daemon left running so discovery stays warm. The old
+  # "daemon stop; sleep 1" gave fresh discovery only ~1s and produced false
+  # "inactive" readings for nodes that were actually active.
+  for attempt in 1 2 3 4 5 6; do
+    output=$(ros_exec "$container" "ros2 lifecycle get '$node' 2>&1") || output=""
+    if grep -q '^active ' <<<"$output"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 printf '\nSBC and ROS readiness\n'
-printf '  tcp://%s:%s reachable\n' "$SBC_HOST" "$SBC_PORT"
 
+# /odom freshness IS the SBC-connectivity signal: patrolbot_bridge publishes
+# /odom only while connected to the SBC. We deliberately do NOT open a raw TCP
+# socket to $SBC_HOST:$SBC_PORT -- the SBC server is single-client (it accepts
+# the bridge and never accept()s again), so every probe connection piles up
+# un-accepted in its listen backlog (CLOSE-WAIT) and, once the backlog fills,
+# blocks the bridge's own reconnects. Inferring reachability from live /odom is
+# both accurate and non-invasive.
 ready=true
-for topic in /odom /scan; do
-  if topic_is_fresh "$topic"; then
-    printf '  %-24s fresh\n' "$topic"
-  else
-    printf '  %-24s unavailable/stale\n' "$topic"
-    ready=false
-  fi
-done
+if topic_is_fresh /odom; then
+  printf '  %-24s fresh (SBC link up)\n' "/odom"
+else
+  printf '  %-24s unavailable/stale\n' "/odom"
+  printf '  SBC link unavailable (bridge not receiving /odom)\n'
+  printf '  telemetry and odom->base_link checks skipped\n'
+  printf '\nOVERALL=degraded reason=sbc-unavailable\n'
+  exit 2
+fi
+
+if topic_is_fresh /scan; then
+  printf '  %-24s fresh\n' "/scan"
+else
+  printf '  %-24s unavailable/stale\n' "/scan"
+  ready=false
+fi
 
 if lifecycle_is_active patrolbot-bringup /teleop_velocity_smoother; then
   printf '  %-24s active\n' "/teleop_velocity_smoother"

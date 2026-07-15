@@ -37,6 +37,7 @@ env/
 .pytest_cache/
 
 # Runtime logs and backups
+/logs/
 *.log
 *.bak
 *.bak-*

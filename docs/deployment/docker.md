@@ -73,7 +73,7 @@ cd ~/patrolbot-repo/docker
 ```
 
 Docker health checks inspect expected processes without continuously creating
-ROS DDS participants. The on-demand status command adds SBC reachability,
+ROS DDS participants. The on-demand status command adds SBC data-path,
 telemetry freshness, lifecycle, and TF checks:
 
 - `OVERALL=ready` (exit 0): software and hardware data paths are ready.
@@ -81,12 +81,13 @@ telemetry freshness, lifecycle, and TF checks:
   readiness is incomplete.
 - `OVERALL=unhealthy` (exit 1): container liveness failed.
 
-`degraded reason=sbc-unavailable` means the configured hardware endpoint could not
-be reached; it does not mean the containers failed. The final 2026-07-15 audit
-found `10.0.0.1:7272`, `/odom`, and `/scan` reachable/fresh. A deployed status run
-then hit a lifecycle-discovery false negative even though a direct
-`/controller_server/get_state` call returned `active`; the source script now uses
-that service call directly.
+`degraded reason=sbc-unavailable` means fresh `/odom` was not observed through
+the bridge; it does not mean the containers failed. The command intentionally
+does not open a separate TCP probe to the single-client hardware server. It
+retries lifecycle discovery to tolerate ROS graph startup delay. The final
+2026-07-15 audit found `/odom` and `/scan` fresh, both lifecycle nodes active,
+both required transforms ready, and the status command reported
+`OVERALL=ready`.
 
 ## Rollback
 
@@ -118,6 +119,8 @@ Nav2 goal tests require a clear area and an operator at the deadman/E-stop.
 
 - Containers use `restart: unless-stopped`, graceful shutdown, an init process,
   and bounded JSON logs.
+- Containers share the host IPC namespace for Fast DDS. Their ROS logs persist
+  separately under `logs/bringup`, `logs/bridge`, and `logs/navigation`.
 - Only the navigation container receives read-only `/dev/input` access and input
   device cgroup permission; the stack is not privileged.
 - The bridge being unable to contact the configured SBC endpoint does not fail container

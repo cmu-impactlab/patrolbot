@@ -61,7 +61,9 @@ network:
 
 For a replacement installation, apply this only during a supervised maintenance
 window, then validate with `ip -4 addr show eth0`, `ip route get 10.0.0.1`,
-`ping 10.0.0.1`, and a TCP probe to port 7272 before any motion test.
+`ping 10.0.0.1`, bridge connection logs, and `docker/status.sh` before any motion
+test. Do not open a separate probe connection to the single-client hardware
+server while the bridge is active.
 
 ## ROS 2 discovery (Pi-internal and to RViz)
 

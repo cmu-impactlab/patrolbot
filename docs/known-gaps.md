@@ -10,13 +10,6 @@ SBC, Pi 4, and Pi 5 were all reachable during the audit.
 
 ## Current Open Items
 
-### Status Script Revision Not Yet Deployed
-
-The deployed `docker/status.sh` produced one transient false negative for
-`/controller_server` even though a direct `GetState` call returned `active`. The
-source status script now uses the lifecycle service directly; deploy that change
-with the next Pi 5 revision.
-
 ### Pi 4 ROS Graph Isolation
 
 The Pi 4 is powered and its three bare-metal ROS services are enabled and active.
@@ -38,7 +31,10 @@ The final audit confirmed:
   `fa14b9b5cedfd56beaffca746e1c37256d67d1f0`;
 - `/odom` and `/scan` are live (observed near 25 Hz), TF publishes at 50 Hz,
   both required transforms resolve, lifecycle nodes are active, and the restarted
-  navigation container publishes its local costmap.
+  navigation container publishes its local costmap;
+- the on-demand status command reports `OVERALL=ready`; it uses fresh `/odom` as
+  the SBC data-path signal and retries lifecycle discovery without disrupting the
+  bridge connection.
 
 ### SBC Services
 

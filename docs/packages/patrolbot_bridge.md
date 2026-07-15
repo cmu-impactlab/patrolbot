@@ -72,7 +72,7 @@ Four concerns, with socket I/O isolated from DDS publication:
    ROS publisher, so DDS back-pressure cannot stop the Pi draining the SBC socket.
 3. **Publisher workers**: navigation and AUX lines are parsed independently. Each queue is bounded
    to the newest sample; a worker discards an item older than 0.5 s instead of republishing stale
-   robot state. A slow remote sonar display therefore cannot delay `/odom` or `/scan`.
+   robot state. A stalled auxiliary reader therefore cannot delay `/odom` or `/scan`.
 4. **TF timer** (50 Hz, on the spin thread): publishes `odom→base_link` from the latest pose,
    **decoupled** from scan arrival so TF is always buffered before a scan reaches a costmap message
    filter.
@@ -114,7 +114,9 @@ ssh robot-pi2 'docker logs --tail 100 patrolbot-bridge'
 
 # Verify it is publishing
 ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
-  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /odom /scan'"
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /odom /scan; do \
+     timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
+   done'"
 ```
 
 ## Where to read more

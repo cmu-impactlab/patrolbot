@@ -22,7 +22,7 @@ class PatrolBotBridge(Node):
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         # LaserScan is high-rate, lossy sensor data. BEST_EFFORT prefers a fresh
-        # sample over retransmitting an old one to a slow remote RViz reader.
+        # sample over retransmitting an old one to a stalled DDS reader.
         self.scan_pub = self.create_publisher(
             LaserScan, '/scan', qos_profile_sensor_data)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
@@ -68,7 +68,7 @@ class PatrolBotBridge(Node):
         self.data_buffer = ""
 
         # Never publish ROS messages from the socket reader. DDS publish() can
-        # wait behind a slow remote reader; when that happened here, the Pi
+        # wait behind a stalled reader; when that happened here, the Pi
         # stopped draining TCP, the SBC's send buffer filled for ~3 s, and the
         # SBC correctly disconnected its apparently-unresponsive client. Keep a
         # latest-only queue for each path so TCP is always drained and auxiliary

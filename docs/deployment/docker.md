@@ -92,7 +92,10 @@ topic and BEST_EFFORT reliability for `/scan` and `/sonar`, so a second rollback
 bridge or an old sensor QoS deployment cannot pass readiness unnoticed.
 It also requires the bridge container's Fast DDS publication mode to be
 `ASYNCHRONOUS`; the default synchronous mode can block the sensor publisher
-worker on a slow remote reader.
+worker on a stalled DDS reader. Readiness also rejects unattended
+`ros2 topic hz` processes: wrapping `docker exec` in an outer timeout can leave
+the ROS subscriber running with an unread output pipe, which eventually
+back-pressures the sensor writer.
 
 ## Rollback
 

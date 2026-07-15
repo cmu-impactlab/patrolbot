@@ -51,8 +51,9 @@ deployment from passing readiness:
 
 The bridge alone sets `RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS`. Fast DDS
 then sends DDS traffic from its background writer rather than blocking the
-bridge's sensor publisher workers on a remote visualization reader. The status
-command treats a missing or different bridge publication mode as degraded.
+bridge's sensor publisher workers on a stalled reader. The status command
+treats a missing/different bridge publication mode or an unattended
+`ros2 topic hz` process as degraded.
 
 - exit `0`, `OVERALL=ready`: containers, SBC, telemetry, lifecycle nodes, and TF
   are ready;

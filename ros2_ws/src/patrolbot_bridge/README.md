@@ -7,9 +7,9 @@ TCP-to-ROS 2 bridge between the Pi and the PatrolBot main PC.
 Connects to the SBC at `10.0.0.1:7272` over the dedicated Ethernet link. A
 background thread continuously drains the socket into separate, bounded
 latest-value navigation and AUX queues. Independent publisher workers translate
-those lines into ROS 2 messages. This prevents a slow DDS visualization reader
-from filling the SBC's TCP send buffer and interrupting both odometry and laser
-data. The bridge also forwards ROS velocity commands back to the main PC.
+those lines into ROS 2 messages. This prevents a stalled DDS reader from filling
+the SBC's TCP send buffer and interrupting both odometry and laser data. The
+bridge also forwards ROS velocity commands back to the main PC.
 
 The Pi 5 bridge container additionally sets
 `RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS`. With `rmw_fastrtps_cpp`, this

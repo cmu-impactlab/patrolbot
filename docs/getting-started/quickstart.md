@@ -30,7 +30,9 @@ ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
 # Expect: three healthy containers and OVERALL=ready
 
 ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
-  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /odom /scan'"
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /odom /scan; do \
+     timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
+   done'"
 # Expect: /odom and /scan around 20–25 Hz (about 25 Hz observed live)
 ```
 

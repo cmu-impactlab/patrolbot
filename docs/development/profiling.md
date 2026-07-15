@@ -70,7 +70,9 @@ ssh robot-pi2 'docker stats --no-stream patrolbot-navigation patrolbot-bridge pa
 ```bash
 # Topic rates (quick health)
 ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
-  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /scan /odom /cmd_vel'"
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /scan /odom /cmd_vel; do \
+     timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
+   done'"
 
 # End-to-end latency sanity: command issued vs. /cmd_vel published
 ros2 topic delay /cmd_vel       # if your distro's tooling supports it

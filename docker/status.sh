@@ -44,7 +44,11 @@ fi
 ros_exec() {
   local container=$1
   shift
-  timeout 15 docker exec "$container" bash -lc \
+  # The timeout MUST run inside the container. An outer `timeout docker exec`
+  # kills only the exec client and can leave the ROS process running with an
+  # unread output pipe. A leaked `ros2 topic hz` subscriber previously filled
+  # that pipe and back-pressured the live /scan writer during navigation.
+  docker exec "$container" timeout --signal=INT --kill-after=2 15 bash -lc \
     "source /opt/ros/\${ROS_DISTRO}/setup.bash; source /opt/patrolbot_ws/install/setup.bash; $*"
 }
 
@@ -52,7 +56,7 @@ topic_is_fresh() {
   local topic=$1
   local output
   output=$(ros_exec patrolbot-bridge \
-    "timeout 8 ros2 topic hz --window 3 '$topic' 2>&1 || true") || return 1
+    "timeout --signal=INT --kill-after=2 8 ros2 topic hz --window 3 '$topic' 2>&1 || true") || return 1
   grep -q 'average rate:' <<<"$output"
 }
 
@@ -90,7 +94,7 @@ topic_publisher_reliability() {
 tf_is_ready() {
   local parent=$1 child=$2 output
   output=$(ros_exec patrolbot-navigation \
-    "timeout 8 ros2 run tf2_ros tf2_echo '$parent' '$child' 2>&1 || true") || return 1
+    "timeout --signal=INT --kill-after=2 8 ros2 run tf2_ros tf2_echo '$parent' '$child' 2>&1 || true") || return 1
   grep -q 'Translation:' <<<"$output"
 }
 
@@ -119,6 +123,23 @@ printf '\nSBC and ROS readiness\n'
 # blocks the bridge's own reconnects. Inferring reachability from live /odom is
 # both accurate and non-invasive.
 ready=true
+
+monitor_processes=""
+for container in "${CONTAINERS[@]}"; do
+  found=$(docker exec "$container" ps -eo pid,args 2>/dev/null \
+    | awk '/[r]os2 topic hz/ { print }') || found=""
+  if [[ -n "$found" ]]; then
+    monitor_processes+="$container: $found"$'\n'
+  fi
+done
+if [[ -n "$monitor_processes" ]]; then
+  printf '  %-24s found (must be stopped)\n' "unattended topic monitors"
+  printf '%s' "$monitor_processes"
+  ready=false
+else
+  printf '  %-24s none\n' "unattended topic monitors"
+fi
+
 if [[ "$bridge_publication_mode" != ASYNCHRONOUS ]]; then
   printf '  %-24s %s (expected ASYNCHRONOUS)\n' \
     "bridge DDS publication" "${bridge_publication_mode:-unset}"

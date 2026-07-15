@@ -84,7 +84,8 @@ not in the production stack. Running it alongside the bridge causes TF and `cmd_
 
 ```bash
 ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
-  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /scan'"
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; \
+   timeout --signal=INT --kill-after=2 6 ros2 topic hz /scan || true'"
 ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
   'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic echo /diagnostics --once'"
 ```

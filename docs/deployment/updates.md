@@ -99,7 +99,9 @@ cannot see.
 ```bash
 ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
 ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
-  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /odom /scan /cmd_vel'"
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /odom /scan /cmd_vel; do \
+     timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
+   done'"
 # Set 2D Pose Estimate, then a Nav2 Goal — confirm the robot plans and moves
 ```
 

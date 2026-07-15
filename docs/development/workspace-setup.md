@@ -68,7 +68,9 @@ See [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 ```bash
 ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
 ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
-  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /odom /scan'"
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /odom /scan; do \
+     timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
+   done'"
 ```
 
 ## Editing this documentation

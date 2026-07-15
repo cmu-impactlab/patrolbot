@@ -43,6 +43,10 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      # Keep DDS network I/O out of the bridge's sensor publisher workers. Fast
+      # DDS defaults to synchronous publication, which can block publish() on a
+      # slow remote RViz reader and starve both /odom and /scan.
+      RMW_FASTRTPS_PUBLICATION_MODE: ASYNCHRONOUS
       PATROLBOT_ROLE: bridge
     command: ["ros2", "run", "patrolbot_bridge", "bridge_node"]
     volumes:

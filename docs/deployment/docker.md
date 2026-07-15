@@ -87,7 +87,12 @@ does not open a separate TCP probe to the single-client hardware server. It
 retries lifecycle discovery to tolerate ROS graph startup delay. The final
 2026-07-15 audit found `/odom` and `/scan` fresh, both lifecycle nodes active,
 both required transforms ready, and the status command reported
-`OVERALL=ready`.
+`OVERALL=ready`. The command also enforces one publisher for each hardware
+topic and BEST_EFFORT reliability for `/scan` and `/sonar`, so a second rollback
+bridge or an old sensor QoS deployment cannot pass readiness unnoticed.
+It also requires the bridge container's Fast DDS publication mode to be
+`ASYNCHRONOUS`; the default synchronous mode can block the sensor publisher
+worker on a slow remote reader.
 
 ## Rollback
 

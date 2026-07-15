@@ -5,11 +5,13 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan, PointCloud2, PointField, BatteryState
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from tf2_ros import TransformBroadcaster
+from rclpy.qos import qos_profile_sensor_data
 import socket
 import threading
 import time
 import math
 import struct
+import queue
 
 def get_quaternion_from_euler(yaw):
     return [0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0)]
@@ -19,14 +21,21 @@ class PatrolBotBridge(Node):
         super().__init__('patrolbot_bridge')
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.scan_pub = self.create_publisher(LaserScan, '/scan', 10)
+        # LaserScan is high-rate, lossy sensor data. BEST_EFFORT prefers a fresh
+        # sample over retransmitting an old one to a slow remote RViz reader.
+        self.scan_pub = self.create_publisher(
+            LaserScan, '/scan', qos_profile_sensor_data)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Auxiliary telemetry (sonar / battery / diagnostics). Parsed from a separate
         # AUX line, fully decoupled from the nav-critical /odom and /scan path so a
         # malformed reading here can never disturb navigation. See _parse_aux.
-        self.sonar_pub = self.create_publisher(PointCloud2, '/sonar', 10)
+        # Sonar is also direct, high-churn sensor data. In particular, do not let
+        # a remote RViz PointCloud2 display turn it into a reliable DDS writer
+        # that can wait for acknowledgements over Wi-Fi.
+        self.sonar_pub = self.create_publisher(
+            PointCloud2, '/sonar', qos_profile_sensor_data)
         self.battery_pub = self.create_publisher(BatteryState, '/battery', 10)
         self.diag_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
 
@@ -58,7 +67,18 @@ class PatrolBotBridge(Node):
         self.running = True
         self.data_buffer = ""
 
-        # Latest pose, updated by receive thread, read by TF timer.
+        # Never publish ROS messages from the socket reader. DDS publish() can
+        # wait behind a slow remote reader; when that happened here, the Pi
+        # stopped draining TCP, the SBC's send buffer filled for ~3 s, and the
+        # SBC correctly disconnected its apparently-unresponsive client. Keep a
+        # latest-only queue for each path so TCP is always drained and auxiliary
+        # visualization can never hold up navigation telemetry.
+        self._nav_queue = queue.Queue(maxsize=1)
+        self._aux_queue = queue.Queue(maxsize=1)
+        self._queue_drops = {'navigation': 0, 'auxiliary': 0}
+        self._last_queue_warning = 0.0
+
+        # Latest pose, updated by the navigation publisher worker, read by TF timer.
         self._pose_lock = threading.Lock()
         self._px, self._py, self._pth = 0.0, 0.0, 0.0
         self._vx, self._vth = 0.0, 0.0
@@ -69,7 +89,17 @@ class PatrolBotBridge(Node):
         # buffer BEFORE any scan arrives at the costmap message_filter.
         self.create_timer(0.02, self._tf_timer)
 
+        self.nav_publish_thread = threading.Thread(
+            target=self._publish_loop,
+            args=(self._nav_queue, self._parse_telemetry, 'navigation'),
+            daemon=True)
+        self.aux_publish_thread = threading.Thread(
+            target=self._publish_loop,
+            args=(self._aux_queue, self._parse_aux, 'auxiliary'),
+            daemon=True)
         self.recv_thread = threading.Thread(target=self._connect_loop, daemon=True)
+        self.nav_publish_thread.start()
+        self.aux_publish_thread.start()
         self.recv_thread.start()
 
         self.get_logger().info(f'Bridge node started. Connecting to {self.server_ip}:{self.server_port}...')
@@ -151,13 +181,72 @@ class PatrolBotBridge(Node):
                 line, self.data_buffer = self.data_buffer.split('\n', 1)
                 if not line:
                     continue
+                received_at = time.monotonic()
                 if line.startswith('AUX:'):
-                    self._parse_aux(line)
+                    self._queue_latest(
+                        self._aux_queue, (line, received_at), 'auxiliary')
                 else:
-                    self._parse_telemetry(line)
+                    self._queue_latest(
+                        self._nav_queue, (line, received_at), 'navigation')
+
+    def _queue_latest(self, target_queue, item, path_name):
+        """Enqueue without ever blocking the TCP receive thread."""
+        try:
+            target_queue.put_nowait(item)
+            return
+        except queue.Full:
+            pass
+
+        # A newer sensor sample supersedes an unprocessed one. This is bounded
+        # latest-value behavior, not an unbounded backlog of stale robot state.
+        try:
+            target_queue.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            target_queue.put_nowait(item)
+        except queue.Full:
+            # The worker raced us and immediately filled the single slot again.
+            pass
+
+        self._queue_drops[path_name] += 1
+        now = time.monotonic()
+        if now - self._last_queue_warning >= 5.0:
+            self.get_logger().warn(
+                f'ROS publish back-pressure: replaced queued {path_name} '
+                f'telemetry (navigation drops='
+                f'{self._queue_drops["navigation"]}, auxiliary drops='
+                f'{self._queue_drops["auxiliary"]}).')
+            self._last_queue_warning = now
+
+    def _publish_loop(self, source_queue, parser, path_name):
+        """Publish one path independently while the socket reader keeps draining."""
+        while self.running:
+            try:
+                line, received_at = source_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            age = time.monotonic() - received_at
+            if age > 0.5:
+                self.get_logger().warn(
+                    f'Discarding {age:.3f} s old {path_name} telemetry after '
+                    'ROS publish stall.')
+                continue
+            parser(line)
+
+    def _publish_with_timing(self, publisher, message, topic):
+        """Publish and make any unexpected middleware stall visible in logs."""
+        started_at = time.monotonic()
+        publisher.publish(message)
+        elapsed = time.monotonic() - started_at
+        if elapsed > 0.05:
+            self.get_logger().warn(
+                f'DDS publish stall on {topic}: publish() blocked for '
+                f'{elapsed:.3f} s.')
 
     # ------------------------------------------------------------------
-    # Telemetry parsing — called from receive thread
+    # Telemetry parsing — called from the navigation publisher worker
     # ------------------------------------------------------------------
 
     def _parse_telemetry(self, line):
@@ -196,7 +285,7 @@ class PatrolBotBridge(Node):
             odom_msg.pose.pose.orientation.w = q[3]
             odom_msg.twist.twist.linear.x = vx
             odom_msg.twist.twist.angular.z = vth
-            self.odom_pub.publish(odom_msg)
+            self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
 
             # /scan — TF timer has been publishing 50 Hz in parallel, so the
             # TF buffer already has entries before this scan is processed.
@@ -227,7 +316,7 @@ class PatrolBotBridge(Node):
                 scan_msg.range_min = self.SCAN_RANGE_MIN
                 scan_msg.range_max = 8.0
                 scan_msg.ranges = ranges
-                self.scan_pub.publish(scan_msg)
+                self._publish_with_timing(self.scan_pub, scan_msg, '/scan')
 
         except Exception:
             pass
@@ -290,7 +379,7 @@ class PatrolBotBridge(Node):
         for (x, y, z) in points:
             buf += struct.pack('<fff', x, y, z)
         msg.data = bytes(buf)
-        self.sonar_pub.publish(msg)
+        self._publish_with_timing(self.sonar_pub, msg, '/sonar')
 
     def _publish_battery(self, data, stamp):
         f = data.split(',')
@@ -310,7 +399,7 @@ class PatrolBotBridge(Node):
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
         else:
             msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
-        self.battery_pub.publish(msg)
+        self._publish_with_timing(self.battery_pub, msg, '/battery')
 
     def _publish_flags(self, data, stamp):
         f = data.split(',')
@@ -363,7 +452,7 @@ class PatrolBotBridge(Node):
         arr = DiagnosticArray()
         arr.header.stamp = stamp
         arr.status = [st]
-        self.diag_pub.publish(arr)
+        self._publish_with_timing(self.diag_pub, arr, '/diagnostics')
 
     # ------------------------------------------------------------------
     # Velocity forwarding

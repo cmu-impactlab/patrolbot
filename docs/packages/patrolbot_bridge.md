@@ -34,8 +34,8 @@ the package manifest omits `nav_msgs`; see
 | Direction | Interface | Type |
 |---|---|---|
 | Publish | `/odom` | `nav_msgs/Odometry` |
-| Publish | `/scan` | `sensor_msgs/LaserScan` |
-| Publish | `/sonar` | `sensor_msgs/PointCloud2` |
+| Publish | `/scan` | `sensor_msgs/LaserScan` (sensor-data BEST_EFFORT QoS) |
+| Publish | `/sonar` | `sensor_msgs/PointCloud2` (sensor-data BEST_EFFORT QoS) |
 | Publish | `/battery` | `sensor_msgs/BatteryState` |
 | Publish | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` |
 | Publish | TF `odom→base_link` | `tf2` (50 Hz) |
@@ -47,36 +47,51 @@ the package manifest omits `nav_msgs`; see
 flowchart TB
     subgraph THREADS["Threading model"]
         SPIN["rclpy spin thread\n• /cmd_vel callback\n• 50 Hz TF timer"]
-        RECV["background recv thread\n• connect loop\n• receive loop\n• line dispatch"]
+        RECV["background recv thread\n• connect loop\n• continuously drains TCP"]
+        NAV["navigation publisher worker\n• latest ODOM/LASER line"]
+        AUX["auxiliary publisher worker\n• latest AUX line"]
     end
     SOCK[("TCP socket\n(sock_lock)")]
     POSE[("latest pose\n(pose_lock)")]
 
-    RECV -->|writes| POSE
+    RECV -->|bounded latest-value queue| NAV
+    RECV -->|bounded latest-value queue| AUX
+    NAV -->|writes| POSE
     SPIN -->|reads| POSE
     RECV -->|owns| SOCK
     SPIN -->|sends DRIVE| SOCK
 ```
 
-Three concerns, cleanly separated by two locks:
+Four concerns, with socket I/O isolated from DDS publication:
 
 1. **Connection thread** (`_connect_loop`): opens the socket, sets `SO_KEEPALIVE` and a
    `RECV_TIMEOUT = 3.0 s` read timeout, then runs `_receive_loop`. On any error it closes and
    retries every 3 s.
 2. **Receive loop** (`_receive_loop`): reads bytes, accumulates a buffer, splits on `\n`, and
-   dispatches each line — `AUX:`-prefixed lines to `_parse_aux`, everything else to
-   `_parse_telemetry`.
-3. **TF timer** (50 Hz, on the spin thread): publishes `odom→base_link` from the latest pose,
+   non-blockingly replaces the single queued item for the navigation or AUX path. It never calls a
+   ROS publisher, so DDS back-pressure cannot stop the Pi draining the SBC socket.
+3. **Publisher workers**: navigation and AUX lines are parsed independently. Each queue is bounded
+   to the newest sample; a worker discards an item older than 0.5 s instead of republishing stale
+   robot state. A slow remote sonar display therefore cannot delay `/odom` or `/scan`.
+4. **TF timer** (50 Hz, on the spin thread): publishes `odom→base_link` from the latest pose,
    **decoupled** from scan arrival so TF is always buffered before a scan reaches a costmap message
    filter.
+
+The Pi 5 Compose service also sets
+`RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS`. `rmw_fastrtps_cpp` otherwise uses
+synchronous publication, where a blocked network write blocks the caller's
+`publish()` operation. Async mode moves that transmission to Fast DDS's writer
+thread; the bounded workers remain the application-level stale-data guard.
 
 ### Parsing
 
 - `_parse_telemetry`: splits `ODOM:...|LASER:...`, builds `/odom` and `/scan`. The scan is
   180° forward (`±π/2`), `range_min 0.25`, `range_max 8.0`, with sub-0.25 m returns forced to
-  `+inf` (footprint-clearance filter).
+  `+inf` (footprint-clearance filter). `/scan` uses sensor-data BEST_EFFORT QoS so current samples
+  are preferred over retransmitting old visualization data.
 - `_parse_aux`: splits `AUX:SONAR=..|BATT=..|FLAGS=..` (the fifth FLAGS value is e-stop state) and publishes `/sonar`, `/battery`,
-  `/diagnostics` **each in isolation** — a malformed section skips only its own topic.
+  `/diagnostics` **each in isolation** — a malformed section skips only its own topic. `/sonar`
+  also uses sensor-data BEST_EFFORT QoS.
 
 Every parse path swallows exceptions, so corrupt input degrades gracefully instead of crashing the
 node.

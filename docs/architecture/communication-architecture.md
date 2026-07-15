@@ -18,7 +18,7 @@ flowchart LR
         SRV["patrolbot_server\nlisten :7272\nouter accept() loop"]
     end
     subgraph PI["Raspberry Pi — TCP client"]
-        BR["patrolbot_bridge\nbackground recv thread"]
+        BR["patrolbot_bridge\nTCP reader + bounded publisher workers"]
     end
 
     SRV ==>|"ODOM:x,y,th,vx,vth|LASER:r1..rN\\n  ~20 Hz"| BR
@@ -76,13 +76,14 @@ line to:
 AUX:SONAR=x,y;x,y;...|BATT=volt,soc,chargeState,temp|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed\n
 ```
 
-Emitted on every 5th nav frame and **deliberately decoupled** from the navigation line. The Pi
-parses each `AUX` section in isolation, so a malformed or missing section only skips its own topic
-and can never disturb the navigation-critical `/odom` and `/scan` path.
+Emitted on every 5th nav frame and **deliberately decoupled** from the navigation line. The Pi's
+socket reader places AUX and navigation lines into separate latest-value queues, consumed by
+independent publisher workers. A malformed AUX section or a slow remote visualization reader
+therefore cannot stop TCP reads or disturb navigation-critical `/odom` and `/scan` delivery.
 
 | Section | Source (ARIA) | Pi topic |
 |---|---|---|
-| `SONAR` | per-reading local X/Y of each sonar return | `/sonar` (`sensor_msgs/PointCloud2`, `base_link`) |
+| `SONAR` | per-reading local X/Y of each sonar return | `/sonar` (`sensor_msgs/PointCloud2`, `base_link`, sensor-data BEST_EFFORT QoS) |
 | `BATT` | voltage, state-of-charge (`-1` if unavailable), charge state, temperature | `/battery` (`sensor_msgs/BatteryState`) |
 | `FLAGS` | flags, fault flags, stall value, motors-enabled, e-stop state | `/diagnostics` (`diagnostic_msgs/DiagnosticArray`) |
 
@@ -138,6 +139,17 @@ FIN/RST arrives and a naive blocking socket would hang forever.
 |---|---|---|
 | **Pi (client)** | `recv()` read timeout = **3.0 s** + `SO_KEEPALIVE`; reconnect loop sleeps 3 s | The SBC streams at 20 Hz, so 3 s of silence ⇒ dead link ⇒ `socket.timeout` ⇒ break ⇒ reconnect. A blocking `recv()` would otherwise hang forever on silent link loss. |
 | **SBC (server)** | consecutive-`EAGAIN` guard (~3 s) → break & re-`accept()`; `SO_KEEPALIVE` + `TCP_USER_TIMEOUT=5000ms` | A gone Pi left the server looping on a full send buffer for minutes; the guard breaks out and re-accepts promptly. |
+
+The Pi socket reader is intentionally isolated from ROS publication. On 2026-07-15 a reliable
+remote RViz `/sonar` reader stalled the old single receive/publish thread; the SBC then observed a
+full send buffer and correctly disconnected the apparently unresponsive Pi. Separate bounded
+workers plus sensor-data BEST_EFFORT QoS for `/scan` and `/sonar` remove that head-of-line path
+without weakening either endpoint's failure detector.
+
+Because Fast DDS can still perform a best-effort write synchronously, the Pi 5 bridge also runs
+with `RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS`. DDS transmission then occurs on the middleware
+writer thread instead of the bridge navigation worker. This is a transport execution-mode fix,
+not a longer watchdog or costmap timeout.
 
 Because the `AUX` line rides the **same** TCP stream, it inherits this self-healing — `/sonar`,
 `/battery`, and `/diagnostics` resume automatically after an SBC freeze/restart, with no separate

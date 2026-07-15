@@ -11,11 +11,11 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 
 ## Active topics
 
-| Topic | Type | Publisher | Subscriber(s) | Rate |
+| Topic | Type | Publisher | Subscriber(s) | Rate / QoS |
 |---|---|---|---|---|
 | `/odom` | `nav_msgs/Odometry` | `patrolbot_bridge` | AMCL, bt_navigator, controller_server | ~20–25 Hz (25 observed live) |
-| `/scan` | `sensor_msgs/LaserScan` | `patrolbot_bridge` | AMCL, costmaps, collision_monitor | ~20–25 Hz |
-| `/sonar` | `sensor_msgs/PointCloud2` | `patrolbot_bridge` (from `AUX`) | RViz / obstacle viz | ~5 Hz |
+| `/scan` | `sensor_msgs/LaserScan` | `patrolbot_bridge` | AMCL, costmaps, collision_monitor | ~20–25 Hz; sensor-data BEST_EFFORT |
+| `/sonar` | `sensor_msgs/PointCloud2` | `patrolbot_bridge` (from `AUX`) | RViz / obstacle viz | ~5 Hz; sensor-data BEST_EFFORT |
 | `/battery` | `sensor_msgs/BatteryState` | `patrolbot_bridge` (from `AUX`) | monitoring | ~5 Hz |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | `patrolbot_bridge` (from `AUX`) | `rqt_robot_monitor` | ~5 Hz |
 | `/joy` | `sensor_msgs/Joy` | `joy_node` | `p3dxJoyTeleop` | event-driven |

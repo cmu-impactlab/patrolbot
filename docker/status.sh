@@ -30,6 +30,12 @@ revision=$(docker inspect patrolbot-navigation \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)
 printf '  %-24s %s\n' "revision" "${revision:-unknown}"
 
+bridge_publication_mode=$(docker inspect patrolbot-bridge \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+  | sed -n 's/^RMW_FASTRTPS_PUBLICATION_MODE=//p' | head -n 1)
+printf '  %-24s %s\n' "bridge DDS publication" \
+  "${bridge_publication_mode:-unset}"
+
 if [[ "$all_healthy" != true ]]; then
   printf '\nOVERALL=unhealthy reason=container-liveness\n'
   exit 1
@@ -48,6 +54,37 @@ topic_is_fresh() {
   output=$(ros_exec patrolbot-bridge \
     "timeout 8 ros2 topic hz --window 3 '$topic' 2>&1 || true") || return 1
   grep -q 'average rate:' <<<"$output"
+}
+
+topic_publisher_count() {
+  local topic=$1 output count attempt
+  for attempt in 1 2 3; do
+    output=$(ros_exec patrolbot-navigation "ros2 topic info '$topic' 2>&1") || output=""
+    count=$(sed -n 's/^Publisher count: //p' <<<"$output" | head -n 1)
+    if [[ "$count" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$count"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+topic_publisher_reliability() {
+  local topic=$1 output reliability attempt
+  for attempt in 1 2 3; do
+    output=$(ros_exec patrolbot-navigation "ros2 topic info -v '$topic' 2>&1") || output=""
+    reliability=$(awk '
+      /Endpoint type: PUBLISHER/ { publisher = 1; next }
+      publisher && /Reliability:/ { print $2; exit }
+    ' <<<"$output")
+    if [[ -n "$reliability" ]]; then
+      printf '%s\n' "$reliability"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 tf_is_ready() {
@@ -82,6 +119,12 @@ printf '\nSBC and ROS readiness\n'
 # blocks the bridge's own reconnects. Inferring reachability from live /odom is
 # both accurate and non-invasive.
 ready=true
+if [[ "$bridge_publication_mode" != ASYNCHRONOUS ]]; then
+  printf '  %-24s %s (expected ASYNCHRONOUS)\n' \
+    "bridge DDS publication" "${bridge_publication_mode:-unset}"
+  ready=false
+fi
+
 if topic_is_fresh /odom; then
   printf '  %-24s fresh (SBC link up)\n' "/odom"
 else
@@ -98,6 +141,30 @@ else
   printf '  %-24s unavailable/stale\n' "/scan"
   ready=false
 fi
+
+# One bridge publisher per hardware topic is a deployment invariant. This
+# catches an accidentally re-enabled Pi 4 rollback stack before duplicate
+# odom/scan streams can corrupt TF, costmaps, and navigation.
+for topic in /odom /scan; do
+  count=$(topic_publisher_count "$topic") || count=unknown
+  if [[ "$count" == 1 ]]; then
+    printf '  %-24s one\n' "$topic publisher"
+  else
+    printf '  %-24s %s (expected one)\n' "$topic publishers" "$count"
+    ready=false
+  fi
+done
+
+for topic in /scan /sonar; do
+  reliability=$(topic_publisher_reliability "$topic") || reliability=unknown
+  if [[ "$reliability" == BEST_EFFORT ]]; then
+    printf '  %-24s BEST_EFFORT\n' "$topic publisher QoS"
+  else
+    printf '  %-24s %s (expected BEST_EFFORT)\n' \
+      "$topic publisher QoS" "$reliability"
+    ready=false
+  fi
+done
 
 if lifecycle_is_active patrolbot-bringup /teleop_velocity_smoother; then
   printf '  %-24s active\n' "/teleop_velocity_smoother"

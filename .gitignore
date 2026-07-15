@@ -37,7 +37,8 @@ env/
 .pytest_cache/
 
 # Runtime logs and backups
-/logs/
+/logs/*
+!/logs/patrolbot-logs.sh
 *.log
 *.bak
 *.bak-*

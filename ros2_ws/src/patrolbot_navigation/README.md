@@ -11,16 +11,17 @@ and a custom joystick teleop node.
 
 | File | Role |
 |------|------|
-| `launch/bringup.launch.py` | Launches full Nav2 stack (AMCL + DWB + collision monitor), joy_node, `patrolbot_joy_teleop`, and a static TF publisher for the laser frame |
-| `scripts/patrolbot_joy_teleop.py` | Converts PS controller buttons to incremental velocity commands on `/cmd_vel_joy` |
-| `config/nav2_params.yaml` | Full Nav2 parameter set: AMCL differential model, DWB controller (max 0.26 m/s), collision_monitor stop box 0.6×0.6 m |
-| `maps/second_map.yaml` + `.pgm` | Active production map (0.1 m/px) |
+| `launch/bringup.launch.py` | Launches the composed Nav2 stack (AMCL + RPP + collision monitor), joystick teleop, safety watchdog, and laser static TF |
+| `scripts/patrolbot_joy_teleop.py` | Logitech F710 Xinput teleop: RB deadman, left-stick drive/turn, publishes `/cmd_vel_joy` |
+| `scripts/patrolbot_safety_watchdog.py` | Publishes a priority-10 zero command while `/scan` or `/odom` is stale |
+| `config/nav2_params.yaml` | AMCL differential model, RPP (`0.22 m/s` cruise), `0.26 m/s` Nav2 smoother cap, and a 0.6×0.6 m collision-monitor stop box |
+| `maps/second_map.yaml` + `.pgm` | Active map: 3192×2205 at 0.075 m/px, origin `[-1,-1,0]` |
 
 ## Laser TF
 
-`bringup.launch.py` publishes `base_link → laser_frame` at z=0.2 m, yaw=π
-(sensor is mounted facing rear/flipped; matches `LaserFlipped=true` in
-patrolbot-sh.p).
+`bringup.launch.py` publishes `base_link → laser_frame` at `x=0.037 m`,
+`z=0.2 m`, with **roll=π**. The scanner faces forward and is mounted upside
+down; the roll matches `LaserFlipped=true` in `patrolbot-sh.p`.
 
 ## Env vars set at launch
 
@@ -38,10 +39,11 @@ ros2 launch patrolbot_navigation bringup.launch.py
 
 - `scripts/lms200_sanitizer.py` — fixes SICK LMS-200 header fields
   (`/bad_scan` → `/good_scan`); no `/bad_scan` publisher in current stack
-- `scripts/twist_mux.yaml` — velocity priority config; twist_mux is not
-  launched (collision_monitor handles cmd_vel arbitration directly)
+- `scripts/twist_mux.yaml` — reference velocity-priority config; the active
+  `twist_mux` is launched by `patrolbot-launch` with `param/defaults/mux.yaml`
 - `maps/cmuq_1st_floor.yaml` + `.pgm` — older CMU-Q map, not loaded at launch
 
 ## Dependencies
 
-`nav2_bringup`, `slam_toolbox`, `joy`, `teleop_twist_joy`, `rclpy`
+`nav2_bringup`, `nav2_msgs`, `slam_toolbox`, `joy`, `twist_mux`, `rclpy`,
+`geometry_msgs`, `sensor_msgs`, `launch`, `launch_ros`

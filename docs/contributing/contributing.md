@@ -53,17 +53,15 @@ flowchart LR
 
 The lowest-risk, highest-value tasks, several drawn straight from [Known Gaps](../known-gaps.md):
 
-- Fix the scaffold-default package manifests (`maintainer`, `description`, `license` `TODO`s).
-- Remove the [dead launch files and editor temp files](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
+- Fix scaffold-default package metadata and missing runtime dependencies in the manifests.
+- Remove the [dead launch experiments](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
 - Add pytest coverage for the bridge's `_parse_telemetry` / `_parse_aux` (pure string functions).
-- Clean up stale comments and dead files now that `patrolbot-bringup.service` launches by package
-  name.
-- Keep Docker migration docs current as the Pi 5 moves toward production.
+- Clean up stale comments and dead files around the package-name launch path.
+- Keep the Pi 5 Docker deployment docs current.
 
 ## Things that need hardware
 
-Some work can only be validated on the robot (and the SBC is sometimes unreachable — see
-[Known Gaps](../known-gaps.md)):
+Some work can only be validated on the robot:
 
 - Changes to the SBC server need the SBC.
 - Resilience tests need a live link to freeze/resume.

@@ -66,7 +66,7 @@ flowchart TB
     L -->|"+20 s"| N["navigation"]
     B --> J["joy + teleop"]
     B --> T["laser_static_tf"]
-    C -. "OnProcessExit → Shutdown" .-> SD["(systemd restarts launch)"]
+    C -. "OnProcessExit → Shutdown" .-> SD["Docker restarts Pi 5 service container"]
 ```
 
 ### The map and the large-map decisions
@@ -87,16 +87,11 @@ real walls in RViz.
 
 ```bash
 ros2 launch patrolbot_navigation bringup.launch.py
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh nav        # follow Nav2 logs
+ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
 
 # Tune teleop limits at runtime
 ros2 run patrolbot_navigation patrolbot_joy_teleop.py --ros-args -p max_linear:=0.3
 ```
-
-!!! warning "Known source comments"
-    A stale trailing comment in `nav2_params.yaml` still mentions `use_composition:=False`; the live
-    launch uses composition and patched lifecycle managers with `bond_timeout: 0.0`. Trust the launch
-    files.
 
 ## Where to read more
 

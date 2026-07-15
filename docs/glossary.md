@@ -1,6 +1,6 @@
 ---
 title: Glossary
-description: ROS 2, Nav2, and robotics terms a new PatrolBot contributor might not know — plus the project-specific terms (SBC, the bridge, Docker migration, the AUX line).
+description: ROS 2, Nav2, and robotics terms a new PatrolBot contributor might not know — plus the project-specific terms (SBC, the bridge, Pi 5 Docker runtime, the AUX line).
 ---
 
 # Glossary
@@ -15,9 +15,9 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
   It may also be reachable for SSH on the lab LAN as `172.20.87.231`.
 
 **Pi** **(PatrolBot)**
-: The Raspberry Pi running the entire ROS 2 Jazzy navigation stack. The active migration
-  board is the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`); the Pi 4 path is retained
-  for rollback. Home is `/home/ubuntu`.
+: The Raspberry Pi running the entire ROS 2 Jazzy navigation stack. The main
+  driver is the Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`); the powered Pi 4
+  path is retained as an isolated rollback deployment. Home is `/home/ubuntu`.
 
 **The bridge** **(PatrolBot)**
 : `patrolbot_bridge` / `bridge_node` — the Pi node that translates the SBC's TCP text stream into
@@ -30,9 +30,9 @@ Terms used throughout this documentation. Project-specific terms are marked **(P
 : The lower-rate (~5 Hz) telemetry line carrying sonar, battery, and base flags — separate from and
   independent of the `ODOM|LASER` navigation line.
 
-**Docker migration** **(PatrolBot)**
-: The Raspberry Pi 5 deployment under `docker/`. It builds one image and runs the
-  three active services with Docker Compose. Hardware-connected acceptance remains pending.
+**Docker deployment** **(PatrolBot)**
+: The main Raspberry Pi 5 runtime under `docker/`. It builds one image and runs
+  the three active services with Docker Compose.
 
 **Self-occlusion filter** **(PatrolBot)**
 : The bridge rule that forces laser returns < 0.25 m to `+inf`, preventing the laser grazing the

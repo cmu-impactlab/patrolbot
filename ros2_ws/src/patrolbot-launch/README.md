@@ -9,7 +9,8 @@ This is a standard colcon package. It is built/installed into
 ```bash
 ros2 launch patrolbot-launch bringup.xml
 ```
-That is exactly what the `patrolbot-bringup.service` systemd unit runs.
+That is exactly what the main Pi 5 `patrolbot-bringup` container and Pi 4
+rollback systemd unit run.
 
 Changes to launch/param files here take effect after `colcon build` (the install
 tree symlinks back to this source, so XML/YAML edits are usually live immediately;

@@ -35,7 +35,8 @@ Loading the occupancy map's PGM with multi-threaded image decode OOM-kills the p
 Measure:
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu 'free -h; cat /proc/$(pgrep -f nav2_container)/status | grep VmRSS'
+ssh robot-pi2 "free -h; docker exec patrolbot-navigation bash -lc \
+  'cat /proc/\$(pgrep -f component_container_isolated)/status | grep VmRSS'"
 ```
 
 ### 2. File descriptors — DDS port exhaustion
@@ -48,7 +49,8 @@ participant = one set of locks. This is **why composition is mandatory** (see
 Measure:
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu 'ulimit -n; ls /dev/shm | wc -l; ls -l /proc/$(pgrep -f nav2_container)/fd | wc -l'
+ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
+  'ulimit -n; ls /dev/shm | wc -l; ls -l /proc/\$(pgrep -f component_container_isolated)/fd | wc -l'"
 ```
 
 ### 3. CPU — startup contention
@@ -60,15 +62,15 @@ lock in fast, then loads the heavy half.
 Measure:
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu 'top -b -n1 | head -20'      # during startup, watch the container process
+ssh robot-pi2 'docker stats --no-stream patrolbot-navigation patrolbot-bridge patrolbot-bringup'
 ```
 
 ## Measuring runtime performance
 
 ```bash
 # Topic rates (quick health)
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics
-ros2 topic hz /scan /odom /cmd_vel
+ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /scan /odom /cmd_vel'"
 
 # End-to-end latency sanity: command issued vs. /cmd_vel published
 ros2 topic delay /cmd_vel       # if your distro's tooling supports it
@@ -89,8 +91,8 @@ ros2 run rqt_top rqt_top         # or plain top, filtered to ROS processes
 
 ## What is **not** profiled
 
-- The SBC side while it is down. ARIA loop timing and the server's send path should be re-measured
-  when live access returns — see [Known Gaps](../known-gaps.md).
+- The SBC side during a disconnected-link test. ARIA loop timing and the server's
+  send path should be re-measured under the intended load.
 - Network throughput of the TCP stream. At ~20 Hz of short text lines it is negligible on a LAN;
   it would matter only over a constrained link.
 

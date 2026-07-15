@@ -13,31 +13,42 @@ The Pi 5 path uses Docker Compose and is covered in [Docker Deployment](docker.m
 ```mermaid
 flowchart TB
     EDIT["edit src / config"] --> WHICH{which package?}
-    WHICH -->|patrolbot_bridge / patrolbot_navigation / patrolbot-launch| BUILD["colcon build when needed + restart service"]
-    WHICH -->|Docker stack| DOCKER["rebuild image or restart container"]
+    WHICH -->|Pi 5 source / Docker stack| DOCKER["rebuild image or restart target container"]
+    WHICH -->|Pi 4 rollback package| BUILD["colcon build when needed + restart rollback service"]
     WHICH -->|SBC patrolbot_server| MAKE["make on the SBC + restart"]
-    BUILD --> VERIFY["verify with patrolbot-logs.sh"]
+    BUILD --> VERIFY["verify the selected deployment"]
     DOCKER --> VERIFY
     MAKE --> VERIFY
 ```
 
-## Updating a Pi package
+## Updating a Pi 5 package
 
 ### patrolbot_bridge / patrolbot_navigation / patrolbot-launch
 
-These run from the colcon `install/`, so the normal flow works:
+The deployed source is bind-mounted read-only into the three containers. Existing
+files can be changed by deploying the exact monorepo revision and restarting the
+owning container; adding files or changing package metadata requires a new image.
+
+```bash
+cd ~/patrolbot-repo/docker
+docker compose build navigation
+docker compose up -d
+./patrolbot-status
+```
+
+For an existing bind-mounted file, restart only `bringup`, `bridge`, or
+`navigation`. Never edit the deployed Pi tree as the canonical source.
+
+### Pi 4 rollback package updates
+
+The older colcon/systemd flow applies only when intentionally maintaining or
+activating the rollback board:
 
 ```bash
 cd ~/ros2_ws
-colcon build --packages-select patrolbot_bridge      # or patrolbot_navigation / patrolbot-launch
-source install/setup.bash
-systemctl --user restart patrolbot-bridge.service    # or patrolbot-navigation.service
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
+colcon build --packages-select patrolbot_bridge
+systemctl --user restart patrolbot-bridge.service
 ```
-
-For `patrolbot-launch`, restart `patrolbot-bringup.service`. The old
-`~/build_backup/patrolbot-launch/` copy step was removed on 2026-06-28; the service now runs
-`ros2 launch patrolbot-launch bringup.xml`.
 
 ## Updating the SBC server
 
@@ -50,8 +61,8 @@ systemctl --user restart patrolbot-server.service
 ```
 
 The Pi bridge will drop and reconnect automatically (3 s) during the restart — no Pi-side action
-needed. If the SBC is down, do not guess from stale runtime state; use `SKILLS/sbc-architecture.md`
-as the documented truth source until live SSH is back.
+needed. If live source cannot be inspected, do not guess from stale runtime state;
+use `SKILLS/sbc-architecture.md` as the architecture record.
 
 ## Updating the map
 
@@ -60,32 +71,18 @@ The active map scale is operator-confirmed and should not be changed casually:
 coarser at `0.2 m` for planning speed; the local costmap remains `0.1 m`.
 
 ```bash
-# Replace the active map (keep the same name or update the launch reference)
-cp new_map.pgm  ~/ros2_ws/src/patrolbot_navigation/maps/second_map.pgm
-cp new_map.yaml ~/ros2_ws/src/patrolbot_navigation/maps/second_map.yaml
+# In the canonical monorepo, replace the active map and commit it.
+cp new_map.pgm  ros2_ws/src/patrolbot_navigation/maps/second_map.pgm
+cp new_map.yaml ros2_ws/src/patrolbot_navigation/maps/second_map.yaml
 # Do not change map resolution/scale unless the new map is operator-verified
-colcon build --packages-select patrolbot_navigation
-systemctl --user restart patrolbot-navigation.service
+# Deploy that exact revision to Pi 5, then:
+cd ~/patrolbot-repo/docker
+docker compose restart navigation
 ```
 
 After replacing a map, set a fresh *2D Pose Estimate* before sending goals. If the source map is a
 CAD drawing, remove title blocks, border frames, and furniture/hatching artifacts that the laser
 cannot see.
-
-## Updating the Docker stack
-
-For the Pi 5:
-
-```bash
-cd ~/patrolbot-repo/docker
-docker compose build
-docker compose up -d
-docker compose ps
-./patrolbot-status
-```
-
-If the change only edits existing bind-mounted launch, params, maps, or scripts, a targeted
-`docker compose restart <service>` is usually enough. Adding files requires rebuilding the image.
 
 ## Rolling back
 
@@ -94,14 +91,15 @@ If the change only edits existing bind-mounted launch, params, maps, or scripts,
 | Pi package | revert the monorepo commit, rebuild, and restart |
 | Mobile base | `git` revert in `patrolbot-launch`, rebuild if needed, restart `patrolbot-bringup` |
 | Map change | restore the previous `second_map.{pgm,yaml}` and restart `patrolbot-navigation` |
-| Docker stack | `docker compose down`, then re-enable the bare-metal systemd services |
+| Docker stack | deploy the previous immutable Pi 5 image/revision; use Pi 4 services only for an explicit board rollback |
 | SBC server | rebuild the previous `patrolbot_server.cpp` + restart |
 
 ## Post-update verification
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status     # all services active
-ros2 topic hz /odom /scan /cmd_vel          # data + commands flow
+ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
+ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /odom /scan /cmd_vel'"
 # Set 2D Pose Estimate, then a Nav2 Goal — confirm the robot plans and moves
 ```
 

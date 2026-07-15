@@ -7,10 +7,10 @@ PatrolBot is a **two-machine** system:
 
 - An **SBC** (the robot's main PC) owns the physical hardware — the Pioneer base and the
   SICK LMS-200 laser — and streams telemetry to the Pi over a TCP text protocol.
-- A **Raspberry Pi 5** (`robot-pi2`, hostname `patrolbot-rpi5`) runs the Dockerized
-  ROS 2 Jazzy navigation stack (Nav2, the TCP bridge, and mobile-base launch). Its
-  software-only migration is active; hardware-connected acceptance remains pending
-  while the SBC is off. The former Raspberry Pi 4 path is retained for rollback.
+- A **Raspberry Pi 5** (`robot-pi2`, hostname `patrolbot-rpi5`) is the main driver and
+  runs the Dockerized ROS 2 Jazzy navigation stack (Nav2, the TCP bridge, and
+  mobile-base launch). The Raspberry Pi 4 is powered and retained as the bare-metal
+  rollback path; it must not run an overlapping ROS graph during operation.
 
 The two never share a ROS graph: the SBC is not a ROS node. They meet only at a single
 TCP socket. This split is the central fact of the architecture — see
@@ -42,4 +42,3 @@ The site deploys to GitHub Pages automatically on push to `main`
 | `mkdocs.yml` | Site configuration and navigation tree |
 | `requirements.txt` | Documentation build toolchain |
 | `.github/workflows/deploy.yml` | GitHub Pages deploy workflow |
-

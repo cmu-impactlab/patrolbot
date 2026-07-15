@@ -101,14 +101,14 @@ chain](software-architecture.md#the-cmd_vel-arbitration-chain):
 flowchart LR
     PAD["Logitech gamepad (USB on Pi)"] --> JN["joy_node"]
     JN -->|"/joy · sensor_msgs/Joy"| JT["patrolbot_joy_teleop"]
-    JT -->|"only while sticks move\ninput/joy · prio 8"| MUX["twist_mux"]
+    JT -->|"while RB held / ramping to stop\ninput/joy · prio 8"| MUX["twist_mux"]
     MUX -->|"overrides nav (prio 5)"| OUT["/cmd_vel → bridge → SBC"]
 ```
 
-The teleop node publishes a `Twist` **only while** a stick is past the deadzone *and* the deadman
-button (RB) is held; on release it sends one explicit zero, then goes silent so twist_mux times the
-joy input out (1 s) and navigation resumes. This is why an idle, connected controller never blocks
-autonomy.
+The teleop node publishes at 30 Hz while RB is held, even when the sticks are
+centered. On RB release or 0.4 s of `/joy` loss, it ramps to zero, sends one final
+zero, then goes silent so twist_mux times the joy input out (1 s) and navigation
+resumes.
 
 ## Data integrity and failure behavior
 

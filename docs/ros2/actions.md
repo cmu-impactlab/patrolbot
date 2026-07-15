@@ -71,4 +71,4 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
   `local_costmap update_frequency` to 5.0. See [Debugging](../development/debugging.md).
 - **Goal rejected immediately.** Navigation half not yet active (see warning above).
 - **Robot "boxed in".** Laser shows obstacles within the footprint; the `collision_monitor`
-  stop-box halts motion. Check `./patrolbot-logs.sh scan`.
+  stop-box halts motion. Inspect `/scan` from the Pi 5 `patrolbot-bridge` container.

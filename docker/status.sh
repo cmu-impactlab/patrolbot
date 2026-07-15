@@ -68,9 +68,9 @@ tf_is_ready() {
 lifecycle_is_active() {
   local container=$1 node=$2 output
   output=$(ros_exec "$container" \
-    "ros2 daemon stop >/dev/null 2>&1 || true; sleep 1; ros2 lifecycle get '$node' 2>&1") ||
+    "ros2 service call '$node/get_state' lifecycle_msgs/srv/GetState '{}' 2>&1") ||
     return 1
-  grep -q '^active ' <<<"$output"
+  grep -Eq "label='active'|label: active" <<<"$output"
 }
 
 printf '\nSBC and ROS readiness\n'

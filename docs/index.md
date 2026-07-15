@@ -51,11 +51,11 @@ flowchart LR
 | **Software** | One C++ ARIA server (`patrolbot_server`) | ROS 2 Jazzy: bridge, Nav2, mobile base |
 | **Runs ROS 2?** | **No** | Yes |
 
-The active migration computer is the **Raspberry Pi 5** (`robot-pi2`, hostname
-`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64). Its Dockerized software stack is running
-and documented in [Docker Deployment](deployment/docker.md). The SBC is currently off,
-so telemetry, joystick, motion, and Nav2-goal acceptance remain pending. The former
-Raspberry Pi 4 deployment is preserved as rollback rather than treated as validated-away.
+The main driver is the **Raspberry Pi 5** (hostname `patrolbot-rpi5`, Ubuntu
+24.04.4 LTS, aarch64). Its Dockerized software stack is running and documented in
+[Docker Deployment](deployment/docker.md). The SBC and Pi 4 are also powered. The Pi 4
+is the bare-metal rollback board and must be isolated from the active ROS graph while
+the Pi 5 drives the robot.
 
 The SBC reads odometry and laser ranges from the hardware and **streams them over a single
 TCP socket** as plain text. The Pi turns that stream into native ROS 2 messages (`/odom`,
@@ -81,14 +81,16 @@ seam in detail.
 | Understand the design at a glance | [Architecture Overview](architecture/overview.md) |
 | Understand how the SBC and Pi talk | [Communication (SBC ↔ Pi)](architecture/communication-architecture.md) |
 | Bring the robot up | [Quickstart](getting-started/quickstart.md) |
-| Understand the Pi 5 Docker migration | [Docker Deployment](deployment/docker.md) |
+| Understand the Pi 5 runtime | [Docker Deployment](deployment/docker.md) |
 | Look up a node, topic, or parameter | [ROS 2 Reference](ros2/nodes.md) |
 | Understand the sensors and the base | [Devices](devices/device-overview.md) |
 | Diagnose a problem | [Debugging](development/debugging.md) |
 | Know what's unverified | [Known Gaps](known-gaps.md) |
 
-!!! tip "Documentation status — refreshed 2026-07-09"
-    The SBC is currently treated from `SKILLS/sbc-architecture.md` because the machine is down.
-    The Pi 5 runs the monorepo Docker stack. Container liveness can be verified while the
-    SBC is off, but end-to-end readiness cannot. Sonar publishes real rear detections only,
-    the controller is RPP, the map is `3192×2205 @ 0.075 m`, and laser TF roll is `π`.
+!!! tip "Documentation status — live-audited 2026-07-15"
+    All three computers were reachable during this audit. The SBC services and live
+    `ODOM|LASER` stream were verified, and the Pi 5 containers were healthy at revision
+    `fa14b9b5cedfd56beaffca746e1c37256d67d1f0`. Pi 5 `eth0` was live at
+    `10.0.0.2/24`; the SBC socket, `/odom`, `/scan`, both lifecycle nodes, and both
+    required TF links were verified. No motion test was performed. See
+    [Known Gaps](known-gaps.md).

@@ -9,10 +9,11 @@ The SBC's entire robot software: one C++ program, `patrolbot_server`, that speak
 hardware and a plain-text protocol to the Pi. It is **not a ROS package** — just a `Makefile`
 project linked against ARIA.
 
-!!! info "SBC source of truth while the machine is down"
-    The SBC is currently down, so this page follows `SKILLS/sbc-architecture.md` from the source
-    workspace. That file records the current `patrolbot_server` behavior, services, wire protocol,
-    command watchdog, stale-laser handling, and e-stop diagnostics.
+!!! info "SBC source and live verification"
+    On 2026-07-15 the two system units (`patrolbot-wired-ip` and `socat-boot`),
+    the user `patrolbot-server` unit, listening socket, source, and a short live
+    telemetry sample were checked. `SKILLS/sbc-architecture.md` records the
+    detailed server behavior, watchdog, stale-laser handling, and diagnostics.
 
 | | |
 |---|---|
@@ -36,7 +37,7 @@ protocol](../architecture/communication-architecture.md), not ROS:
 | Direction | Line | Rate |
 |---|---|---|
 | SBC → Pi | `ODOM:x,y,th,vx,vth|LASER:r1,...,rN` | ~20 Hz |
-| SBC → Pi | `AUX:SONAR=..|BATT=..|FLAGS=..` | ~4–5 Hz (every 5th nav frame) |
+| SBC → Pi | `AUX:SONAR=..|BATT=..|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed` | ~4–5 Hz (every 5th nav frame) |
 | Pi → SBC | `DRIVE:linear:angular` | on demand |
 
 Units are converted from ARIA's mm/deg to m/rad **before** sending.
@@ -87,6 +88,7 @@ resolves the serial conflict cleanly.
 
 | Service | Type | Role |
 |---|---|---|
+| `patrolbot-wired-ip.service` | systemd **system** | keep `10.0.0.1/24` applied to `enp2s5` with `Restart=always` |
 | `socat-boot.service` | systemd **system** | bridge `/dev/ttyS0` → TCP:7000 at boot |
 | `patrolbot-server.service` | systemd **user** | run `patrolbot_server -rh 127.0.0.1 -rrtp 7000` at boot |
 

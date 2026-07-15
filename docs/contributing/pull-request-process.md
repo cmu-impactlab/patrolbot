@@ -10,7 +10,7 @@ robust, and does it leave the docs accurate. This page is the checklist.
 
 ## What a PR should contain
 
-- **A focused change** in the correct repository (recall the nested `.git/` repos).
+- **A focused change** in the canonical monorepo (or the separately deployed SBC source).
 - **A description** stating: which machine(s) it affects, what was tested, and whether it touches
   the SBC↔Pi seam or the Nav2 lifecycle/launch.
 - **Doc updates** for any structural or factual change (package `README.md` + this site).
@@ -45,9 +45,9 @@ robust, and does it leave the docs accurate. This page is the checklist.
 |---|---|
 | `bridge_node.py` | parsing isolation, the 3 s timeout/reconnect, TF decoupling |
 | SBC `patrolbot_server.cpp` | the re-accept loop, EAGAIN guard, keepalive/user-timeout |
-| `nav2_params.yaml` | the load-bearing flags; the stale trailing comment |
+| `nav2_params.yaml` | the load-bearing flags and cmd_vel/collision-monitor topology |
 | `bringup.launch.py` / patched launches | composition, `bond_timeout: 0.0`, the OnProcessExit handler, the 20 s timer |
-| mobile base | the cmd_vel remaps and that `patrolbot-bringup.service` was restarted |
+| mobile base | the cmd_vel remaps and that the `patrolbot-bringup` container was restarted |
 | maps | costmap resolution matches the map resolution |
 
 ## Merge and deploy

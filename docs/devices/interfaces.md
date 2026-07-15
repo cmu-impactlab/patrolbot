@@ -15,7 +15,7 @@ The **only** device wired to the Pi, and the operator's manual-override interfac
 | Field | Value |
 |---|---|
 | **Hardware** | Logitech gamepad in **Xinput** mode (X/D switch on **X**) |
-| **Host machine** | **Pi** (USB) |
+| **Host machine** | **Pi 5** (USB, main runtime) |
 | **Connection** | USB → Linux `joydev` → `/dev/input/js*` |
 | **ROS interface** | `joy_node` → `/joy` (`sensor_msgs/Joy`) → `p3dxJoyTeleop` → `input/joy` |
 | **Update rate** | event-driven (on input change) |
@@ -25,21 +25,23 @@ The **only** device wired to the Pi, and the operator's manual-override interfac
 | Control | Axis/Button | Action |
 |---|---|---|
 | Deadman | **RB** (button 5) | must be held for any motion (safety interlock) |
-| Drive | left-stick **Y** (axis 1) | forward / reverse, up to 0.4 m/s |
-| Turn | right-stick **X** (axis 3) | rotate, up to 0.8 rad/s |
+| Drive | left-stick **Y** (axis 1), D-pad Y (axis 7) fallback | forward / reverse, default maximum 0.35 m/s |
+| Turn | left-stick **X** (axis 0), D-pad X (axis 6) fallback | rotate, default maximum 0.7 rad/s |
 | Deadzone | — | 0.12 |
+| Speed trim | A/Y and X/B | decrease/increase linear and angular maximums |
 
-The teleop publishes **only while** the deadman is held and a stick is past the deadzone, at
-twist_mux **priority 8** (above navigation's 5). On release it sends one zero and goes silent, so
-twist_mux times the input out (1 s) and navigation resumes. This is the whole reason an idle,
-connected controller never blocks autonomy. See
+While RB is held, the teleop publishes its acceleration-ramped command at 30 Hz,
+including zero when the sticks are centered, at twist_mux **priority 8** (above
+navigation's 5). A 0.4 s `/joy` watchdog drops the deadman if the controller stream
+disappears. On RB release it ramps to zero, publishes one final zero, and goes silent,
+so twist_mux times the input out (1 s) and navigation resumes. See
 [Nodes → patrolbot_joy_teleop](../ros2/nodes.md#patrolbot_joy_teleop).
 
 ### Failure conditions
 
 | Condition | Symptom | Effect |
 |---|---|---|
-| Controller unplugged | no `/dev/input/js*`, no `/joy` | teleop idle; navigation unaffected |
+| Controller unplugged | no `/dev/input/js*`, no `/joy` | 0.4 s watchdog drops the deadman and ramps to zero; navigation resumes after mux timeout |
 | Switch on **D** (DirectInput) | wrong axis/button map | sticks do nothing useful — set the switch to **X** |
 | Deadman not held | sticks ignored | by design (interlock) |
 
@@ -50,7 +52,7 @@ The defining interface of the whole robot: a single TCP socket joining the two m
 | Field | Value |
 |---|---|
 | **Endpoint** | SBC `10.0.0.1:7272` (server); Pi bridge is the client |
-| **Protocol** | plain-text lines: `ODOM|LASER` (~20 Hz), `AUX` (~5 Hz), `DRIVE` (on demand) |
+| **Protocol** | plain-text lines: `ODOM|LASER` (nominal ~20 Hz; ~25 Hz observed live), `AUX` (~5 Hz), `DRIVE` (on demand) |
 | **Framing** | newline-delimited; the Pi splits on `\n` and dispatches by prefix |
 | **Security** | none — LAN-local plaintext (assumes a trusted robot network) |
 
@@ -82,7 +84,7 @@ Not a device, but worth naming as the human interface to the running system:
 | Interface | Where | Purpose |
 |---|---|---|
 | **RViz2** | operator laptop | set *2D Pose Estimate* + *Nav2 Goal*, visualize map/scan/costmaps |
-| **`patrolbot-logs.sh`** | Pi (SSH) | live logs, topic rates, TF tree, service health |
+| **`docker compose logs` / `docker exec`** | Pi 5 (SSH) | live container logs and ROS 2 inspection |
 | **`rqt_robot_monitor`** | operator laptop | view `/diagnostics` |
 
 RViz over a VPN needs special transport setup — see

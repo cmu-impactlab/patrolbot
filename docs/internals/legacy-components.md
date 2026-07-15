@@ -17,30 +17,24 @@ Real components retained as fallbacks or references, but not part of the running
 
 - **`rosaria2` package** — superseded direct-ARIA driver for the Pioneer base; kept as a fallback
   to the SBC-server-plus-bridge architecture. Conflicts with the bridge if run; full detail on its
-  [package page](../packages/rosaria2.md). (11 files: `rosaria2_node.cpp`, `laser_publisher.cpp`,
-  `test.cpp`, four headers, `BumperState.msg`, `CMakeLists.txt`, `package.xml`.)
+  [package page](../packages/rosaria2.md).
 - **`lms200_sanitizer.py`** — fixes SICK LMS-200 header fields (`/bad_scan → /good_scan`); no
   `/bad_scan` publisher exists in the current stack, so it has nothing to consume.
 - **`patrolbot_navigation/scripts/twist_mux.yaml`** — a reference velocity-priority config; the
   active twist_mux runs from `patrolbot-launch`'s `mux.yaml`.
 - **`patrolbot_nav.rviz`** — operator RViz layout for manual visualization.
 - **`maps/cmuq_1st_floor.{yaml,pgm}`** — an older CMU-Q floor map, not loaded by the active launch.
-- **`second_map_original_0.1.{pgm,yaml}.bak`** — historical map backup, not the active
-  operator-confirmed scale.
-- **`ARIA/maps/`, `ARIA/bin/`** — ARIA reference map data and utility binaries.
 
 ## Known Dead Code — cleanup candidates { #known-dead-code--cleanup-candidates }
 
 Listed once, here, as removal candidates. Not documented anywhere else:
 
 - **`patrolbot-launch/launch/rosaria2.xml`, `joy.xml`** — commented out of `bringup.xml`.
-- **`patrolbot-launch/launch/#joy.xml#`, `*.xml~`, `readlidar.py~`** — editor temp/backup files
-  accidentally retained.
 - **`patrolbot-launch/launch/teleop-key*.xml`, `rosaria2.py`, `readlidar.py`,
-  `launch_teleop_keyboard.bash`, `Aria.log`** — dev experiments and stray runtime artifacts.
+  `rosaria2-lidar.xml`, `smoother_lifecycle.xml`, and
+  `launch_teleop_keyboard.bash`** — dev experiments not included by the active launch.
 - **`ekf_test.yaml` reference in `bringup.launch.py`** — the `ekf_config_file` variable is defined
   but the file was already removed and is never used in the launch body; safe to delete the line.
-- **`patrolbot_navigation/log/`** — a stale colcon build log committed into the package.
 
 ## Why this page exists
 

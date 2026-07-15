@@ -61,8 +61,8 @@ misbehaves:
 
 - **Host = SBC:** the device, its serial port, its ARIA driver, and the telemetry that carries it
   all live on the SBC. If `/scan` or `/odom` is missing on the Pi but the bridge is connected,
-  the problem is upstream on the SBC. When the SBC is down, use the project
-  `SKILLS/sbc-architecture.md` as the documented truth source until live access returns.
+  the problem is upstream on the SBC. Use live source and service state when
+  reachable, with `SKILLS/sbc-architecture.md` as the architecture record.
 - **Host = Pi:** the gamepad is the only device you can inspect directly on the Pi
   (`/dev/input/js*`, `ros2 topic echo /joy`).
 

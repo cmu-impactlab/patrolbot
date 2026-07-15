@@ -34,7 +34,7 @@ class PatrolBotBridge(Node):
         self.server_port = 7272
 
         # The SBC streams telemetry at 20 Hz (every 50 ms). If no data arrives for
-        # this long the link is dead — an abrupt SBC power-off leaves no FIN/RST, so
+        # this long the link is dead — silent link loss can leave no FIN/RST, so
         # a blocking recv() would otherwise hang forever and never reconnect. A read
         # timeout converts that silent death into a socket.timeout we can recover from.
         self.RECV_TIMEOUT = 3.0
@@ -237,7 +237,7 @@ class PatrolBotBridge(Node):
     # ------------------------------------------------------------------
 
     def _parse_aux(self, line):
-        # AUX:SONAR=x,y;x,y;...|BATT=v,soc,cs,temp|FLAGS=flags,fault,stall,motors
+        # AUX:SONAR=x,y;x,y;...|BATT=v,soc,cs,temp|FLAGS=flags,fault,stall,motors,estop
         # Each section is parsed and published in isolation: a malformed or missing
         # section only skips its own topic and never affects the others or nav data.
         sections = {}

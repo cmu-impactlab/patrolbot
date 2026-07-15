@@ -1,6 +1,6 @@
 ---
 title: Workspace Setup
-description: Setting up a development environment for PatrolBot — the colcon workspace on the Pi, the SBC build, and the Docker migration target.
+description: Setting up a development environment for PatrolBot — the canonical monorepo, Pi 5 Docker runtime, Pi 4 rollback workspace, and SBC build.
 ---
 
 # Workspace Setup
@@ -45,8 +45,9 @@ export ROS_DOMAIN_ID=0
 ```
 
 !!! success "No `build_backup/` runtime copy"
-    `patrolbot-bringup.service` now runs `ros2 launch patrolbot-launch bringup.xml`. Older notes that
-    say to copy `patrolbot-launch` into `~/build_backup/` are stale.
+    The Pi 5 bringup container and Pi 4 rollback service run
+    `ros2 launch patrolbot-launch bringup.xml`. Older notes that say to copy
+    `patrolbot-launch` into `~/build_backup/` are stale.
 
 !!! warning "No nested repositories"
     All Pi packages belong to this monorepo. Do not copy their historical `.git`
@@ -62,27 +63,12 @@ make                                # g++ -I/usr/local/Aria/include -lAria -lArN
 There is no colcon here — it's a plain Makefile project producing the `patrolbot_server` binary.
 See [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 
-## A development loop without the robot
-
-You can develop the bridge against a fake SBC. The Pi carries a dev tool for exactly this:
-
-```bash
-# On the Pi (or any machine), emulate the SBC's TCP server on :7272
-python3 ~/yousef/mock_sbc_server.py
-# then run the bridge pointed at it
-ros2 run patrolbot_bridge bridge_node
-```
-
-`mock_sbc_server.py` and `test_laser.py` under `~/yousef/` are **dev tools, not production** — they
-let you exercise the bridge and probe the laser without a live robot.
-
 ## Verifying a working setup
 
 ```bash
-ros2 node list                 # bridge + nav2 nodes + twist_mux + teleop + joy
-ros2 topic hz /odom /scan      # ~20 Hz each when the SBC is connected
-ros2 run tf2_tools view_frames # map → odom → base_link → laser_frame
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
+ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
+ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /odom /scan'"
 ```
 
 ## Editing this documentation

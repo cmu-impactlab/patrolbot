@@ -42,6 +42,7 @@ This is the central engineering decision, and the rest of the architecture follo
 ```mermaid
 flowchart TB
     subgraph SBC["SBC — main PC · 10.0.0.1:7272 to Pi · no ROS 2"]
+        WIRED["patrolbot-wired-ip.service\nenp2s5 = 10.0.0.1/24"]
         SOCAT["socat-boot.service\n/dev/ttyS0 → TCP :7000"]
         SERVER["patrolbot_server (C++/ARIA)\nTCP server on :7272"]
         SOCAT --> SERVER
@@ -127,9 +128,9 @@ ends. Each row is detailed on [Communication Architecture](communication-archite
 
 | Failure | Detection | Recovery |
 |---|---|---|
-| SBC powers off abruptly (no TCP FIN) | Pi bridge `recv()` times out after 3 s | Bridge reconnects every 3 s; Nav2 stays up (`bond_timeout: 0.0`) |
+| SBC link disappears without a TCP close | Pi bridge `recv()` times out after 3 s | Bridge reconnects every 3 s; Nav2 stays up (`bond_timeout: 0.0`) |
 | Pi vanishes | SBC `send()` hits sustained `EAGAIN` (~3 s) + TCP keepalive | SBC breaks and re-`accept()`s |
-| Nav2 node/container crash | systemd / launch event handler | Whole launch torn down → systemd restart → fresh stack in ~4 s |
+| Nav2 node/container crash | Docker / launch event handler | Whole launch torn down → container restart → fresh stack |
 | Reconnect TF skew | (was) `collision_monitor` extrapolation throw | Fixed with `base_shift_correction: False` (no longer crashes) |
 | Physical SBC reboot | odometry resets to 0,0,0 | **Manual:** operator re-sets pose with *2D Pose Estimate* |
 

@@ -50,7 +50,7 @@ readiness checks only when requested:
   readiness is incomplete;
 - exit `1`, `OVERALL=unhealthy`: one or more containers failed liveness.
 
-An offline SBC therefore produces a safe `degraded` result rather than an
+An unavailable SBC endpoint therefore produces a safe `degraded` result rather than an
 unhealthy restart loop.
 
 On the Pi 5 deployment host, install an optional shell command:

@@ -39,11 +39,35 @@ This link is documented in full on
 [Communication Architecture](../architecture/communication-architecture.md). It is plaintext and
 unauthenticated, so it assumes a **trusted robot network**.
 
+!!! success "Dedicated link configured and verified on 2026-07-15"
+    Pi 5 `/etc/netplan/60-sbc-link.yaml` sets `eth0` to static
+    `10.0.0.2/24` with DHCP disabled. After `netplan apply`, the link was 100
+    Mbps/full duplex, the route to `10.0.0.1` used `eth0`, ping had no loss,
+    and the bridge remained connected. The SBC pins `10.0.0.1/24` in
+    `/etc/network/interfaces`; `patrolbot-wired-ip.service` re-applies it after
+    carrier loss or reboot.
+
+The installed Pi 5 override is:
+
+```yaml
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: false
+      addresses: [10.0.0.2/24]
+      optional: true
+```
+
+For a replacement installation, apply this only during a supervised maintenance
+window, then validate with `ip -4 addr show eth0`, `ip route get 10.0.0.1`,
+`ping 10.0.0.1`, and a TCP probe to port 7272 before any motion test.
+
 ## ROS 2 discovery (Pi-internal and to RViz)
 
 | Setting | Value | Where |
 |---|---|---|
-| `ROS_DOMAIN_ID` | `0` | set in `bringup.launch.py`, `.bashrc`, `patrolbot-logs.sh` |
+| `ROS_DOMAIN_ID` | `0` | set by Compose/launch on Pi 5; also present in the Pi 4 rollback environment |
 | Middleware | FastDDS | default |
 | Discovery | `SUBNET` / multicast (`ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`) | default |
 

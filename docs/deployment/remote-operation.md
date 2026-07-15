@@ -22,8 +22,8 @@ You should see `/map`, `/scan`, the TF tree, and be able to set an initial pose 
 gives you the rest:
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh scan
+ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
+ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
 ```
 
 ## From home (VPN/NAT) — the problem
@@ -47,8 +47,8 @@ The robot is back on plain LAN multicast discovery:
 
 | Piece | Where | Status |
 |---|---|---|
-| `patrolbot-discovery.service` | Pi user service directory | **disabled** |
-| `FASTRTPS_DEFAULT_PROFILES_FILE` | three production ROS 2 services | **not set** |
+| `patrolbot-discovery.service` | Pi 4 user-service directory | **disabled** |
+| `FASTRTPS_DEFAULT_PROFILES_FILE` | Pi 5 containers | **not set** |
 | FastDDS XML profiles | backups / old files | **not runtime state** |
 
 If VPN RViz is needed again, re-enable it as a deliberate project from backups, then verify LAN RViz,
@@ -64,7 +64,8 @@ Even when remote viz works, expect client-side log noise that does not indicate 
 
 ## Safe remote operation
 
-- Prefer SSH + `patrolbot-logs.sh` for *observing*; use RViz for *commanding* (pose/goal).
+- Prefer SSH + `docker/status.sh` and container logs for *observing*; use RViz
+  for *commanding* (pose/goal).
 - The robot is resilient to losing the operator entirely — autonomy continues; the joystick is the
   local override. Losing RViz does not stop a running goal.
 - Remember the [physical-reboot caveat](robot-deployment.md#operational-caveats): after an SBC

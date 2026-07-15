@@ -111,9 +111,10 @@ Reading it carefully:
 - Inside `nav2_container`, RPP publishes `cmd_vel`; the Nav2 `velocity_smoother` republishes
   `cmd_vel_smoothed`; `collision_monitor` reads `cmd_vel_smoothed`, applies its stop-box, and
   emits the result on **`input/navi`** at twist_mux priority **5**.
-- `patrolbot_joy_teleop` emits on **`input/joy`** at priority **8** — *higher* than navigation —
-  so any joystick motion overrides autonomy. It publishes **only while the sticks are moving**, so
-  twist_mux times the joy input out (1 s) on release and navigation resumes.
+- `patrolbot_joy_teleop` emits on **`input/joy`** at priority **8** — *higher* than navigation.
+  While RB is held it publishes the ramped command at 30 Hz. On RB release or
+  0.4 s of `/joy` loss it ramps to zero, publishes one final zero, then goes silent;
+  twist_mux times the input out after 1 s and navigation resumes.
 - `twist_mux` publishes the winner on `cmd_vel_out`. A *second*, separate
   `teleop_velocity_smoother` (the `nav2_velocity_smoother` executable started by the mobile-base
   launch) re-shapes it and republishes **`/cmd_vel`**, which the bridge forwards to the SBC.
@@ -162,8 +163,9 @@ is forced by the Pi's resource limits.
 `nav2_container` is deliberately **not** respawned. A respawned container comes back *empty*,
 because `LoadComposableNodes` does not re-run. Instead, `bringup.launch.py` registers an
 `OnProcessExit` handler: if the container dies for any reason, it emits a launch `Shutdown`. The
-`patrolbot-navigation.service` systemd unit has `Restart=always`, so the entire launch restarts
-and brings up a fresh, fully-populated stack (localization + map back in ~4 s). This converts
+Pi 5 Docker has `restart: unless-stopped`, so the service container restarts and
+brings up a fresh, fully populated stack. The Pi 4 fallback unit provides the
+equivalent `Restart=always` behavior. This converts
 "the container died and is now a useless empty shell" into "the whole stack restarted cleanly."
 
 ### Startup ordering inside the container
@@ -186,22 +188,16 @@ The map is the dominant scaling pressure on the Pi, and several decisions exist 
 | **`MAGICK_THREAD_LIMIT=1`, `OMP_NUM_THREADS=1`** | Multi-threaded image decode of the large PGM OOM-kills the process on the Pi | Slightly slower one-time map load |
 | **Local copies of the nav2_bringup launches** | Upstream `bringup_launch.py` hard-codes `bond_timeout: 4.0` and never reads our params | Must re-sync if upstream changes |
 
-!!! danger "Stale comment in `nav2_params.yaml`"
-    The trailing comment block in `nav2_params.yaml` claims the stack avoids bond starvation by
-    launching with `use_composition:=False` (separate processes). **This is stale and contradicts the
-    actual launch.** The live `bringup.launch.py` uses `use_composition:=True` and applies
-    `bond_timeout: 0.0` in the patched launch files. Treat the launch file as authoritative.
-
 ## Reliability properties
 
 Because the SBC link is the system's single point of fragility, the Pi software is built to ride
 out its loss without operator intervention:
 
-- **SBC down/up:** the bridge reconnects every 3 s; Nav2 nodes stay active (`bond_timeout: 0.0`);
+- **SBC link loss/recovery:** the bridge reconnects every 3 s; Nav2 nodes stay active (`bond_timeout: 0.0`);
   `map→odom` and 25 Hz data resume automatically when the SBC returns.
-- **Bridge crash:** `patrolbot-bridge.service` restarts it; it reconnects.
-- **Nav container/node crash:** full launch shutdown → systemd restart; localization + map back in
-  ~4 s.
+- **Bridge crash:** Docker restarts the Pi 5 bridge container; it reconnects.
+- **Nav container/node crash:** full launch shutdown → Docker restarts the Pi 5
+  service container (or systemd restarts the Pi 4 fallback) with a fresh launch.
 - **Reconnect TF skew:** `collision_monitor` runs with `base_shift_correction: False`, so a scan
   stamped just before the rebuilt TF cache no longer throws an uncaught extrapolation exception that
   would SIGABRT the whole container.

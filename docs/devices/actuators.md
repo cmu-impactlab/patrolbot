@@ -40,8 +40,11 @@ stop-box → twist_mux → teleop smoother, so the bridge forwards a single, alr
 
 ### Motors and enabling
 
-Motors are enabled **on the SBC**, inside `patrolbot_server` at startup (ARIA `enableMotors()`),
-not via a ROS service. (The legacy [`rosaria2`](../packages/rosaria2.md) path exposed
+Motors are enabled **on the SBC**, inside `patrolbot_server` at startup (ARIA
+`enableMotors()`). If a nonzero `DRIVE` arrives while ARIA reports the motors
+disabled, the server retries `enableMotors()` with a 500 ms throttle. A latched
+hardware e-stop still cannot be overridden in software. (The legacy
+[`rosaria2`](../packages/rosaria2.md) path exposed
 `enable_motors`/`disable_motors` services, but it is not used.)
 
 ### Calibration

@@ -28,12 +28,18 @@ Declared ROS parameters (override with `--ros-args -p`):
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `max_linear` | `0.4` | m/s at full stick |
-| `max_angular` | `0.8` | rad/s at full stick |
+| `max_linear` | `0.35` | m/s at full stick |
+| `max_angular` | `0.7` | rad/s at full stick |
+| `min_linear` / `max_linear_cap` | `0.05` / `1.5` | limits for A/Y speed trim |
+| `min_angular` / `max_angular_cap` | `0.1` / `3.0` | limits for X/B speed trim |
+| `linear_step` / `angular_step` | `0.05` / `0.1` | per-button speed adjustment |
 | `deadzone` | `0.12` | stick deadzone |
-| `axis_linear` | `1` | left-stick Y |
-| `axis_angular` | `3` | right-stick X |
-| `deadman_button` | `5` | RB; `-1` disables the interlock |
+| `accel_linear` / `accel_angular` | `0.7` / `2.0` | output ramp in m/s² and rad/s² |
+| `rate` | `30.0` | output timer frequency in Hz |
+
+The axis and button map is implemented as constants, not ROS parameters: RB button
+5 is the deadman; left-stick axes 1/0 drive and turn; D-pad axes 7/6 are fallbacks;
+and `JOY_TIMEOUT=0.4` s drops the deadman on input loss.
 
 ## Nav2 — `config/nav2_params.yaml`
 
@@ -97,12 +103,6 @@ Declared ROS parameters (override with `--ros-args -p`):
 
 `docking_server` is configured with `opennav_docking::SimpleChargingDock` (`use_battery_status:
 true`, `staging_x_offset: -0.7`). It is wired but niche — patrol operation does not require it.
-
-!!! danger "Stale trailing comment in `nav2_params.yaml`"
-    The comment at the bottom of the file says bond starvation is avoided by launching with
-    `use_composition:=False`. The live launch uses `use_composition:=True` and sets
-    `bond_timeout: 0.0` in the patched lifecycle managers instead. Trust the launch file. See
-    current launch file.
 
 ## twist_mux (`mux.yaml`)
 

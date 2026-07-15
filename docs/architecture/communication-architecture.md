@@ -73,7 +73,7 @@ line to:
 ### 2. Auxiliary line (`AUX`) — ~4–5 Hz
 
 ```
-AUX:SONAR=x,y;x,y;...|BATT=volt,soc,chargeState,temp|FLAGS=flags,faultFlags,stallValue,motorsEnabled\n
+AUX:SONAR=x,y;x,y;...|BATT=volt,soc,chargeState,temp|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed\n
 ```
 
 Emitted on every 5th nav frame and **deliberately decoupled** from the navigation line. The Pi
@@ -84,12 +84,13 @@ and can never disturb the navigation-critical `/odom` and `/scan` path.
 |---|---|---|
 | `SONAR` | per-reading local X/Y of each sonar return | `/sonar` (`sensor_msgs/PointCloud2`, `base_link`) |
 | `BATT` | voltage, state-of-charge (`-1` if unavailable), charge state, temperature | `/battery` (`sensor_msgs/BatteryState`) |
-| `FLAGS` | flags, fault flags, stall value, motors-enabled | `/diagnostics` (`diagnostic_msgs/DiagnosticArray`) |
+| `FLAGS` | flags, fault flags, stall value, motors-enabled, e-stop state | `/diagnostics` (`diagnostic_msgs/DiagnosticArray`) |
 
 This base has no real state-of-charge sensor, so `/battery.percentage` is `NaN`; only `voltage`
 is meaningful. Stall parsing: the high byte of `stallValue` is the left wheel, the low byte the
-right; bit 0 of each is a reliable motor stall, and only fault flags + motor stalls drive the
-diagnostic level. See [Devices → Controllers](../devices/controllers.md) for the bit layout.
+right; bit 0 of each is a reliable motor stall. Fault flags, motor stalls, motor-enable state,
+and e-stop state drive the diagnostic level. See
+[Devices → Controllers](../devices/controllers.md) for the bit layout.
 
 ### 3. Drive command (`DRIVE`) — on demand
 
@@ -130,12 +131,12 @@ so each Pi disconnect is followed by a fresh `accept()` for the next one.
 ## Self-healing — hardened on both ends
 
 The seam is the system's single fragile point, so both ends detect a silently-dead peer and
-recover without operator action. This logic exists because an abrupt power-off sends **no TCP
-FIN/RST**, so a naive blocking socket would hang forever.
+recover without operator action. This logic also handles silent link loss where no TCP
+FIN/RST arrives and a naive blocking socket would hang forever.
 
 | End | Mechanism | Why |
 |---|---|---|
-| **Pi (client)** | `recv()` read timeout = **3.0 s** + `SO_KEEPALIVE`; reconnect loop sleeps 3 s | The SBC streams at 20 Hz, so 3 s of silence ⇒ dead link ⇒ `socket.timeout` ⇒ break ⇒ reconnect. A blocking `recv()` would otherwise hang forever on an abrupt SBC power-off. |
+| **Pi (client)** | `recv()` read timeout = **3.0 s** + `SO_KEEPALIVE`; reconnect loop sleeps 3 s | The SBC streams at 20 Hz, so 3 s of silence ⇒ dead link ⇒ `socket.timeout` ⇒ break ⇒ reconnect. A blocking `recv()` would otherwise hang forever on silent link loss. |
 | **SBC (server)** | consecutive-`EAGAIN` guard (~3 s) → break & re-`accept()`; `SO_KEEPALIVE` + `TCP_USER_TIMEOUT=5000ms` | A gone Pi left the server looping on a full send buffer for minutes; the guard breaks out and re-accepts promptly. |
 
 Because the `AUX` line rides the **same** TCP stream, it inherits this self-healing — `/sonar`,

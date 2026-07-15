@@ -1,6 +1,6 @@
 ---
 title: Building
-description: Build PatrolBot from source — the Pi colcon workspace, the SBC ARIA server, and the Docker image used for the Pi 5 migration.
+description: Build PatrolBot from source — the Pi colcon workspace, the SBC ARIA server, and the Docker image used by the main Pi 5 runtime.
 ---
 
 # Building
@@ -33,9 +33,10 @@ The workspace has four packages:
 | `patrolbot-launch` | ament_python | mobile base (`twist_mux` + final velocity smoother) |
 | `rosaria2` | ament_cmake | legacy; needs external ARIA and is excluded from Docker |
 
-`patrolbot-bringup.service` now launches the mobile-base package by name:
-`ros2 launch patrolbot-launch bringup.xml`. The old `~/build_backup/patrolbot-launch/` deployment
-target was removed on 2026-06-28 and should not be recreated.
+The Pi 5 `patrolbot-bringup` container launches the mobile-base package by name:
+`ros2 launch patrolbot-launch bringup.xml`. The Pi 4 rollback service uses the same command. The
+old `~/build_backup/patrolbot-launch/` deployment target was removed on 2026-06-28 and should not
+be recreated.
 
 All four packages are versioned by the monorepo. Deployed Pi working trees must not
 contain nested `.git` directories.
@@ -48,9 +49,8 @@ make            # g++ -I/usr/local/Aria/include -lAria -lArNetworking -lpthread
 ```
 
 Produces the `patrolbot_server` binary. No colcon, no ROS. See
-[`patrolbot_hw_server`](../packages/patrolbot_hw_server.md). When the SBC is unavailable, use
-`SKILLS/sbc-architecture.md` in the source workspace as the current truth source for documented
-behavior.
+[`patrolbot_hw_server`](../packages/patrolbot_hw_server.md). Use the live source
+when reachable and `SKILLS/sbc-architecture.md` as the detailed architecture record.
 
 ## Docker image for the Pi 5
 
@@ -68,10 +68,11 @@ rollback and readiness reporting.
 ## Verifying the build
 
 ```bash
-# Pi
-source ~/ros2_ws/install/setup.bash
-ros2 pkg list | grep patrolbot          # bridge, navigation, launch present
-ros2 pkg executables patrolbot_bridge   # bridge_node
+# Main Pi 5 runtime
+cd ~/patrolbot-repo
+./docker/status.sh
+docker exec patrolbot-bridge bash -lc \
+  'source /opt/ros/$ROS_DISTRO/setup.bash && ros2 pkg executables patrolbot_bridge'
 
 # SBC
 ls -l ~/patrolbot_hw_server/patrolbot_server

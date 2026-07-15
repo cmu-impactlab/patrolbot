@@ -6,7 +6,7 @@ description: What you need to run, develop, or document PatrolBot — the Pi and
 # Installation
 
 PatrolBot is a deployed robot, not a package you `pip install`. "Installation" means getting the
-right software onto each of the two machines (and, optionally, onto your laptop for visualization).
+right software onto the SBC and selected Pi runtime (and, optionally, onto your laptop for visualization).
 This page covers prerequisites and access; the build steps are on [Building](building.md) and the
 day-one run-through is on [Quickstart](quickstart.md).
 
@@ -14,13 +14,13 @@ day-one run-through is on [Quickstart](quickstart.md).
 
 | Machine | Needs |
 |---|---|
-| **Raspberry Pi 5 active migration board** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose |
-| **Raspberry Pi 4 rollback path** | Ubuntu, ROS 2 Jazzy, colcon/systemd deployment |
+| **Raspberry Pi 5 main driver** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose |
+| **Raspberry Pi 4 rollback path** | Ubuntu 24.04.4 LTS (`aarch64`), ROS 2 Jazzy, colcon/systemd deployment |
 | **SBC** | C++ toolchain (`g++`, `make`), **ARIA/AriaCoda** at `/usr/local/Aria`, `socat` |
 | **Operator laptop** (optional) | ROS 2 + RViz2 for visualization/commanding |
 
-The robot already has both machines provisioned. You generally do **not** reinstall the OS or ROS;
-you build the PatrolBot packages on top.
+The SBC, main Pi 5, and Pi 4 rollback board are already provisioned. You generally
+do **not** reinstall the OS or ROS; you build/deploy the PatrolBot packages on top.
 
 ## Pi prerequisites
 
@@ -47,10 +47,10 @@ with a plain `Makefile` (no ROS, no colcon). See
 
 | Machine | SSH address | Notes |
 |---|---|---|
-| Pi 5 | `ubuntu@patrolbot-ros2` | Active Docker migration board |
-| Pi 4 | `ubuntu@patrolbot-ros.qatar.cmu.edu` | Rollback board; may be powered off |
-| SBC | `ros@172.20.87.231` | Lab LAN SSH when powered; Pi runtime endpoint is `10.0.0.1:7272` |
-| Both | same subnet | Required for ROS 2 DDS discovery without extra config |
+| Pi 5 | `robot-pi2` / `ubuntu@patrolbot-ros2` | Main Docker driver |
+| Pi 4 | `robot-pi` / `ubuntu@patrolbot-ros.qatar.cmu.edu` | Powered rollback board; isolate its ROS services during Pi 5 operation |
+| SBC | `robot-sbc` / `ros@172.20.87.231` | Hardware server; Pi runtime endpoint is `10.0.0.1:7272` |
+| Pi 5 and operator | same subnet | Required for ROS 2 DDS discovery without extra config |
 
 !!! note "Off-site access"
     ROS 2 discovery (for RViz) uses plain LAN multicast. On the LAN it just works; from home over a

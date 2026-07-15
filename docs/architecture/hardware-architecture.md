@@ -11,9 +11,11 @@ rate. The logical/software view is in [Software Architecture](software-architect
 protocol on the wire between the machines is in
 [Communication Architecture](communication-architecture.md).
 
-!!! info "SBC truth source while down"
-    The SBC is currently down, so this page follows `SKILLS/sbc-architecture.md` from the source
-    workspace for SBC service, port, watchdog, and wire-protocol details.
+!!! info "SBC live verification"
+    On 2026-07-15 the two system units (`patrolbot-wired-ip` and `socat-boot`)
+    plus the user `patrolbot-server` unit were enabled and active. TCP `:7272`
+    was listening and the server emitted a live `ODOM|LASER` stream. Source-level
+    watchdog and diagnostics behavior was also checked against `patrolbot_server.cpp`.
 
 ## Hardware topology
 
@@ -76,8 +78,9 @@ A differential-drive research platform configured by the ARIA parameter file `pa
 
 - **Footprint:** modeled in Nav2 as an octagon from `RobotLength 510 mm`, `RobotWidth 425 mm`, and
   the 0.29 m swing radius.
-- **Drive:** two driven wheels + casters, controlled by the base microcontroller. Top speed is
-  capped in software to **0.26 m/s** linear (RPP `desired_linear_vel`) for indoor patrol.
+- **Drive:** two driven wheels + casters, controlled by the base microcontroller.
+  RPP cruises at **0.22 m/s** and the Nav2 smoother caps autonomous output at
+  **0.26 m/s** for indoor patrol.
 - **Sonar:** the base physically carries **4 rear-facing sonar sensors** (ARIA param file
   `patrolbot-sh.p` defines a generic 16-unit ring, but 12 positions are unpopulated and always
   report max-range 5000 mm — those are filtered out in `patrolbot_server.cpp` so `/sonar` carries
@@ -116,9 +119,9 @@ Details: [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 
 ### Raspberry Pi
 
-The active migration computer is a Raspberry Pi 5 (`robot-pi2`, hostname
-`patrolbot-rpi5`, Ubuntu 24.04.4 LTS, aarch64) running the Dockerized ROS 2 Jazzy
-stack. Hardware-connected acceptance remains pending. Earlier Pi 4 constraints still
+The main driver is a Raspberry Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`,
+Ubuntu 24.04.4 LTS, aarch64) running the Dockerized ROS 2 Jazzy stack. The Pi 4
+is powered as the isolated bare-metal rollback board. Earlier Pi 4 constraints still
 explain several conservative software choices:
 
 - **`ulimit -n = 1024`** — forces Nav2 composition into one container (see

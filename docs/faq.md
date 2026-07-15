@@ -36,9 +36,10 @@ Short answers with links to the full story.
   [Debugging](development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz).
 
 **I changed `patrolbot-launch` and nothing happened.**
-: Restart `patrolbot-bringup.service` after editing existing launch/param/script files. Rebuild only
-  when adding files or changing package metadata:
-  `colcon build --packages-select patrolbot-launch && systemctl --user restart patrolbot-bringup.service`.
+: On the main Pi 5, restart `patrolbot-bringup` after editing an existing
+  bind-mounted launch/param/script file. Rebuild the image when adding files or
+  changing package metadata. The Pi 4 rollback uses
+  `colcon build --packages-select patrolbot-launch` plus a systemd restart.
   The `~/build_backup/` path referenced in older notes was removed — the service now uses
   `ros2 launch patrolbot-launch bringup.xml`. See [Updates](deployment/updates.md).
 
@@ -58,15 +59,16 @@ Short answers with links to the full story.
   [Debugging](development/debugging.md).
 
 **Nav2 restarted itself.**
-: Expected if `nav2_container` died — the launch tears down and systemd restarts a fresh stack (a
-  respawn would come back empty). See
+: Expected if `nav2_container` died — the launch tears down and Docker restarts
+  a fresh Pi 5 service container (a component-container respawn would come back empty). See
   [Software Architecture](architecture/software-architecture.md#crash-handling-tear-down-dont-respawn).
 
 ## Operations
 
 **How do I see what's going on?**
-: `ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status` (health), `... topics` (rates), `... scan` (laser),
-  `... nav` (Nav2 logs). See [Debugging](development/debugging.md).
+: `ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'`
+  checks readiness; `docker logs patrolbot-navigation` and `docker logs
+  patrolbot-bridge` show the main runtime. See [Debugging](development/debugging.md).
 
 **How long until the robot is ready after boot?**
 : Map + pose estimate in a few seconds; full navigation goals are expected around ~70 s after the
@@ -77,7 +79,8 @@ Short answers with links to the full story.
 : Yes — autonomy continues; a running goal isn't interrupted. The joystick is the local override.
 
 **Why is the robot capped at 0.26 m/s?**
-: An indoor-patrol safety choice (RPP `desired_linear_vel`), not a hardware limit. Raising it means
+: An indoor-patrol safety choice in the Nav2 smoother; RPP's desired cruise speed
+  is 0.22 m/s. It is not a hardware limit. Raising it means
   re-tuning the lookahead distance and accel limits and re-checking the
   `base_shift_correction: False` assumption. See
   [Actuators](devices/actuators.md#scalability--tuning-notes).
@@ -104,6 +107,6 @@ Short answers with links to the full story.
   See [rosaria2](packages/rosaria2.md).
 
 **What's unverified in this documentation?**
-: The SBC is currently down, so SBC behavior is documented from the project
-  `SKILLS/sbc-architecture.md` truth source instead of fresh live SSH. See
-  [Known Gaps](known-gaps.md).
+: The SBC and both Pis were live-audited on 2026-07-15. The remaining gap is the
+  Pi 5 static IPv4 configuration on the dedicated Ethernet link, followed by a
+  supervised motion test. See [Known Gaps](known-gaps.md).

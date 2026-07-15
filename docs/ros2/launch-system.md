@@ -5,18 +5,19 @@ description: How PatrolBot starts — the three Pi launch entry points, the patc
 
 # Launch System
 
-PatrolBot's Pi stack is brought up by **three launch entry points**, one per systemd service.
+PatrolBot's Pi stack is brought up by **three entry points**, one per Pi 5 Compose
+service (and one per Pi 4 rollback unit).
 This page explains what each launches, the non-obvious remaps that wire the `cmd_vel` chain
 together, and the patched Nav2 launch files that make the large map work. Boot ordering is on
 [Execution Flow](../architecture/execution-flow.md); per-node detail on [Nodes](nodes.md).
 
 ## The three entry points
 
-| Launch | Service | Package | Brings up |
+| Launch | Pi 5 container | Package | Brings up |
 |---|---|---|---|
-| `bringup.xml` | `patrolbot-bringup.service` | `patrolbot-launch` | mobile base: `twist_mux` + `teleop_velocity_smoother` + `lifecycle_mgr.py` |
-| `bridge_node` (run, not launch) | `patrolbot-bridge.service` | `patrolbot_bridge` | the TCP bridge |
-| `bringup.launch.py` | `patrolbot-navigation.service` | `patrolbot_navigation` | Nav2 (composed) + `joy_node` + `p3dxJoyTeleop` + `laser_static_tf` |
+| `bringup.xml` | `patrolbot-bringup` | `patrolbot-launch` | mobile base: `twist_mux` + `teleop_velocity_smoother` + `lifecycle_mgr.py` |
+| `bridge_node` (run, not launch) | `patrolbot-bridge` | `patrolbot_bridge` | the TCP bridge |
+| `bringup.launch.py` | `patrolbot-navigation` | `patrolbot_navigation` | Nav2 (composed) + `joy_node` + teleop + safety watchdog + `laser_static_tf` |
 
 ## Mobile-base launch (`patrolbot-launch/launch/bringup.xml`) { #mobile-base-launch }
 
@@ -45,8 +46,9 @@ forwards to the SBC. `lifecycle_mgr.py` then `configure`s + `activate`s the smoo
 publishes.
 
 !!! success "Package-name launch"
-    `patrolbot-bringup.service` launches `ros2 launch patrolbot-launch bringup.xml`. Older
-    `build_backup/` notes are stale.
+    The Pi 5 `patrolbot-bringup` container launches `ros2 launch
+    patrolbot-launch bringup.xml`. The Pi 4 rollback service uses the same
+    package-name command. Older `build_backup/` notes are stale.
 
 ## Navigation launch (`patrolbot_navigation/launch/bringup.launch.py`)
 
@@ -55,8 +57,9 @@ This is a hand-built launch — it deliberately does **not** call `nav2_bringup`
 
 1. Sets env vars (`ROS_DOMAIN_ID=0`, `MAGICK_THREAD_LIMIT=1`, `OMP_NUM_THREADS=1`).
 2. Starts one `nav2_container` (`component_container_isolated`) with `autostart: True`.
-3. Registers an `OnProcessExit` handler on the container: if it dies, emit launch `Shutdown` (so
-   systemd restarts a fresh, fully-populated stack — a respawned container comes back empty).
+3. Registers an `OnProcessExit` handler on the component container: if it dies,
+   emit launch `Shutdown` so Docker restarts a fresh, fully populated Pi 5
+   service container. A component-container respawn would come back empty.
 4. Includes the patched **localization** launch immediately.
 5. Includes the patched **navigation** launch after a 20 s `TimerAction`.
 6. Starts `joy_node`, `p3dxJoyTeleop` (remap `/cmd_vel_joy → /input/joy`),
@@ -103,7 +106,7 @@ Present in the `patrolbot-launch` package but not part of the active stack:
 |---|---|---|
 | `rosaria2.xml` | start the legacy `rosaria2_debug` driver | not included ("NOT NEEDED IF PATROLBOT LIDAR SERVER IS RAN") |
 | `joy.xml` | a standalone joy teleop | not included (joy is started by the nav launch) |
-| `teleop-key*.xml`, `readlidar.py`, editor temp files (`*~`, `#joy.xml#`) | dev experiments | [legacy / dead](../internals/legacy-components.md) |
+| `teleop-key*.xml`, `readlidar.py`, `rosaria2.py`, `launch_teleop_keyboard.bash` | dev experiments | [legacy / dead](../internals/legacy-components.md) |
 
 ## Manual launch (development)
 

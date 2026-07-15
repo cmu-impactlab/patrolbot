@@ -57,14 +57,15 @@ publishes TF; the main thread spins callbacks.
   → reconnects every 3 s.
 - *SBC closes/refused:* logs and retries every 3 s.
 - *Malformed line:* swallowed; the affected message is skipped, the node keeps running.
-- *Process crash:* `patrolbot-bridge.service` (`Restart=always`) restarts it.
+- *Process crash:* Docker restarts the Pi 5 service container; the Pi 4 rollback
+  unit uses `Restart=always`.
 
 **Example invocation**
 
 ```bash
 ros2 run patrolbot_bridge bridge_node
-# or via systemd:
-systemctl --user status patrolbot-bridge.service
+# Pi 5 runtime:
+docker logs patrolbot-bridge
 ```
 
 ---
@@ -136,16 +137,17 @@ nothing to act on; navigation is unaffected.
 |---|---|
 | **Host** | Raspberry Pi |
 | **Executable** | `patrolbot_joy_teleop.py` (package `patrolbot_navigation`), node name `p3dxJoyTeleop` |
-| **Purpose** | Converts gamepad sticks (Xinput) into a `Twist`, publishing **only while commanded**, so manual input overrides nav on demand without ever blocking it when idle. |
+| **Purpose** | Converts the Xinput gamepad into an acceleration-ramped `Twist` with an RB deadman and joy-loss watchdog. |
 
 **Subscribers:** `/joy` (`sensor_msgs/Joy`).
 **Publishers:** `/cmd_vel_joy` → remapped to `/input/joy` by the launch (twist_mux priority 8).
-**Parameters:** `max_linear` (0.4 m/s), `max_angular` (0.8 rad/s), `deadzone` (0.12),
-`axis_linear` (1 = left-stick Y), `axis_angular` (3 = right-stick X), `deadman_button` (5 = RB;
-`-1` disables the interlock).
-**Controls:** hold **RB** (deadman) + left-stick Y to drive, right-stick X to turn.
-**Failure mode:** on release it emits a single zero `Twist`, then stays silent so twist_mux times
-the joy input out (1 s) and navigation resumes.
+**Parameters:** `max_linear` (0.35 m/s), `max_angular` (0.7 rad/s), `deadzone`
+(0.12), acceleration ramps, speed-trim limits/steps, and output `rate` (30 Hz).
+**Controls:** hold **RB** (button 5); left-stick Y drives and left-stick X turns.
+D-pad axes 7/6 are fallbacks; A/Y and X/B trim the speed limits.
+**Failure mode:** if `/joy` is stale for 0.4 s, or RB is released, the target is
+zeroed and the command ramps to a stop. One final zero is published before silence,
+then twist_mux times the joy input out and navigation resumes.
 
 ### laser_static_tf
 
@@ -201,9 +203,10 @@ managers patched with `bond_timeout: 0.0`.
 
 **Lifecycle:** see [State Machines](../internals/state-machines.md) for the lifecycle transition
 diagram. **Failure mode:** because all share one process, an uncaught exception in any one
-SIGABRTs the container; the launch's `OnProcessExit` handler then tears the launch down so systemd
-restarts a fresh, fully-populated stack (a respawned container would come back empty). This is the
-direct reason `collision_monitor` runs with `base_shift_correction: False`. See
+SIGABRTs the container; the launch's `OnProcessExit` handler then tears the launch
+down so Docker restarts a fresh, fully populated Pi 5 service container (the Pi 4
+rollback uses systemd). A respawned component container would come back empty. This
+is the direct reason `collision_monitor` runs with `base_shift_correction: False`. See
 [Software Architecture](../architecture/software-architecture.md#crash-handling-tear-down-dont-respawn).
 
 ---

@@ -13,13 +13,13 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 
 | Topic | Type | Publisher | Subscriber(s) | Rate |
 |---|---|---|---|---|
-| `/odom` | `nav_msgs/Odometry` | `patrolbot_bridge` | AMCL, bt_navigator, controller_server | ~20 Hz |
-| `/scan` | `sensor_msgs/LaserScan` | `patrolbot_bridge` | AMCL, costmaps, collision_monitor | ~20 Hz |
+| `/odom` | `nav_msgs/Odometry` | `patrolbot_bridge` | AMCL, bt_navigator, controller_server | ~20–25 Hz (25 observed live) |
+| `/scan` | `sensor_msgs/LaserScan` | `patrolbot_bridge` | AMCL, costmaps, collision_monitor | ~20–25 Hz |
 | `/sonar` | `sensor_msgs/PointCloud2` | `patrolbot_bridge` (from `AUX`) | RViz / obstacle viz | ~5 Hz |
 | `/battery` | `sensor_msgs/BatteryState` | `patrolbot_bridge` (from `AUX`) | monitoring | ~5 Hz |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | `patrolbot_bridge` (from `AUX`) | `rqt_robot_monitor` | ~5 Hz |
 | `/joy` | `sensor_msgs/Joy` | `joy_node` | `p3dxJoyTeleop` | event-driven |
-| `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `p3dxJoyTeleop` | `twist_mux` (prio 8) | only while commanded |
+| `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `p3dxJoyTeleop` | `twist_mux` (prio 8) | 30 Hz while RB held or ramping to stop; one final zero |
 | `cmd_vel` | `geometry_msgs/Twist` | `controller_server` (RPP) | `velocity_smoother` | 5 Hz |
 | `cmd_vel_smoothed` | `geometry_msgs/Twist` | `velocity_smoother` | `collision_monitor` | 20 Hz |
 | `input/navi` | `geometry_msgs/Twist` | `collision_monitor` | `twist_mux` (prio 5) | 5 Hz |
@@ -83,7 +83,8 @@ not in the production stack. Running it alongside the bridge causes TF and `cmd_
 ## Inspecting topics live
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics   # list + Hz for /odom /scan /cmd_vel /map
-ros2 topic hz /scan
-ros2 topic echo /diagnostics
+ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic hz /scan'"
+ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 topic echo /diagnostics --once'"
 ```

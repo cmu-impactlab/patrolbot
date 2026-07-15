@@ -1,6 +1,6 @@
 ---
 title: Execution Flow
-description: What runs when — from boot through steady-state operation — across the SBC and the Pi, including the systemd service ordering and Nav2's staged activation.
+description: What runs when — from boot through steady-state operation — across the SBC and main Pi 5, including Docker restart behavior and Nav2's staged activation.
 ---
 
 # Execution Flow
@@ -10,24 +10,24 @@ and how control settles into steady state. The byte-level data view is on
 [Data Flow](data-flow.md); a finer-grained boot timeline with timings is on
 [Startup Sequence](../internals/startup-sequence.md).
 
-## Boot — both machines autostart
+## Boot — the SBC and Pi 5 autostart
 
-Neither machine needs an operator to start the robot. Both bring themselves up at boot via
-systemd, with user-service **linger** enabled so the services start without an interactive login.
+Neither runtime needs an operator to launch its software. The SBC uses systemd
+(with user-service **linger**), while Docker restores the Pi 5 Compose containers.
 
 ```mermaid
 flowchart TB
     subgraph SBCBOOT["SBC boot"]
+        S0["patrolbot-wired-ip.service (system)\nkeep enp2s5 at 10.0.0.1/24"]
         S1["socat-boot.service (system)\n/dev/ttyS0 → TCP:7000"]
         S2["patrolbot-server.service (user)\nARIA connect + listen :7272"]
         S1 --> S2
     end
 
-    subgraph PIBOOT["Pi boot — systemd user services"]
-        P1["patrolbot-bringup.service\ntwist_mux + velocity smoother"]
-        P2["patrolbot-bridge.service\nbridge_node (After=bringup)"]
-        P3["patrolbot-navigation.service\nNav2 (After=bringup, bridge)"]
-        P1 --> P2 --> P3
+    subgraph PIBOOT["Pi 5 boot — Docker Compose"]
+        P1["patrolbot-bringup container\ntwist_mux + velocity smoother"]
+        P2["patrolbot-bridge container\nbridge_node"]
+        P3["patrolbot-navigation container\nNav2"]
     end
 
     S2 -. "TCP :7272" .-> P2
@@ -37,6 +37,7 @@ flowchart TB
 
 | Service | Type | Starts | Purpose |
 |---|---|---|---|
+| `patrolbot-wired-ip.service` | system | at boot | Keeps `10.0.0.1/24` applied to `enp2s5`, including after carrier loss |
 | `socat-boot.service` | system | at boot | Holds `/dev/ttyS0` open and bridges it to TCP:7000 so ARIA reaches the base over a socket |
 | `patrolbot-server.service` | user (linger) | at boot | Runs `patrolbot_server -rh 127.0.0.1 -rrtp 7000` — ARIA connects to base (via socat) + laser, serves :7272 |
 
@@ -44,24 +45,26 @@ The `-rh 127.0.0.1 -rrtp 7000` flags route ARIA through the socat bridge, which 
 the otherwise-fatal serial conflict (two processes wanting `/dev/ttyS0`). See
 [`patrolbot_hw_server`](../packages/patrolbot_hw_server.md).
 
-### Pi services
+### Pi 5 containers
 
-Three ordered systemd **user** services (`~/.config/systemd/user/`), each `Restart=always`:
+Three Compose services share one immutable image and use `restart: unless-stopped`:
 
-| Service | `After` / `Wants` | `ExecStart` (sourced under `ros2_ws/install/setup.bash`) | RestartSec |
-|---|---|---|---|
-| `patrolbot-bringup.service` | `network-online.target` | `ros2 launch patrolbot-launch bringup.xml` | 5 |
-| `patrolbot-bridge.service` | After/Wants bringup | `ros2 run patrolbot_bridge bridge_node` | 3 |
-| `patrolbot-navigation.service` | After bringup + bridge | `ros2 launch patrolbot_navigation bringup.launch.py` | 5 |
+| Container | Command | Restart policy |
+|---|---|---|
+| `patrolbot-bringup` | `ros2 launch patrolbot-launch bringup.xml` | `unless-stopped` |
+| `patrolbot-bridge` | `ros2 run patrolbot_bridge bridge_node` | `unless-stopped` |
+| `patrolbot-navigation` | `ros2 launch patrolbot_navigation bringup.launch.py` | `unless-stopped` |
+
+The Pi 4 retains equivalent systemd user services as the rollback deployment. They
+must be stopped while Pi 5 is active because both boards share ROS domain 0.
 
 !!! success "Mobile-base launch target"
-    `patrolbot-bringup.service` launches the installed package by name. The old
-    `~/build_backup/patrolbot-launch/` target was removed on 2026-06-28.
+    The Pi 5 bringup container and Pi 4 rollback service both launch the installed
+    package by name. The old `~/build_backup/patrolbot-launch/` target was removed.
 
-!!! info "This supersedes older 'manual launch' notes"
-    Earlier written notes describe the Pi stack as started by hand after SSH. The live system uses
-    the three autostarting user services above; the manual commands still work and are the documented
-    fallback. Tracked in [Known Gaps](../known-gaps.md).
+!!! info "This supersedes older Pi 4 runtime notes"
+    The main Pi 5 runtime is Docker Compose. The systemd user units remain only for
+    deliberate Pi 4 rollback; the manual commands below still work for development.
 
 ## Manual equivalent
 
@@ -80,7 +83,7 @@ ros2 launch patrolbot_navigation bringup.launch.py
 
 ## Nav2 staged activation
 
-`patrolbot-navigation.service` does not bring the whole stack up at once. The launch stages it:
+`bringup.launch.py` does not bring the whole stack up at once; it stages activation:
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +98,7 @@ sequenceDiagram
     Note over Launch: TimerAction waits 20 s
     Launch->>Nav: load composable nodes (after 20 s)
     Nav-->>Nav: costmaps inflate large map (goal-ready after staged activation)
-    Note over Cont: if container exits → EmitEvent(Shutdown) → systemd restarts launch
+    Note over Cont: if nav2_container exits → launch shuts down → Docker restarts service container
 ```
 
 The staging matters operationally:
@@ -136,11 +139,10 @@ smoothers **20 Hz**, bridge TF **50 Hz**.
 
 | Event | What happens |
 |---|---|
-| Bridge crashes | `patrolbot-bridge.service` restarts it (RestartSec 3); it reconnects to :7272 |
-| A Nav2 node or the container dies | `OnProcessExit` → launch `Shutdown` → `patrolbot-navigation.service` restarts the whole launch → localization back in ~4 s |
-| SBC drops off and returns | Bridge reconnects every 3 s; Nav2 stays active (`bond_timeout: 0.0`); data resumes automatically |
+| Bridge process crashes | The `patrolbot-bridge` container exits/restarts and reconnects to :7272 |
+| A Nav2 node or `nav2_container` dies | `OnProcessExit` → launch `Shutdown` → Docker restarts `patrolbot-navigation` → fresh launch |
+| SBC link drops and returns | Bridge reconnects every 3 s; Nav2 stays active (`bond_timeout: 0.0`); data resumes automatically |
 | **Physical SBC reboot** | ARIA odometry resets to 0,0,0; AMCL pose is now wrong → operator must re-set with *2D Pose Estimate* |
-| Pi reboot | All three user services autostart (linger enabled) |
+| Pi 5 reboot | Docker restarts all three Compose containers (`unless-stopped`) |
 
-See [Debugging](../development/debugging.md) for how to observe each of these with
-`patrolbot-logs.sh`.
+See [Debugging](../development/debugging.md) for Pi 5 status and container-log commands.

@@ -15,17 +15,18 @@ side of the same controller is on [Actuators](actuators.md).
 |---|---|
 | **Hardware** | Pioneer base microcontroller |
 | **Host machine** | **SBC** (read by ARIA under `robot.lock()`) |
-| **Connection** | base bus → ARIA → `AUX:FLAGS=flags,faultFlags,stallValue,motorsEnabled` |
+| **Connection** | base bus → ARIA → `AUX:FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed` |
 | **ROS topic** | `/diagnostics` (`diagnostic_msgs/DiagnosticArray`) |
 | **Update rate** | ~4–5 Hz |
 | **Diagnostic name / hardware_id** | `patrolbot/base` / `pioneer_patrolbot` |
 
 ## What the bridge reports
 
-The bridge decodes the four `FLAGS` integers and publishes a single `DiagnosticStatus`:
+The bridge decodes the five `FLAGS` integers and publishes a single `DiagnosticStatus`:
 
 | KeyValue | Source | Meaning |
 |---|---|---|
+| `estop_pressed` | `isEStopPressed()` | whether the hardware e-stop is latched |
 | `motors_enabled` | `areMotorsEnabled()` | are the drive motors on |
 | `flags` | `getFlags()` | raw base flags |
 | `fault_flags` | `getFaultFlags()` | raw fault flags |
@@ -39,12 +40,16 @@ The bridge decodes the four `FLAGS` integers and publishes a single `DiagnosticS
 
 ```mermaid
 flowchart TB
-    A["fault_flags != 0\nOR left_motor_stall\nOR right_motor_stall"] -->|yes| ERR["level = ERROR\n'motor stall / fault'"]
-    A -->|no| OK["level = OK\n'OK'"]
+    E["eStopPressed"] -->|yes| ESTOP["ERROR: E-STOP ENGAGED"]
+    E -->|no| A["fault flags or motor stall?"]
+    A -->|yes| ERR["ERROR: motor stall / fault"]
+    A -->|no| M["motors enabled?"]
+    M -->|no| WARN["WARN: motors disabled"]
+    M -->|yes| OK["OK"]
 ```
 
-The alarm level is driven **only** by well-defined signals: fault flags and motor stalls. The
-bumper bit-fields are reported raw but do **not** affect the level.
+The alarm level is driven by e-stop state, fault flags, motor stalls, and
+motor-enable state. The bumper bit-fields are reported raw but do **not** affect the level.
 
 !!! note "Why bumpers are reference-only"
     The ARIA stall value packs motor-stall bits (bit 0 of each byte, reliable) together with bits
@@ -66,10 +71,11 @@ stall_value (16-bit):
 
 | Condition | Symptom | Handling |
 |---|---|---|
+| Hardware e-stop latched | `/diagnostics` level ERROR, `estop_pressed = True` | release the physical red e-stop; software cannot override it |
 | Motor stall | `/diagnostics` level ERROR, `left/right_motor_stall = True` | base also halts; clear the obstruction, re-enable if needed |
 | Base fault | `/diagnostics` level ERROR, `fault_flags != 0` | inspect on `rqt_robot_monitor` |
 | Malformed `FLAGS` section | no `/diagnostics` update that cycle | dropped in isolation; nav data unaffected |
-| Motors disabled unexpectedly | `motors_enabled = False` | re-enable on the SBC (ARIA), not via ROS |
+| Motors disabled unexpectedly | level WARN, `motors_enabled = False` | nonzero `DRIVE` triggers throttled SBC-side `enableMotors()`; inspect e-stop if it stays disabled |
 
 ## Where the controller setpoints come from
 
@@ -78,6 +84,6 @@ The *commands* this controller executes are produced entirely on the Pi by the
 forwarded as `DRIVE` lines (see [Actuators](actuators.md)). The base controller is otherwise a
 black box configured by the ARIA parameter file `patrolbot-sh.p`.
 
-!!! warning "SBC-side detail is a snapshot"
-    The exact ARIA calls and the `patrolbot_server` decode of these fields are documented from the
-    last sync, not a live read. See [Known Gaps](../known-gaps.md).
+!!! info "SBC-side detail live-audited"
+    The ARIA calls and deployed `patrolbot_server.cpp` were checked over live SSH
+    on 2026-07-15. See [Known Gaps](../known-gaps.md) for the remaining Pi link issue.

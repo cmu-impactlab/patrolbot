@@ -1,6 +1,6 @@
 ---
 title: Startup Sequence
-description: The detailed boot-to-ready timeline for PatrolBot — SBC services, the three Pi services, and Nav2's staged composable-node activation with real timings.
+description: The detailed boot-to-ready timeline for PatrolBot — SBC services, the three Pi 5 containers, and Nav2's staged composable-node activation.
 ---
 
 # Startup Sequence
@@ -19,16 +19,17 @@ sequenceDiagram
     participant Nav as Pi: nav2_container
 
     Note over SBC: power on
+    SBC->>SBC: patrolbot-wired-ip.service keeps enp2s5 at 10.0.0.1/24
     SBC->>SBC: socat-boot.service opens /dev/ttyS0 → TCP:7000
     SBC->>SBC: patrolbot-server.service: ARIA connect base+laser, enable motors+sonar, listen :7272
 
     Note over Bs: Pi power on
-    Bs->>Bs: patrolbot-bringup.service: twist_mux + teleop_velocity_smoother
+    Bs->>Bs: patrolbot-bringup container: twist_mux + teleop_velocity_smoother
     Bs->>Bs: lifecycle_mgr.py: configure → activate smoother
-    Br->>SBC: patrolbot-bridge.service connects :7272
+    Br->>SBC: patrolbot-bridge container connects :7272
     SBC-->>Br: ODOM|LASER @20 Hz → /odom /scan + TF (50 Hz)
 
-    Nav->>Nav: patrolbot-navigation.service starts nav2_container
+    Nav->>Nav: patrolbot-navigation container starts nav2_container
     Nav->>Nav: localization loads (map_server + amcl) — map + map→odom in a few seconds
     Note over Nav: TimerAction waits 20 s
     Nav->>Nav: navigation loads (costmaps, planner, controller, ...)
@@ -39,27 +40,29 @@ sequenceDiagram
 
 ### Stage 0 — SBC (before/independent of the Pi)
 
-1. `socat-boot.service` (system) opens `/dev/ttyS0` and exposes it as `TCP:7000`.
-2. `patrolbot-server.service` (user) runs `patrolbot_server -rh 127.0.0.1 -rrtp 7000`: ARIA
+1. `patrolbot-wired-ip.service` (system) keeps `10.0.0.1/24` applied to `enp2s5`.
+2. `socat-boot.service` (system) opens `/dev/ttyS0` and exposes it as `TCP:7000`.
+3. `patrolbot-server.service` (user) runs `patrolbot_server -rh 127.0.0.1 -rrtp 7000`: ARIA
    connects to the base (via socat) and the SICK laser, enables motors and sonar, and listens on
    `:7272`.
 
-If the SBC isn't up when the Pi starts, nothing breaks — the bridge just retries every 3 s.
+If the SBC endpoint is temporarily unavailable when the Pi starts, nothing breaks — the bridge
+just retries every 3 s.
 
-### Stage 1 — Pi mobile base (`patrolbot-bringup.service`)
+### Stage 1 — Pi mobile base (`patrolbot-bringup` container)
 
 1. `mobile_base.xml` starts a `component_container` and `twist_mux` (`cmd_vel_mux`).
 2. `smoother.xml` starts `teleop_velocity_smoother` (with the cmd_vel remaps) and `lifecycle_mgr.py`.
 3. `lifecycle_mgr.py` calls `configure` then `activate` on the smoother. **Until this completes,
    `/cmd_vel` is not published** and navigation output can't reach the bridge.
 
-### Stage 2 — Pi bridge (`patrolbot-bridge.service`)
+### Stage 2 — Pi bridge (`patrolbot-bridge` container)
 
 1. Connects to the SBC at `:7272`.
 2. Begins publishing `/odom`, `/scan` (~20 Hz), `/sonar`/`/battery`/`/diagnostics` (~5 Hz), and TF
    `odom→base_link` (50 Hz).
 
-### Stage 3 — Pi Nav2 (`patrolbot-navigation.service`)
+### Stage 3 — Pi Nav2 (`patrolbot-navigation` container)
 
 1. Sets env (`ROS_DOMAIN_ID=0`, `MAGICK_THREAD_LIMIT=1`, `OMP_NUM_THREADS=1`).
 2. Starts `nav2_container` and registers the `OnProcessExit → Shutdown` handler.
@@ -70,7 +73,7 @@ If the SBC isn't up when the Pi starts, nothing breaks — the bridge just retri
 5. Navigation loads — costmaps, planner, controller, behaviors, collision monitor. After the
    boot-time network-wait fix, *Nav2 Goal* is expected around ~70 s from power-on; older cold-boot
    measurements were around ~3 min. *Nav2 Goal* becomes available here.
-6. `joy_node`, `p3dxJoyTeleop`, and `laser_static_tf` also start under this service.
+6. `joy_node`, `p3dxJoyTeleop`, the safety watchdog, and `laser_static_tf` also start in this container.
 
 ## Readiness checkpoints
 

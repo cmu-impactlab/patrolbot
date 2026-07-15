@@ -48,10 +48,9 @@ flowchart TB
 
 Two facts about this workspace routinely surprise people:
 
-1. **`patrolbot-launch` now runs by package name.** The service launches
-   `ros2 launch patrolbot-launch bringup.xml`; old notes about `build_backup/` are stale. Existing
-   symlink-install launch/param edits apply after restarting `patrolbot-bringup.service`; adding new
-   files still needs a build.
+1. **`patrolbot-launch` runs by package name.** The Pi 5 container and Pi 4 rollback service launch
+   `ros2 launch patrolbot-launch bringup.xml`; old notes about `build_backup/` are stale. The main
+   Pi 5 runtime comes from the immutable Docker image, so source changes require a rebuild/redeploy.
 2. **All package source belongs to this monorepo.** Deployed package trees must not
    retain historical nested `.git` directories.
 
@@ -63,8 +62,10 @@ ROS-interface tables there cross-reference the [ROS 2 reference](../ros2/nodes.m
 
 ## Metadata caveat
 
-Several packages still carry scaffold-default manifest metadata (`maintainer: ubuntu@todo.todo`,
-`description: TODO`, `license: TODO` in `patrolbot_bridge` and `patrolbot-launch`; `joao@todo.todo`
-in `rosaria2`). This is cosmetic but worth cleaning up before any public release — see
+Several packages still carry scaffold-default metadata. `patrolbot_bridge` and
+`patrolbot-launch` use `ubuntu@todo.todo`/TODO fields in `setup.py` (their
+`package.xml` license is MIT), while `rosaria2/package.xml` still uses
+`joao@todo.todo` and TODO description/license values. Some runtime dependencies
+are also absent from package manifests. See
 [Release Process](../contributing/release-process.md) and
 [Known Gaps](../known-gaps.md#code-hygiene).

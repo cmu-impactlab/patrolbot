@@ -20,17 +20,17 @@ deployed copies; they are not the canonical editing location.
 │   │   └── rosaria2/                 # ament_cmake  — legacy
 │   ├── build/  install/  log/        # colcon artifacts — NOT source of truth
 ├── ARIA/                             # AriaCoda library (libAria.so, headers, params)
-├── .config/systemd/user/             # the three Pi services
-├── docker/                           # Docker Compose migration stack on Pi 5
-├── patrolbot-logs.sh                 # live log/diagnostics helper
-├── patrolbot-sh.p                    # ARIA hardware profile (PatrolBot-SH)
-└── yousef/                           # dev tools (mock_sbc_server.py, test_laser.py)
+├── .config/systemd/user/             # Pi 4 rollback units (not Pi 5 runtime)
+├── patrolbot-repo/                   # Pi 5 deployed source + Compose runtime
+├── patrolbot-logs.sh                 # Pi 4 rollback diagnostics helper
+└── patrolbot-sh.p                    # ARIA hardware profile (PatrolBot-SH)
 ```
 
 ### Filesystem traps
 
 !!! success "1. `build_backup/` is no longer a runtime target"
-    `patrolbot-bringup.service` now launches `ros2 launch patrolbot-launch bringup.xml`. Older notes
+    The Pi 5 container and Pi 4 rollback service launch `ros2 launch
+    patrolbot-launch bringup.xml`. Older notes
     that say `~/build_backup/patrolbot-launch/` is the deployed mobile-base copy are stale.
 
 !!! warning "2. `build/`, `install/`, `log/` are not source"
@@ -42,8 +42,8 @@ deployed copies; they are not the canonical editing location.
 
 ## SBC filesystem (`/home/ros`)
 
-The SBC is currently documented from `SKILLS/sbc-architecture.md` in the source workspace when live
-SSH is unavailable.
+The SBC filesystem and services were re-verified over live SSH on 2026-07-15;
+`SKILLS/sbc-architecture.md` remains the detailed architecture record.
 
 ```
 /home/ros/
@@ -52,7 +52,7 @@ SSH is unavailable.
 │   ├── patrolbot_server              # compiled binary
 │   └── Makefile
 └── .config/systemd/user/
-    └── patrolbot-server.service       # + system-level socat-boot.service
+    └── patrolbot-server.service       # system units: socat-boot + patrolbot-wired-ip
 ```
 
 The SBC has **no colcon workspace and no ROS 2** — just the Makefile project. See
@@ -64,7 +64,7 @@ The SBC has **no colcon workspace and no ROS 2** — just the Makefile project. 
 patrolbot/  (github.com/cmu-impactlab/patrolbot)
 ├── docs/                 # this site's Markdown
 ├── ros2_ws/src/          # Pi ROS 2 package source
-├── docker/               # Pi 5 image, Compose, health and status tools
+├── docker/               # main Pi 5 image, Compose, health and status tools
 ├── mkdocs.yml
 ├── requirements.txt
 └── .github/workflows/deploy.yml

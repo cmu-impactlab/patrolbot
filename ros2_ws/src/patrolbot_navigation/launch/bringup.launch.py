@@ -18,7 +18,7 @@ def generate_launch_description():
 
     # We do NOT use nav2_bringup's bringup_launch.py because its lifecycle
     # managers hard-code bond_timeout (4.0s) and never read our params file.
-    # Inflating the large 3690x3132 map starves map_server's bond heartbeat
+    # Inflating the large 3192x2205 map starves map_server's bond heartbeat
     # past 4s -> lifecycle_manager aborts -> AMCL never activates -> no
     # map->odom transform -> map is blank in RViz.
     #
@@ -86,12 +86,12 @@ def generate_launch_description():
         # Single composable container hosting all Nav2 nodes.
         # We do NOT respawn the container: a respawned container comes back empty
         # (LoadComposableNodes does not re-run). Instead, if it dies we shut the
-        # whole launch down (handler below) so systemd Restart=always brings up a
-        # fresh, fully-populated stack.
+        # whole launch down (handler below) so Docker on Pi 5, or systemd on the
+        # Pi 4 rollback, brings up a fresh, fully-populated stack.
         container,
 
         # If the container process exits for any reason, tear down the launch so
-        # systemd restarts the complete Nav2 stack cleanly.
+        # the deployment supervisor restarts the complete Nav2 stack cleanly.
         RegisterEventHandler(
             OnProcessExit(
                 target_action=container,

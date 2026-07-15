@@ -222,7 +222,7 @@ global_costmap:
       # Wait (effectively) forever for the base_link->map TF during activation
       # instead of aborting bringup — see the long note in local_costmap above.
       # global needs map->odom (AMCL) + odom->base_link (bridge); both are absent
-      # while the SBC is down, so without this the stack permanently gives up.
+      # while the hardware link is silent, so without this the stack permanently gives up.
       initial_transform_timeout: 1000000.0
       global_frame: "map"
       robot_base_frame: "base_link"
@@ -361,6 +361,5 @@ collision_monitor:
 
 # NOTE: nav2_bringup does NOT load this params file into its lifecycle_manager
 # nodes (it only passes autostart + node_names inline), so bond_timeout cannot be
-# set here. Bond starvation on this large map is instead avoided by launching with
-# use_composition:=False (see bringup.launch.py) — each node gets its own process
-# so the costmap inflation can't block map_server's bond heartbeat.
+# set here. The local patched launch files pass bond_timeout: 0.0 directly and
+# load the Nav2 nodes into one composed container (see bringup.launch.py).

@@ -43,9 +43,9 @@ The primary perception sensor: localization and obstacle avoidance both depend o
 | Condition | Symptom | Handling |
 |---|---|---|
 | Laser unplugged / SBC can't open `/dev/ttyS2` | `LASER:` field empty or absent | bridge publishes no/short `/scan`; costmaps clear, AMCL can't update → `map→odom` stops |
-| SBC down | no `/scan` at all | bridge reconnects every 3 s; resumes on return |
+| SBC link unavailable | no `/scan` at all | bridge reconnects every 3 s; resumes on return |
 | Scan appears mirrored in RViz | walls on wrong side | re-check `LaserFlipped` and the `roll=π` static TF |
-| Phantom obstacle hugging the robot | nav refuses to move | check `SCAN_RANGE_MIN`; run `./patrolbot-logs.sh scan` |
+| Phantom obstacle hugging the robot | nav refuses to move | check `SCAN_RANGE_MIN`; inspect `/scan` inside `patrolbot-bridge` |
 
 ## Sonar
 

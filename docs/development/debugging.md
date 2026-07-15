@@ -1,28 +1,33 @@
 ---
 title: Debugging
-description: A symptom-driven debugging guide for PatrolBot — the patrolbot-logs.sh helper, the most common failures (blank map, goal aborts, mirrored scan, boxed-in robot), and where each one lives.
+description: A symptom-driven debugging guide for the Pi 5 Docker runtime and its common ROS, TF, navigation, and hardware-link failures.
 ---
 
 # Debugging
 
-This is a symptom-first guide. Find your symptom, follow the check, fix it where it lives. The
-single most useful tool is `patrolbot-logs.sh` on the Pi.
+This is a symptom-first guide. Find your symptom, follow the check, and fix it
+where it lives. The main runtime is the Pi 5 Docker stack.
 
-## The Swiss-army tool: `patrolbot-logs.sh`
+## Pi 5 status and logs
 
 ```bash
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh -h         # show full usage / help
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh            # follow all three services
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh status     # service health + last 5 min of errors
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh bridge     # bridge only (SBC link)
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh nav        # Nav2 only
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh topics     # /odom /scan /cmd_vel /map rates
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh tf         # current TF tree
-ssh ubuntu@patrolbot-ros.qatar.cmu.edu ./patrolbot-logs.sh scan       # live front/left/right laser distances
+ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
+ssh robot-pi2 'docker ps --format "{{.Names}} {{.Status}} {{.Image}}"'
+ssh robot-pi2 'docker logs --tail 100 patrolbot-bridge'
+ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
+ssh robot-pi2 'docker logs --tail 100 patrolbot-bringup'
 ```
 
-`scan` is especially handy: it prints nearest obstacle to the right/front/left and the global
-nearest, and tells you when the robot looks "boxed in" (front < 0.25 m).
+For ROS CLI inspection, execute inside a container and bypass a possibly stale
+ROS daemon cache when checking the graph:
+
+```bash
+ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
+  'source /opt/ros/\$ROS_DISTRO/setup.bash; ros2 node list --no-daemon --spin-time 5'"
+```
+
+`patrolbot-logs.sh` remains available on the Pi 4 rollback deployment; it is not
+the primary Pi 5 tool.
 
 ## Symptom → cause → fix
 
@@ -49,20 +54,26 @@ flowchart TB
 - Root cause historically: `local_costmap update_frequency` (1 Hz) below the controller's 5 Hz.
   Already fixed to 5.0 — if it recurs, re-check `local_costmap update_frequency: 5.0` and
   `publish_frequency: 2.0` in `nav2_params.yaml`.
-- Confirm the robot isn't boxed in: `./patrolbot-logs.sh scan`.
+- Confirm the robot is not boxed in by inspecting `/scan` or the local costmap.
 
 ### Robot won't move under navigation, but localization is fine
 
 Walk the [`cmd_vel` chain](../architecture/software-architecture.md#the-cmd_vel-arbitration-chain):
 
 ```bash
-ros2 lifecycle get /teleop_velocity_smoother   # must be 'active'
+ros2 service call /teleop_velocity_smoother/get_state lifecycle_msgs/srv/GetState '{}'
+ros2 service call /controller_server/get_state lifecycle_msgs/srv/GetState '{}'
 ros2 topic hz cmd_vel_smoothed                 # collision_monitor input
 ros2 topic hz /cmd_vel                          # bridge input — the final command
 ```
 
-- If `/teleop_velocity_smoother` isn't active, `lifecycle_mgr.py` didn't run — restart
-  `patrolbot-bringup.service`.
+Run those commands inside the owning Pi 5 container as shown at the top of this
+page. Both lifecycle responses must contain `label='active'`. Direct `GetState`
+calls avoid the ROS CLI daemon discovery false negative seen during the 2026-07-15
+audit.
+
+- If `/teleop_velocity_smoother` is not active, inspect `patrolbot-bringup` logs
+  and restart that container.
 - If `collision_monitor` reads the wrong topic, no command flows (the historical `cmd_vel_raw`
   bug). It must read `cmd_vel_smoothed`.
 - A held joystick (or a stuck deadman) overrides nav — check `/joy`.
@@ -75,26 +86,31 @@ transform. See [Sensors](../devices/sensors.md#sick-lms-200-laser).
 
 ### `/odom` and `/scan` stopped
 
-- The SBC link is down. `./patrolbot-logs.sh bridge` will show "SBC telemetry timed out.
+- The SBC link is unavailable. Bridge logs will show "SBC telemetry timed out.
   Reconnecting…". The bridge retries every 3 s; data resumes when the SBC returns.
 - If the SBC was **physically rebooted**, odometry reset to 0,0,0 — re-set the pose with *2D Pose
   Estimate* after reconnect.
 
 ### Whole Nav2 stack restarted itself
 
-- Expected behavior when `nav2_container` dies: the launch tears down and systemd restarts a fresh
-  stack (a respawn would come back empty). Check for a preceding crash in `./patrolbot-logs.sh nav`.
+- Expected behavior when `nav2_container` dies: the launch tears down and Docker
+  restarts a fresh Pi 5 service container. Check the preceding output with
+  `docker logs patrolbot-navigation`.
 - If it crash-loops on reconnect, verify `base_shift_correction: False` is still set.
 
 ## Useful raw commands
+
+Run ROS commands inside `patrolbot-navigation` or `patrolbot-bridge`; run Docker
+commands on the Pi 5 host.
 
 ```bash
 ros2 node list
 ros2 topic list && ros2 topic hz /scan
 ros2 topic echo /diagnostics            # base flags / stall / fault
 ros2 run tf2_ros tf2_echo map base_link
-systemctl --user status patrolbot-bridge.service
-journalctl --user -u patrolbot-navigation.service --since "10 min ago"
+docker inspect patrolbot-bridge patrolbot-navigation --format \
+  '{{.Name}} status={{.State.Status}} health={{.State.Health.Status}} restarts={{.RestartCount}}'
+docker logs --since 10m patrolbot-navigation
 ```
 
 ## Client-side RViz noise (harmless)

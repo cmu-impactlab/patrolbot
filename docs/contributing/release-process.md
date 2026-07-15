@@ -6,19 +6,20 @@ description: How to cut a known-good PatrolBot release — versioning the packag
 # Release Process
 
 PatrolBot is a single-robot research platform, not a distributed package, so "release" means
-**capturing a known-good, reproducible state of the whole robot** — both machines — and tagging it.
+**capturing a known-good, reproducible state of the whole robot** — the SBC and selected main Pi
+runtime — and tagging it.
 This page describes a lightweight, honest process for that.
 
 ## What a release is here
 
 A release pins, together:
 
-- The Pi packages (`patrolbot_bridge`, `patrolbot_navigation`, `patrolbot-launch`) at known commits
-  — remembering `patrolbot_navigation` and `rosaria2` have their **own** git repos.
-- The deployed `patrolbot-launch` package and `patrolbot-bringup.service` command.
+- The monorepo commit and immutable Pi 5 image revision containing `patrolbot_bridge`,
+  `patrolbot_navigation`, and `patrolbot-launch`.
+- The Pi 5 Compose configuration and image digest; record the Pi 4 rollback state separately.
 - The SBC `patrolbot_server` source + the binary build date.
 - The active map and the matching costmap resolution.
-- The systemd units on both machines.
+- The SBC systemd units and Pi 5 Compose state.
 
 ## Versioning
 
@@ -37,13 +38,13 @@ consistently:
 Several of these are open items in [Known Gaps](../known-gaps.md) — a release is the natural time to
 close them:
 
-- [ ] Fix scaffold-default manifest metadata (`maintainer: ubuntu@todo.todo`, `description: TODO`,
-      `license: TODO` in `patrolbot_bridge`/`patrolbot-launch`; `joao@todo.todo` in `rosaria2`).
-- [ ] Remove [dead code / editor temp files](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
+- [ ] Fix scaffold-default package metadata and missing manifest dependencies
+      (`ubuntu@todo.todo`/TODO values in the Python `setup.py` files and
+      `joao@todo.todo`/TODO values in `rosaria2/package.xml`).
+- [ ] Remove [dead launch experiments](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
 - [ ] Confirm current fixed facts are still true: `roll=π`, `second_map` at `0.075 m/px`, RPP
       controller, Pi 5 Docker deployment, and Pi 4 rollback status.
-- [ ] Confirm `patrolbot-bringup.service` launches `ros2 launch patrolbot-launch bringup.xml`.
-- [ ] Confirm the stale `nav2_params.yaml` trailing comment is corrected or removed.
+- [ ] Confirm the Pi 5 bringup container launches `ros2 launch patrolbot-launch bringup.xml`.
 - [ ] `colcon test` clean; resilience matrix green.
 
 ## Cutting the release
@@ -63,10 +64,9 @@ flowchart LR
    released.
 3. Run the full [test set](../development/testing.md): lint, a real navigate-to-goal, and the
    freeze/resume resilience matrix.
-4. **Tag** each repository at the release commit (Pi workspace, `patrolbot_navigation`, `rosaria2`
-   if changed, the SBC server repo).
+4. **Tag** the monorepo release commit and record the deployed SBC source snapshot.
 5. **Record the environment** that isn't in git: the SBC binary build date, the active map file +
-   its resolution, and the systemd unit contents on both machines.
+   its resolution, the SBC unit contents, and the Pi 5 Compose/image state.
 6. Update this site and any changelog.
 
 ## Capturing reproducible state
@@ -76,12 +76,13 @@ units), a release note should explicitly capture them:
 
 ```text
 Release vX.Y.Z
-- Pi workspace @ <commit>; patrolbot_navigation @ <commit>
-- patrolbot-launch service command: ros2 launch patrolbot-launch bringup.xml
+- Monorepo @ <commit>; Pi 5 image @ <tag/digest> with org.opencontainers.image.revision=<commit>
+- Pi 5 bringup command: ros2 launch patrolbot-launch bringup.xml
 - SBC patrolbot_server built <date> from <commit/snapshot>
 - Active map: second_map.{pgm,yaml} @ 0.075 m/px; global_costmap resolution 0.2
-- systemd units: <list, both machines>
-- Docker image / Compose state: <tag, running/not running>
+- SBC systemd units: <list and state>
+- Pi 5 Docker image / Compose state: <tag, digest, health>
+- Pi 4 rollback services: <stopped or deliberate rollback state>
 - Discovery server: disabled unless deliberately re-enabled
 ```
 

@@ -42,15 +42,12 @@ These are real but not part of the running stack. Each is one line in
 | `patrolbot_nav.rviz` | operator RViz layout (manual use) |
 | `maps/cmuq_1st_floor.{yaml,pgm}` | older map, not in active launch |
 
-## Not Used — dead code / cleanup candidates
+## Removed dead code
 
-Listed once, here, as cleanup candidates — **not** documented anywhere as part of the live system.
-
-| Component | Note |
-|---|---|
-| `patrolbot-launch/launch/rosaria2.xml`, `joy.xml` | commented out of `bringup.xml` |
-| `patrolbot-launch/launch/teleop-key*.xml`, `readlidar.py`, `rosaria2.py`, `rosaria2-lidar.xml`, `smoother_lifecycle.xml`, `launch_teleop_keyboard.bash` | dev experiments not included by active launch |
-| `ekf_test.yaml` reference in `bringup.launch.py` | variable defined, file already removed, never used in the launch body |
+The empty component container, unused EKF reference, and obsolete alternate
+driver, joystick/keyboard, smoother, and LiDAR launch experiments were removed
+after dependency review. They remain recoverable from Git history and verified
+deployment backups rather than being shipped as dormant production inputs.
 
 ## Summary counts
 

@@ -1169,3 +1169,116 @@ PB-AUDIT-012 remains intentionally without an executable daemon: the live
 serial-to-socat topology exposes no demonstrated RI/modem-line or independent
 power-fail signal to Linux. A daemon without a real bench-tested input would
 not prevent the operator-confirmed forced-shutdown failure mode.
+
+## 17. Commit provenance and SBC root maintenance — 2026-07-22
+
+This section supersedes the temporary root boundary in §16.2. The operator
+provided supervised root authorization while the robot was charging, motors
+were disabled, faults were zero, navigation was idle, and odometry was exactly
+zero. No velocity, pose, goal, dock/undock, motor-enable, charge-release, or
+other hardware command was sent.
+
+### 17.1 Commit-identified Pi candidate
+
+The complete remediation was reviewed and committed locally as
+`edaca6504e3bc3ae097821781b8a73dd02786237`. An exact Git archive was staged at
+`/home/ubuntu/patrolbot-staging/edaca6504e3bc3ae`; its deterministic source
+digest matched
+`117a73e1fc17ea03f0504b896c45f8b70c2ebca20189ac84da571cd082c80af6`.
+
+The Pi built `patrolbot:git-edaca6504e3b`, image ID
+`sha256:a39123b10da2fd41f1a9afbf07a720d387ec6d0461af0a0046de99dccf1bcfef`.
+The image revision label is the full commit SHA, its source label and embedded
+digest equal the staged digest, and all six selected ROS packages compiled.
+Disposable `--network none` acceptance produced 103 focused passes with ten
+environment-dependent skips and five explicitly enabled fake-hardware ROS
+integration passes in isolated domain 87.
+
+Pre-deploy rollback set
+`20260721T212034Z-pb020-commit-provenance` preserves the old protected Compose
+environment, exact deployed source subset, core-container/image inspection,
+socket state, and old image identity. Both Pi-local and ignored off-host copies
+passed checksum verification. The old image remains retained on the Pi.
+
+The candidate is deliberately not live yet. The separately managed dashboard
+container now has `WEB_BRIDGE_ENABLE_COMMANDS=1`; code and graph inspection
+prove it has no `/cmd_vel` path, but it does own a Nav2 action client and an
+`/initialpose` publisher. No active navigation status was observed, and motors
+being disabled would reject a navigation request, but pose publication remains
+possible. Core-container cutover therefore waits for explicit reconciliation
+of that independent command source rather than violating the no-goal/no-pose
+commissioning boundary.
+
+### 17.2 PB-AUDIT-010 clock correction
+
+Pre-change rollback set
+`20260721T212751Z-pb010-pb013-pb022-root-maintenance` preserves the exact
+Chrony, journald, and SSH configurations plus service/socket/runtime evidence.
+The host-local and ignored off-host copies both passed recomputed checksums.
+
+Chrony 2.1 requires authenticated legacy commands: plain and root
+`chronyc makestep` returned `501 Not authorised`, while root
+`chronyc -a makestep` returned two `200 OK` responses and advanced the clock
+forward to current 2026 time. The server retained PID 21102 and its TCP session.
+The reviewed `makestep 1.0 -1` directive was then added once, and only
+`chrony.service` was restarted. It returned active and synchronized; the later
+measured system offset was under one millisecond. The new `chrony.conf` SHA-256
+is `69cca73655a6210c542479b9680875499a992df416e0a4d71b3c648d536e2ccf`.
+
+PB-AUDIT-010 remains open only for physical RTC-battery replacement and a
+cold-boot time validation; the RTC still reports 2008.
+
+### 17.3 PB-AUDIT-013 persistent logging
+
+The committed journald policy was installed as root-owned mode `0644`, and
+`/var/log/journal` was created as `root:systemd-journal` mode `2755`. Only
+`systemd-journald.service` was restarted, followed by a flush. The installed
+policy hash is
+`09b0b5cba1dd0173a2fc999f94e758f7804f750a0b560f2d93613494e0e763cf`;
+it caps storage at 128 MiB, preserves 2 GiB free, compresses records, and limits
+retention to 30 days. The persistent store used 16 MiB and contained
+current-time records for `_SYSTEMD_USER_UNIT=patrolbot-server.service`.
+
+The hardware server itself was not restarted. Reboot-survival acceptance
+remains deferred with the RTC-battery work.
+
+### 17.4 PB-AUDIT-022 SSH hardening
+
+A candidate main configuration changed exactly `PermitRootLogin` from
+`prohibit-password` to `no` and activated `PasswordAuthentication no`;
+`ChallengeResponseAuthentication no` was already active. Installed OpenSSH
+7.2 accepted the candidate before and after installation. SSH was reloaded
+while two authenticated sessions remained open.
+
+Effective live policy is now:
+
+```text
+permitrootlogin no
+passwordauthentication no
+challengeresponseauthentication no
+```
+
+Fresh key-only connections succeeded through both the management alias and
+direct IP. A fresh password-only attempt failed with
+`Permission denied (publickey)`. The installed file SHA-256 is
+`20e0a5f902561b334bb4ebaea7f0086c4e071f7ee5090b23365ed28039433d5e`.
+This closes the addressable SSH-authentication exposure, but PB-AUDIT-022
+remains open until the EOL Xenial/i686/kernel-4.4 appliance is replaced or its
+roles migrate to a supported platform.
+
+### 17.5 Post-change acceptance and rollback
+
+Post-change evidence set
+`20260721T215358Z-pb010-pb013-pb022-postchange` passed checksum verification on
+the SBC and in the ignored off-host copy. Final live evidence showed:
+
+- server PID `21102` and binary hash `b9606502...94393` unchanged;
+- one established TCP 7272 client and session generation `2`;
+- Chrony, journald, SSH, and the user hardware-server unit active;
+- fresh scan, sonar, odometry, and base state;
+- charge state `3`, motors disabled, E-stop clear, and zero faults;
+- one `/cmd_vel` publisher and subscriber; and
+- every odometry twist component exactly zero.
+
+PB-AUDIT-012 remains unchanged: no graceful-shutdown daemon is installed
+without a demonstrated power-fail input.

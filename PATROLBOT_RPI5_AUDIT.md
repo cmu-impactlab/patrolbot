@@ -101,36 +101,35 @@ request, or robot motion occurred.
 | Rollback evidence | Full backup `20260721T181448Z-pb002-stationary-cutover` plus narrow pre-deploy backup `20260721T204423Z-pb002-manual-release-deploy`; every host-local/off-host manifest verified from copied files; old binary hash pinned |
 | Deployment disposition | Stationary cutover complete; successful motor enable, reverse, undock, and physical regression remain deferred |
 
-The SBC-only audit findings were also refreshed without mutation:
+The SBC-only audit findings were refreshed again during supervised root
+maintenance on 2026-07-22. No PatrolBot process was restarted and no hardware
+command was sent:
 
-- **PB-AUDIT-010 remains open on the live host:** system time is about
-  167,323,392 seconds behind NTP, the RTC reports 2008-04-09, Chrony has a
-  selected current source, and `chrony.conf` still has no `makestep`
-  directive. A reviewed Chrony-2.1 maintenance procedure and persistent
-  directive are staged in-repository; applying them and replacing the RTC
-  battery require a root/operator maintenance window with motors disabled.
+- **PB-AUDIT-010 is corrected in software; physical persistence remains
+  open:** authenticated legacy `chronyc -a makestep` advanced the system clock
+  to current 2026 time, and `makestep 1.0 -1` is active in `chrony.conf`.
+  Chrony restarted active and synchronized within a millisecond. The RTC still
+  reports 2008, so battery replacement and a cold-boot validation remain.
 - **PB-AUDIT-012 SBC portion remains open:** no `genpowerd`, UPS daemon, or
   equivalent graceful shutdown process is installed. The active socat bridge
   still carries serial bytes through TCP and provides no demonstrated RI-based
   shutdown handoff.
-- **PB-AUDIT-013 user-unit defect is fixed live; root-owned persistence remains
-  open:** the systemd-229-compatible unit/drop-in are installed and
-  daemon-reloaded. Live resolution reports `StandardOutput=journal`,
-  `StandardError=journal`, and `SyslogIdentifier=patrolbot_server`; the server
-  PID and TCP session were not restarted. `/var/log/journal` is still absent,
-  so correct timestamps, bounded persistent retention, and reboot-survival
-  remain coupled to PB-AUDIT-010 and a root maintenance window.
+- **PB-AUDIT-013 is fixed live except for reboot acceptance:** the compatible
+  user unit remains active, and a root-owned persistent journal is now live
+  with a 128 MiB cap, 2 GiB free-space floor, compression, and 30-day maximum
+  retention. It held 16 MiB after installation and contained current-time
+  `patrolbot_server` records. Reboot survival remains coupled to the RTC work.
 - **PB-AUDIT-019 residual SBC container cleanup is complete:** all 14 stopped
   experimental containers were removed after preserving container/image
   inspection, logs, and the only non-empty writable filesystem in verified
   host-local and off-host rollback bundles. Images and bind-mounted host data
   were retained. The live server, sole TCP session, Pi health, and zero
   odometry velocity were unchanged afterward.
-- **PB-AUDIT-022 remains open at the platform level:** the
-  Xenial/i686/kernel-4.4 appliance remains EOL. A key-only/no-root-login policy
-  was parsed successfully by its OpenSSH 7.2 daemon and staged for root
-  installation; the platform finding cannot close until the appliance is
-  migrated.
+- **PB-AUDIT-022 is hardened live but remains open at the platform level:**
+  OpenSSH 7.2 now resolves password and challenge-response authentication off
+  and root login off. Fresh alias and direct-IP key-only sessions succeeded;
+  a password-only attempt was refused. Xenial/i686/kernel 4.4 remains EOL, so
+  the full finding cannot close until the appliance is migrated.
 - **PB-AUDIT-023 remains unverified:** the static ARIA profile includes only a
   `GyroScaler`; firmware `HasGyro` state was not queried because doing so would
   require disrupting the sole live hardware connection.
@@ -140,14 +139,16 @@ I/O or corruption error. The RTC battery, outage cause, physical sensor
 inventory, bumper masks, true footprint, and laser height still require later
 operator or hardware work.
 
-The root-maintenance assets are intentionally not automatic installers. They
-are under `hardware/patrolbot_hw_server/maintenance/` and
-`hardware/patrolbot_hw_server/systemd/`; applying them can change time, logging,
-and management access and therefore remains gated on a motors-disabled window
-with a known-good SSH session. PB-AUDIT-012 has no executable SBC shutdown
-service because the live serial-to-TCP topology exposes no demonstrated RI or
-other power-fail signal to Linux; deploying a daemon without a real input would
-only create false confidence.
+The root-maintenance assets remain intentionally non-automatic. They were
+applied from checksum-matched commit `edaca6504e3bc3ae097821781b8a73dd02786237`
+under verified pre/post backup sets
+`20260721T212751Z-pb010-pb013-pb022-root-maintenance` and
+`20260721T215358Z-pb010-pb013-pb022-postchange`. The server retained PID 21102,
+binary hash `b9606502...94393`, session generation `2`, one TCP client, fresh
+telemetry, motors disabled, and zero odometry. PB-AUDIT-012 still has no
+executable SBC shutdown service because the live serial-to-TCP topology exposes
+no demonstrated RI or other power-fail signal to Linux; deploying a daemon
+without a real input would only create false confidence.
 
 The deployed safe navigation path is now:
 
@@ -196,19 +197,19 @@ not substitute for SBC or physical commissioning.
 | PB-AUDIT-007 | **Pi mechanism implemented; dock pose uncommissioned** | Forced origin reset removed. Operator-authorized `/patrolbot/initialize_dock_pose` waits for AMCL convergence. `dock_pose_configured=false` keeps undock blocked. | **Partly.** The service and tests are complete; a surveyed pose and live scan/odom convergence require the robot and SBC. |
 | PB-AUDIT-008 | **Open** | Footprint still reflects the ARIA body rather than a verified bumper/attachment envelope. | **Configuration can be changed on Pi, but must not be guessed.** Measure first, then update both costmaps and run doorway/near-wall tests. |
 | PB-AUDIT-009 | **Live defect corrected; successful-enable physical test pending** | The deployed server never enables motors at startup or from DRIVE. The explicit service rejected enable while charging and motors stayed disabled through release/recharge. | **Software and charging-rejection path completed.** Successful enable and any PWR ON interaction remain coupled to the later supervised motion phase. |
-| PB-AUDIT-010 | **Live fix pending; maintenance package staged** | Clock/RTC issue is unchanged on the host. A Chrony-2.1 procedure and persistent makestep directive are version-checked and staged. | **No.** Applying it and replacing the RTC battery require SBC/root maintenance with motors disabled. |
+| PB-AUDIT-010 | **Software clock fix live; RTC/reboot pending** | The system clock was stepped to current time and `makestep 1.0 -1` is active; Chrony is synchronized. The RTC still reports 2008. | **Partly.** Software remediation is live; RTC-battery replacement and cold-boot validation require physical maintenance. |
 | PB-AUDIT-011 | **Pi interface corrected; release/recharge transition verified** | The PatrolBot Jazzy plugin uses typed raw charge state plus fresh `/battery`; live release reached raw state `0` and contact charging resumed at state `3`. Generic docking stays disabled. | **Software and stationary transition completed.** Full docking-server enablement still requires the physical dock campaign. |
 | PB-AUDIT-012 | **Pi portion implemented; SBC shutdown path open** | Documented FAULTFLAGS are decoded into named bridge diagnostics. The priority-10 watchdog now blocks motion on stale battery, voltage below 23.0 V, faults, invalid hardware state, or E-stop; 24.0 V is reported as the recharge warning threshold. | **Pi portion completed.** The serial-RI/genpowerd graceful SBC shutdown path still requires SBC/hardware work. |
-| PB-AUDIT-013 | **User-unit fixed live; persistent journal pending root** | The compatible journal-only unit/drop-in are installed and daemon-reloaded without restarting the server. The current PID/session stayed unchanged. Bounded persistent journaling is staged but `/var/log/journal` is still absent. | **Partly.** User-level defect completed; root is required for journal persistence, and the clock must be corrected first. |
+| PB-AUDIT-013 | **Logging fixed live; reboot acceptance pending** | The compatible journal-only unit/drop-in and bounded persistent journal are active. Current-time server records are queryable; PID/session stayed unchanged. | **Software complete.** Reboot-survival verification remains coupled to RTC replacement. |
 | PB-AUDIT-014 | **Closed on Pi** | Ignored Kobuki-era keys were replaced with declared Jazzy `nav2_velocity_smoother` parameters. Static contracts and live readback verify the final cap `[0.35, 0.0, 0.7]`, 0.5 s timeout, and explicit accel/decel limits. | **Completed and deployed.** Physical manual-control response remains part of PB-AUDIT-015, not this configuration defect. |
 | PB-AUDIT-015 | **Open; hardware unavailable** | The Pi device mount and readiness check are present, but the joystick receiver is absent and `/joy` cannot be stationary-validated. | **Blocked on receiver availability.** Attach it and perform stationary `/joy`, deadman, timeout, priority, and zero-output checks before motion. |
 | PB-AUDIT-016 | **Cause resolved; prevention remains under PB-AUDIT-012** | Operator confirmed the earlier outages were forced shutdowns before the main PC/SBC completed its shutdown sequence. | **Root cause closed by operator evidence.** Prevention requires the documented orderly shutdown procedure now and a real automatic shutdown signal path later. |
 | PB-AUDIT-017 | **External DDS exposure contained on Pi** | Jazzy discovery is now `LOCALHOST` in every container. The host-network containers still communicate via loopback, but LAN/Wi-Fi DDS participants cannot discover the command graph. SSH management was preserved; remote DDS/RViz is intentionally unavailable. | **Current exposure addressed.** Any future remote visualization must use a separately reviewed secure transport or coordinated SROS2 design, never by silently restoring `SUBNET` discovery. |
 | PB-AUDIT-018 | **Intentional filter retained; candidate scaffold uncommissioned** | `SCAN_RANGE_MIN=0.25` remains pinned. Direction-aware velocity polygons preserve front protection and add sonar protection for reverse. A separately named raw-scan candidate publisher exists but defaults false and is not an active topic or safety source. | **Safe Pi scaffold completed.** Self-occlusion and physical stop tests are mandatory before that candidate can be enabled or connected. |
-| PB-AUDIT-019 | **High-confidence Pi and SBC cleanup completed** | Removed the empty component container, ignored `cmd_vel_topic`, obsolete `readlidar.py`, and 14 stopped SBC experiment containers. The SBC cleanup has verified host-local/off-host rollback data; images and bind-mounted data remain. | **Current proven-dead scope completed.** Legacy rollback packages and images remain intentionally retained pending dependency review. |
-| PB-AUDIT-020 | **Runtime source provenance closed on Pi; repository release identity pending** | A deterministic digest covers every built PatrolBot package plus hardware protocol source. The image build verifies it, labels it, and the readiness script refuses a source/image mismatch. Live image and copied source match exactly. | **Runtime drift detection completed.** A future clean commit/release identifier should replace the timestamp-only revision after the working tree is reviewed and committed. |
+| PB-AUDIT-019 | **Closed after dependency review** | Removed the empty component container, ignored `cmd_vel_topic`, obsolete LiDAR/alternate-driver/teleop/smoother launch experiments, unused EKF reference, and 14 stopped SBC experiment containers. `rosaria2` source and old images are explicitly retained offline rollback assets. | **Completed.** No dormant alternate command launcher remains in the production image; retained rollback assets are excluded from runtime. |
+| PB-AUDIT-020 | **Clean commit/candidate complete; live cutover pending** | Commit `edaca6504e3b` produced image `patrolbot:git-edaca6504e3b` with matching revision/source labels and isolated acceptance tests. The currently running image still has the older timestamp revision. | **Build complete.** Live cutover awaits removal or explicit reconciliation of dashboard goal/pose command mode. |
 | PB-AUDIT-021 | **Measurement scaffold complete; finding open** | The physical-calibration record requires a measured main-LiDAR height before commissioning. The active static TF was not guessed or changed. | **Pi preparation completed; closure requires measurement.** |
-| PB-AUDIT-022 | **Platform open; SSH hardening staged** | Legacy SBC remains EOL. An OpenSSH-7.2-compatible key-only/no-root-login policy parsed successfully but is not installed. | **No for full closure.** Root can harden SSH now; platform closure still requires Pi-direct µARCS/SICK migration or SBC replacement. |
+| PB-AUDIT-022 | **SSH hardened live; platform replacement open** | Password and challenge-response authentication and root login are disabled. Two fresh key-only paths passed and password-only authentication was refused. | **No for full closure.** The addressable SSH exposure is fixed; platform closure still requires Pi-direct µARCS/SICK migration or SBC replacement. |
 | PB-AUDIT-023 | **Unverified** | Gyro FLASH mode and physical performance remain unknown. | **No.** Requires µARCS/physical validation. |
 | PB-AUDIT-024 | **Accepted design note** | New control-protocol framing/idempotency tests were added; the direct wired TCP transport design is unchanged. | No corrective action required on Pi for this informational item. |
 
@@ -943,7 +944,7 @@ RTPS/UDP sockets bound on 0.0.0.0 and the Wi-Fi address (`ss` on the Pi); no SRO
 
 ---
 
-### PB-AUDIT-019 (Low): Vestigial components. **Current status: high-confidence Pi and SBC cleanup complete.** The empty `mobile_base_nodelet_manager`, ignored `cmd_vel_topic`, obsolete `readlidar.py`, and 14 dormant SBC experiment containers have been removed. The container cleanup used exact stopped IDs only after verified metadata/log/filesystem backup; images, bind-mounted data, and legacy rollback packages remain intentionally retained. Remaining `ekf_test.yaml`, `rosaria2`, commented launch material, and legacy images require dependency review rather than broad deletion. Evidence: launch/package grep; backup `20260721T195507Z-pb019-container-cleanup`; post-cleanup service/socket/Pi readiness and zero-odom checks.
+### PB-AUDIT-019 (Low): Vestigial components. **Current status: closed after dependency review.** The empty `mobile_base_nodelet_manager`, ignored `cmd_vel_topic`, obsolete `readlidar.py`, unused EKF reference, unreferenced alternate-driver/teleop/smoother/LiDAR launchers, and 14 dormant SBC experiment containers have been removed. The source-only `rosaria2` package is an explicit offline fallback excluded from the image; retained SBC images and bind-mounted data are rollback assets with no containers. Git history and verified backup `20260721T195507Z-pb019-container-cleanup` preserve every deletion. Evidence: recursive launch/package references, Dockerfile exclusion, zero SBC containers, post-cleanup service/socket/Pi readiness, and zero odometry.
 
 ### PB-AUDIT-020 (Low): Deployment provenance. Pi tree is a plain copy (no `.git`); comment-level drift already exists vs workstation HEAD; `.bak` files are the only on-robot history; image tag pinned only via `docker/.env`. Recommendation: make the Pi tree a git clone (or record rsync manifests + repo commit in a VERSION file baked at deploy time). Evidence: `git -C /home/ubuntu/patrolbot-repo` fails; nav2_params diff.
 

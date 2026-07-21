@@ -27,8 +27,8 @@ rebuild after adding new files).
    `/cmd_vel → /cmd_vel_out` and `cmd_vel_smoothed → cmd_vel`
 3. **lifecycle_mgr.py** — configures and activates the velocity smoother
 
-rosaria2 and joy teleop are commented out in `bringup.xml`
-("NOT NEEDED IF PATROLBOT LIDAR SERVER IS RAN").
+Alternate `rosaria2`, duplicate joystick/keyboard, obsolete smoother, and
+standalone LiDAR launch experiments were removed after dependency review.
 
 ## Dependencies
 

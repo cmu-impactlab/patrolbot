@@ -34,16 +34,16 @@ scaffold-default maintainer/description/license values, while the package manife
 | Path | Role |
 |---|---|
 | `launch/bringup.xml` | includes `mobile_base.xml` + `smoother.xml` |
-| `launch/mobile_base.xml` | `component_container` + `twist_mux` (name `cmd_vel_mux`, loads `mux.yaml`) |
+| `launch/mobile_base.xml` | `twist_mux` only (name `cmd_vel_mux`, loads `mux.yaml`) |
 | `launch/smoother.xml` | `teleop_velocity_smoother` (with remaps) + `lifecycle_mgr.py` |
 | `param/defaults/mux.yaml` | twist_mux input priorities |
 | `param/defaults/smoother.yaml` | velocity smoother limits |
 | `lifecycle_mgr.py` | persistent manager: configure/activate the smoother and recover respawns |
 | `patrolbot-sh.p` | ARIA hardware profile (carried here too) |
 
-Superseded experiments (`rosaria2*.xml`, `teleop-key*.xml`, `readlidar.py`,
-`rosaria2.py`, and `launch_teleop_keyboard.bash`) are
-[legacy/dead](../internals/legacy-components.md).
+Superseded alternate-driver, joystick/keyboard, smoother, and LiDAR launch
+experiments were removed after dependency review; they remain recoverable from
+Git history.
 
 ## Public interfaces
 

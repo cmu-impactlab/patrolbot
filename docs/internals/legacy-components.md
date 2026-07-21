@@ -25,16 +25,13 @@ Real components retained as fallbacks or references, but not part of the running
 - **`patrolbot_nav.rviz`** — operator RViz layout for manual visualization.
 - **`maps/cmuq_1st_floor.{yaml,pgm}`** — an older CMU-Q floor map, not loaded by the active launch.
 
-## Known Dead Code — cleanup candidates { #known-dead-code--cleanup-candidates }
+## Removed dead code { #known-dead-code--cleanup-candidates }
 
-Listed once, here, as removal candidates. Not documented anywhere else:
-
-- **`patrolbot-launch/launch/rosaria2.xml`, `joy.xml`** — commented out of `bringup.xml`.
-- **`patrolbot-launch/launch/teleop-key*.xml`, `rosaria2.py`, `readlidar.py`,
-  `rosaria2-lidar.xml`, `smoother_lifecycle.xml`, and
-  `launch_teleop_keyboard.bash`** — dev experiments not included by the active launch.
-- **`ekf_test.yaml` reference in `bringup.launch.py`** — the `ekf_config_file` variable is defined
-  but the file was already removed and is never used in the launch body; safe to delete the line.
+Dependency review removed the empty component container, obsolete
+`readlidar.py`, the unused `ekf_test.yaml` reference, and the unreferenced
+`rosaria2`, duplicate joystick/keyboard, obsolete smoother, and standalone
+LiDAR launch experiments. Git history and verified deployment backups provide
+rollback; none of these files remains installed in the production image.
 
 ## Why this page exists
 
@@ -43,6 +40,5 @@ who can't tell the live system from the cruft will hesitate to delete safely, or
 something that isn't running. Concentrating all of it here keeps the rest of the site describing
 **only** what actually runs.
 
-If you remove any of the dead code above, also update
-[Component Breakdown](component-breakdown.md). If you *promote* a "Maybe" component to active, give
-it real documentation in the appropriate section and remove its line here.
+If you *promote* a "Maybe" component to active, give it real documentation in
+the appropriate section and remove its line here.

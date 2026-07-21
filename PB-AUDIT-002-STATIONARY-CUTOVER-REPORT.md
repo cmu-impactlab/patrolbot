@@ -282,3 +282,28 @@ power-fail signal design, attached/physical hardware and measurements,
 successful motor enable and controlled motion, or review/commit of the shared
 dirty worktree for PB-AUDIT-020 release identity. None was started during this
 recheck.
+
+## Root-maintenance and provenance follow-up — 2026-07-22
+
+The later supervised non-motion session resolved the immediately addressable
+parts of the final paragraph above. Commit
+`edaca6504e3bc3ae097821781b8a73dd02786237` now identifies the reviewed
+remediation, and commit-labelled Pi image `patrolbot:git-edaca6504e3b` passed
+isolated build, digest, focused-contract, and five fake-hardware integration
+gates. It remains staged rather than live because the independent dashboard
+bridge currently exposes goal and initial-pose commands; it has no direct
+velocity path, but that command mode must be reconciled before core-container
+cutover.
+
+With motors disabled and odometry zero, the SBC clock was advanced to current
+time using authenticated Chrony 2.1 command mode, persistent `makestep` policy
+was installed, bounded persistent journaling was enabled, and SSH was hardened
+to key-only/no-root-login. Neither the hardware server nor its TCP session was
+restarted. Pre/post host-local and off-host rollback sets verified, and final
+telemetry remained fresh with charge state `3`, motors disabled, zero faults,
+session generation `2`, one `/cmd_vel` publisher, and zero odometry.
+
+Remaining SBC items are now narrower: RTC-battery replacement plus cold-boot
+time/journal validation, a real graceful-shutdown input for PB-AUDIT-012, and
+eventual replacement of the EOL appliance. All physical commissioning and
+motion gates listed above remain unchanged.

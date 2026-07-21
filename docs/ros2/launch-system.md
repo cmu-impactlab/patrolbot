@@ -25,12 +25,11 @@ together, and the patched Nav2 launch files that make the large map work. Boot o
 <launch>
   <include file=".../mobile_base.xml"/>   <!-- twist_mux -->
   <include file=".../smoother.xml"/>       <!-- velocity smoother + lifecycle mgr -->
-  <!-- rosaria2.xml and joy.xml are commented out -->
 </launch>
 ```
 
-- **`mobile_base.xml`** starts a `component_container` (`mobile_base_nodelet_manager`) and the
-  `twist_mux` node (name `cmd_vel_mux`) loading `mux.yaml`.
+- **`mobile_base.xml`** starts only the `twist_mux` node (name `cmd_vel_mux`)
+  loading `mux.yaml`. The former empty component container was removed.
 - **`smoother.xml`** starts `nav2_velocity_smoother` as `teleop_velocity_smoother` **with two
   remaps**, then `lifecycle_mgr.py`:
 
@@ -97,15 +96,13 @@ so every lifecycle node loads into the single shared container. (This is the val
 `roll = π` un-mirrors the flipped SICK scan. This is confirmed against live TF and the ARIA
 `LaserFlipped=true` hardware profile; older notes that say `yaw = π` are stale.
 
-## Commented-out / non-active launch fragments
+## Retired launch fragments
 
-Present in the `patrolbot-launch` package but not part of the active stack:
-
-| File | What it would do | Status |
-|---|---|---|
-| `rosaria2.xml` | start the legacy `rosaria2_debug` driver | not included ("NOT NEEDED IF PATROLBOT LIDAR SERVER IS RAN") |
-| `joy.xml` | a standalone joy teleop | not included (joy is started by the nav launch) |
-| `teleop-key*.xml`, `readlidar.py`, `rosaria2.py`, `launch_teleop_keyboard.bash` | dev experiments | [legacy / dead](../internals/legacy-components.md) |
+The unreferenced `rosaria2`, duplicate joystick/keyboard, obsolete smoother,
+and standalone LiDAR launch experiments were removed after dependency review.
+They remain recoverable from Git history but are no longer installed into the
+production image. The source-only `rosaria2` fallback package remains excluded
+from the Docker build.
 
 ## Manual launch (development)
 

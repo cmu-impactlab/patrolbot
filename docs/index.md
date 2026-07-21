@@ -41,13 +41,13 @@ flowchart LR
     ARIA <-->|"TCP :7272\nplain-text protocol"| BRIDGE
 
     GAMEPAD["Logitech gamepad\n(USB on the Pi)"] --> JOY
-    OPERATOR["Operator laptop\nRViz2 over the network"] -.->|"ROS 2 / DDS"| NAV
+    OPERATOR["Operator\nSSH / reviewed app bridge"] -.-> NAV
 ```
 
 | | **SBC** (main PC) | **Raspberry Pi** |
 |---|---|---|
 | **Role** | Hardware data bridge only | The entire ROS 2 navigation stack |
-| **Talks to** | Pioneer base + SICK laser (serial) | The SBC (TCP), the operator (DDS) |
+| **Talks to** | Pioneer base + SICK laser (serial) | The SBC (TCP), internal loopback DDS, reviewed operator interfaces |
 | **Software** | One C++ ARIA server (`patrolbot_server`) | ROS 2 Jazzy: bridge, Nav2, mobile base |
 | **Runs ROS 2?** | **No** | Yes |
 

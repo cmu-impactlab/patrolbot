@@ -23,6 +23,7 @@ flowchart LR
     TVS["teleop_velocity_smoother"]:::pi
     LC["lifecycle_mgr.py"]:::pi
     SW["patrolbot_safety_watchdog"]:::pi
+    DM["patrolbot_dock_manager"]:::pi
     NAV["nav2_container\n(amcl, planner, controller,\nvelocity_smoother, collision_monitor,\nbt_navigator, behavior_server, ...)"]:::pi
     classDef pi fill:#eef,stroke:#5566aa;
 ```
@@ -39,13 +40,14 @@ flowchart LR
 | **Package** | [`patrolbot_bridge`](../packages/patrolbot_bridge.md) (ament_python) |
 | **Executable** | `bridge_node` (`ros2 run patrolbot_bridge bridge_node`) |
 | **Node name** | `patrolbot_bridge` |
-| **Purpose** | Sole link to the SBC. Translates the TCP text stream into ROS 2 topics + TF and forwards `/cmd_vel` as `DRIVE` commands. |
+| **Purpose** | Sole link to the SBC. Translates telemetry, forwards `/cmd_vel`, and owns typed hardware-control requests on the same socket. |
 
 **Publishers:** `/odom` (`nav_msgs/Odometry`), `/scan` (`sensor_msgs/LaserScan`), `/sonar`
 (`sensor_msgs/PointCloud2`), `/battery` (`sensor_msgs/BatteryState`), `/diagnostics`
-(`diagnostic_msgs/DiagnosticArray`), TF `odom→base_link` (50 Hz).
+(`diagnostic_msgs/DiagnosticArray`), `/patrolbot/base_state`
+(`patrolbot_interfaces/BaseState`), TF `odom→base_link` (50 Hz).
 **Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`).
-**Services / actions:** none.
+**Services:** `/patrolbot/charge_release` and `/patrolbot/motor_enable`.
 **Parameters:** none declared; the SBC endpoint (`10.0.0.1:7272`), `RECV_TIMEOUT=3.0`, and
 `SCAN_RANGE_MIN=0.25` are module constants.
 **Lifecycle:** plain (non-lifecycle) node. A background thread owns the socket; a 50 Hz timer
@@ -168,13 +170,27 @@ say `yaw=π` are stale.
 |---|---|
 | **Host** | Raspberry Pi |
 | **Executable** | `patrolbot_safety_watchdog.py` (package `patrolbot_navigation`) |
-| **Purpose** | Holds the robot if `/scan` or `/odom` goes stale. |
+| **Purpose** | Priority-10 hold on stale scan/odom/battery/base state, low voltage, hardware faults, E-stop, or invalid commissioned bumper state. |
 
-**Subscribers:** `/scan`, `/odom`.
+**Subscribers:** `/scan`, `/odom`, `/battery`, `/patrolbot/base_state`.
 **Publishers:** `/input/safety_controller` (`geometry_msgs/Twist`, zero command, twist_mux priority
 10).
 **Failure mode:** launched with `respawn=True`; if the script is not executable the navigation
 launch restart-loops, so executable permissions are safety-relevant.
+
+### patrolbot_dock_manager
+
+| Field | Value |
+|---|---|
+| **Host** | Raspberry Pi |
+| **Executable** | `dock_manager` (package `patrolbot_dock_manager`) |
+| **Purpose** | Own dock-pose initialization and a fail-closed guarded-undock state machine without publishing `Twist`. |
+
+**Subscribers:** `/patrolbot/base_state`, `/sonar`, `/odom`, `/amcl_pose`, and Nav2 action-status
+topics. **Publisher:** `/patrolbot/dock_readiness`; `/initialpose` only during an authorized dock
+pose request. **Service:** `/patrolbot/initialize_dock_pose`. **Action:** `/patrolbot/undock`.
+The active `dock_pose_configured=false` and uncommissioned bumper mapping keep physical undock
+unavailable. See [Actions](actions.md#patrolbot-guarded-undock).
 
 ---
 
@@ -188,17 +204,20 @@ managers patched with `bond_timeout: 0.0`.
 | Node | Plugin / role | Key interfaces |
 |---|---|---|
 | `map_server` | Serves the occupancy grid | Pub `/map`; the large map flows to costmaps intra-process |
-| `amcl` | Adaptive Monte-Carlo localization (differential model) | Sub `/scan`, `/odom`; pub TF `map→odom`; `set_initial_pose: true` |
+| `amcl` | Adaptive Monte-Carlo localization (differential model) | Sub `/scan`, `/odom`; pub TF `map→odom`; forced initial pose disabled |
 | `planner_server` | Global planner `GridBased` = NavFn | Action `compute_path_to_pose`; uses global costmap |
-| `controller_server` | Local controller RPP @ 5 Hz, `desired_linear_vel` 0.22 | Action `follow_path`; pub `cmd_vel` |
-| `velocity_smoother` | Smooths RPP output | Sub `cmd_vel`; pub `cmd_vel_smoothed` |
-| `collision_monitor` | Stop-box 0.6×0.6 m safety gate, `base_shift_correction: False` | Sub `cmd_vel_smoothed`, `/scan`; pub `input/navi` |
+| `controller_server` | Local controller RPP @ 5 Hz, `desired_linear_vel` 0.22 | Action `follow_path`; pub `input/nav_controller` |
+| `nav_command_mux` | Upstream autonomous-command arbiter | controller/behavior/reserved docking inputs; pub `cmd_vel_nav` |
+| `velocity_smoother` | Smooths selected autonomous output | Sub `cmd_vel_nav`; pub `cmd_vel_smoothed` |
+| `collision_monitor` | Direction-aware scan/sonar safety gate, `base_shift_correction: False` | Sub `cmd_vel_smoothed`, `/scan`, `/sonar`; pub `input/navi` |
 | `bt_navigator` | Behavior-tree orchestration | Actions `navigate_to_pose`, `navigate_through_poses` |
 | `behavior_server` | Recovery behaviors: spin, backup, drive_on_heading, wait | Action servers per behavior |
 | `waypoint_follower` | Multi-waypoint following | Action `follow_waypoints` |
 | `smoother_server` | Path smoothing (`simple_smoother`) | Action `smooth_path` |
-| `docking_server` | Opennav docking (`SimpleChargingDock`) — niche/optional | Action `dock_robot`, `undock_robot` |
 | `lifecycle_manager_*` | Bring the above through configure/activate | Service `*/change_state`, `bond_timeout: 0.0` |
+
+The generic `docking_server` is intentionally absent from this list and the live graph; its direct
+velocity path failed PB-AUDIT-001 containment.
 
 **Lifecycle:** see [State Machines](../internals/state-machines.md) for the lifecycle transition
 diagram. **Failure mode:** because all share one process, an uncaught exception in any one
@@ -222,5 +241,6 @@ is the direct reason `collision_monitor` runs with `base_shift_correction: False
 | `joy_node` | Pi |
 | `p3dxJoyTeleop` | Pi |
 | `patrolbot_safety_watchdog` | Pi |
+| `patrolbot_dock_manager` | Pi |
 | `laser_static_tf` | Pi |
 | all `nav2_container` nodes | Pi |

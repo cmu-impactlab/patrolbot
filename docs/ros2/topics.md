@@ -15,12 +15,17 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 |---|---|---|---|---|
 | `/odom` | `nav_msgs/Odometry` | `patrolbot_bridge` | AMCL, bt_navigator, controller_server | ~20–25 Hz (25 observed live) |
 | `/scan` | `sensor_msgs/LaserScan` | `patrolbot_bridge` | AMCL, costmaps, collision_monitor | ~20–25 Hz; sensor-data BEST_EFFORT |
-| `/sonar` | `sensor_msgs/PointCloud2` | `patrolbot_bridge` (from `AUX`) | RViz / obstacle viz | ~5 Hz; sensor-data BEST_EFFORT |
-| `/battery` | `sensor_msgs/BatteryState` | `patrolbot_bridge` (from `AUX`) | monitoring | ~5 Hz |
+| `/sonar` | `sensor_msgs/PointCloud2` | `patrolbot_bridge` (from `AUX`) | collision_monitor, dock manager, visualization | ~5 Hz; sensor-data BEST_EFFORT |
+| `/battery` | `sensor_msgs/BatteryState` | `patrolbot_bridge` (from `AUX`) | safety watchdog, monitoring | ~5 Hz |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | `patrolbot_bridge` (from `AUX`) | `rqt_robot_monitor` | ~5 Hz |
-| `/joy` | `sensor_msgs/Joy` | `joy_node` | `p3dxJoyTeleop` | event-driven |
-| `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `p3dxJoyTeleop` | `twist_mux` (prio 8) | 30 Hz while RB held or ramping to stop; one final zero |
-| `cmd_vel` | `geometry_msgs/Twist` | `controller_server` (RPP) | `velocity_smoother` | 5 Hz |
+| `/patrolbot/base_state` | `patrolbot_interfaces/BaseState` | `patrolbot_bridge` | safety watchdog, dock manager | ~5 Hz |
+| `/patrolbot/dock_readiness` | `patrolbot_interfaces/DockReadiness` | `patrolbot_dock_manager` | monitoring | 2 Hz |
+| `/joy` | `sensor_msgs/Joy` | `joy_node` | `patrolbot_joy_teleop` | event-driven |
+| `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `patrolbot_joy_teleop` | `twist_mux` (prio 8) | 30 Hz while RB held or ramping to stop; one final zero |
+| `/input/nav_controller` | `geometry_msgs/Twist` | `controller_server` (RPP) | `nav_command_mux` | 5 Hz |
+| `/input/nav_behavior` | `geometry_msgs/Twist` | `behavior_server` | `nav_command_mux` | behavior-dependent |
+| `/input/docking` | `geometry_msgs/Twist` | none (reserved) | `nav_command_mux` | no publisher until commissioned |
+| `/cmd_vel_nav` | `geometry_msgs/Twist` | `nav_command_mux` | `velocity_smoother` | selected autonomous command |
 | `cmd_vel_smoothed` | `geometry_msgs/Twist` | `velocity_smoother` | `collision_monitor` | 20 Hz |
 | `input/navi` | `geometry_msgs/Twist` | `collision_monitor` | `twist_mux` (prio 5) | 5 Hz |
 | `/input/safety_controller` | `geometry_msgs/Twist` | `patrolbot_safety_watchdog` | `twist_mux` (prio 10) | only while sensors stale |
@@ -36,22 +41,22 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 | `odom → base_link` | `patrolbot_bridge` | 50 Hz | decoupled from scan delivery |
 | `base_link → laser_frame` | `laser_static_tf` | static | `x=0.037, z=0.2, roll=π` (confirmed) |
 
-!!! note "Two topics named `cmd_vel`"
-    There is a **namespaced** `cmd_vel` (RPP output inside `nav2_container`) and the **global**
-    `/cmd_vel` (the mobile-base `teleop_velocity_smoother` output that the bridge reads). They are
-    different topics. The remaps that produce this are explained on
-    [Launch System](launch-system.md#mobile-base-launch) and
-    [Software Architecture](../architecture/software-architecture.md#the-cmd_vel-arbitration-chain).
+The controller and behavior server no longer publish an unqualified `cmd_vel` into the smoother.
+They enter the upstream autonomous mux on explicit topics, while the global `/cmd_vel` remains the
+single final command consumed by the bridge.
 
 ## The `cmd_vel` chain at a glance
 
 ```mermaid
 flowchart LR
-    A["controller_server"] -->|cmd_vel| B["velocity_smoother"]
+    A["controller_server"] -->|input/nav_controller| N["nav_command_mux"]
+    H["behavior_server"] -->|input/nav_behavior| N
+    R["reserved docking\nno publisher"] -.->|input/docking| N
+    N -->|cmd_vel_nav| B["velocity_smoother"]
     B -->|cmd_vel_smoothed| C["collision_monitor"]
     C -->|input/navi| D["twist_mux"]
     S["patrolbot_safety_watchdog"] -->|input/safety_controller| D
-    J["p3dxJoyTeleop"] -->|input/joy| D
+    J["patrolbot_joy_teleop"] -->|input/joy| D
     D -->|cmd_vel_out| E["teleop_velocity_smoother"]
     E -->|/cmd_vel| F["patrolbot_bridge"]
 ```

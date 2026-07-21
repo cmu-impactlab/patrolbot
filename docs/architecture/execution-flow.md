@@ -91,7 +91,7 @@ sequenceDiagram
 
     Launch->>Cont: start component_container_isolated
     Launch->>Loc: load composable nodes (immediately)
-    Loc-->>Loc: map + map→odom ready in a few seconds
+    Loc-->>Loc: map ready; map→odom waits for an authorized pose
     Note over Launch: TimerAction waits 20 s
     Launch->>Nav: load composable nodes (after 20 s)
     Nav-->>Nav: costmaps inflate large map (goal-ready after staged activation)
@@ -100,8 +100,8 @@ sequenceDiagram
 
 The staging matters operationally:
 
-- **Localization is usable in seconds.** Map display and *2D Pose Estimate* work almost
-  immediately, because `map_server` + `amcl` load first.
+- **Localization services load in seconds.** The map becomes available first; `map→odom` remains
+  invalid until an operator supplies a pose through an authorized local interface.
 - **Navigation lags by design.** The heavy half is delayed 20 s so costmap inflation does not
   starve localization during the container's sequential node loading. After the boot-time
   network-wait fix, goal readiness is expected around ~70 s from power-on; older cold-boot
@@ -139,7 +139,7 @@ smoothers **20 Hz**, bridge TF **50 Hz**.
 | Bridge process crashes | The `patrolbot-bridge` container exits/restarts and reconnects to :7272 |
 | A Nav2 node or `nav2_container` dies | `OnProcessExit` → launch `Shutdown` → Docker restarts `patrolbot-navigation` → fresh launch |
 | SBC link drops and returns | Bridge reconnects every 3 s; Nav2 stays active (`bond_timeout: 0.0`); data resumes automatically |
-| **Physical SBC reboot** | ARIA odometry resets to 0,0,0; AMCL pose is now wrong → operator must re-set with *2D Pose Estimate* |
+| **Physical SBC reboot** | ARIA odometry resets to 0,0,0; localization remains invalid until the operator deliberately supplies a fresh pose |
 | Pi 5 reboot | Docker restarts all three Compose containers (`unless-stopped`) |
 
 See [Debugging](../development/debugging.md) for Pi 5 status and container-log commands.

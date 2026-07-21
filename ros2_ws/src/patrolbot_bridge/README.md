@@ -9,7 +9,8 @@ background thread continuously drains the socket into separate, bounded
 latest-value navigation and AUX queues. Independent publisher workers translate
 those lines into ROS 2 messages. This prevents a stalled DDS reader from filling
 the SBC's TCP send buffer and interrupting both odometry and laser data. The
-bridge also forwards ROS velocity commands back to the main PC.
+bridge also forwards ROS velocity commands and two explicit, idempotent
+hardware-control requests back to the main PC.
 
 The Pi 5 bridge container additionally sets
 `RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS`. With `rmw_fastrtps_cpp`, this
@@ -35,9 +36,23 @@ Publishes:
 **Outgoing to main PC:**
 ```
 DRIVE:linear:angular\n
+CHARGE_RELEASE:request_uuid\n
+MOTOR_ENABLE:request_uuid\n
 ```
 Subscribed topic: `/cmd_vel` (`geometry_msgs/Twist`) — the command after Nav2,
 collision monitoring, `twist_mux`, and final velocity smoothing.
+
+Services:
+
+- `/patrolbot/charge_release` (`patrolbot_interfaces/srv/ChargeRelease`)
+- `/patrolbot/motor_enable` (`patrolbot_interfaces/srv/MotorEnable`)
+
+Both require a caller-generated lowercase canonical UUID and return acceptance,
+terminal success/code/message, the UUID, charge/motor/E-stop state, elapsed time,
+and the process-local hardware `session_generation`. Charge release never sends
+velocity or enables motors. `DRIVE` never enables motors; motor enable is a
+separate deliberate operation with stationary, released, E-stop-clear,
+fault-free, fresh-telemetry preconditions.
 
 ## How to run
 

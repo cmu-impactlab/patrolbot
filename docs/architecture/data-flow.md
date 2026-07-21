@@ -28,13 +28,16 @@ flowchart TB
         LTF["laser_static_tf"] -->|"TF base_link→laser_frame"| TFB
         AMCL -->|"TF map→odom"| TFB
         BR -->|"/sonar · PointCloud2 · ~5 Hz"| VIZ["RViz / monitoring"]
+        BR -->|"/sonar"| CM["collision_monitor"]
         BR -->|"/battery · BatteryState · ~5 Hz"| VIZ
         BR -->|"/diagnostics · DiagnosticArray · ~5 Hz"| VIZ
+        BR -->|"/patrolbot/base_state"| SAFE["safety watchdog + dock manager"]
 
         AMCL --> PLAN["planner_server (NavFn)"]
         COST --> CTRL["controller_server (RPP)"]
         PLAN --> CTRL
-        CTRL -->|"cmd_vel"| VS["velocity_smoother"]
+        CTRL -->|"input/nav_controller"| NM["nav_command_mux"]
+        NM -->|"cmd_vel_nav"| VS["velocity_smoother"]
         VS -->|"cmd_vel_smoothed"| CM["collision_monitor"]
         CM -->|"input/navi"| MUX["twist_mux"]
         JOY["/joy → patrolbot_joy_teleop"] -->|"input/joy"| MUX
@@ -52,9 +55,9 @@ flowchart TB
 | `ODOM:` | `/odom` | `nav_msgs/Odometry` | `odom`→`base_link` | ~20 Hz | AMCL, bt_navigator, controller_server |
 | `ODOM:` | TF `odom→base_link` | `tf2` | — | **50 Hz** | whole TF tree |
 | `LASER:` | `/scan` | `sensor_msgs/LaserScan` | `laser_frame` | ~20 Hz | AMCL, costmaps, collision_monitor |
-| `AUX:SONAR` | `/sonar` | `sensor_msgs/PointCloud2` | `base_link` | ~5 Hz | RViz / obstacle viz |
-| `AUX:BATT` | `/battery` | `sensor_msgs/BatteryState` | — | ~5 Hz | monitoring |
-| `AUX:FLAGS` | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | — | ~5 Hz | `rqt_robot_monitor` |
+| `AUX:SONAR` | `/sonar` | `sensor_msgs/PointCloud2` | `base_link` | ~5 Hz | reverse collision protection, dock readiness, visualization |
+| `AUX:BATT` | `/battery` | `sensor_msgs/BatteryState` | — | ~5 Hz | safety watchdog, monitoring |
+| `AUX:FLAGS` | `/diagnostics`, `/patrolbot/base_state` | diagnostics + typed state | — | ~5 Hz | safety watchdog, dock manager, monitoring |
 
 Two details that matter downstream:
 
@@ -82,17 +85,20 @@ flowchart TB
 
 ## Outbound: operator goal → motor command
 
-A goal set in RViz (in the `map` frame) flows down the [`cmd_vel` arbitration
+An authorized goal in the `map` frame flows down the [`cmd_vel` arbitration
 chain](software-architecture.md#the-cmd_vel-arbitration-chain):
 
 1. `bt_navigator` runs the behavior tree; `planner_server` (NavFn) computes a global path in `map`.
-2. `controller_server` (RPP) produces `cmd_vel` at 5 Hz, sampling trajectories against the local
-   costmap.
-3. The Nav2 `velocity_smoother` shapes it to `cmd_vel_smoothed`.
-4. `collision_monitor` applies the 0.6×0.6 m stop-box and emits `input/navi` (priority 5).
-5. `twist_mux` picks the winner (joystick on `input/joy`, priority 8, overrides navigation).
-6. `teleop_velocity_smoother` re-shapes the winner and publishes `/cmd_vel`.
-7. `patrolbot_bridge` serializes `/cmd_vel` to `DRIVE:linear:angular` and sends it to the SBC,
+2. `controller_server` (RPP) produces `input/nav_controller` at 5 Hz; behavior commands use
+   `input/nav_behavior`.
+3. `nav_command_mux` selects the autonomous producer and emits `cmd_vel_nav`; its reserved docking
+   input has no publisher.
+4. The Nav2 `velocity_smoother` shapes it to `cmd_vel_smoothed`.
+5. `collision_monitor` applies direction-aware scan and sonar stop polygons and emits `input/navi`
+   (priority 5).
+6. `twist_mux` picks the winner (joystick on `input/joy`, priority 8, overrides navigation).
+7. `teleop_velocity_smoother` re-shapes the winner and publishes `/cmd_vel`.
+8. `patrolbot_bridge` serializes `/cmd_vel` to `DRIVE:linear:angular` and sends it to the SBC,
    which drives the base via ARIA.
 
 ## Manual override path

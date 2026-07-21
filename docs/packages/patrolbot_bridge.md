@@ -20,14 +20,15 @@ The translation layer between the SBC's TCP text stream and the Pi's ROS 2 graph
 
 Connect to the SBC at `10.0.0.1:7272`, parse its telemetry line types into ROS 2
 messages + TF, and forward `/cmd_vel` back to the SBC as `DRIVE` commands — all while surviving
-an abrupt loss of the SBC without operator action.
+an abrupt loss of the SBC without operator action. It also exposes two typed,
+UUID-correlated hardware-control services; these share the existing socket and never open a second
+SBC client.
 
 ## Dependencies
 
-`rclpy`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`, `std_msgs`, `diagnostic_msgs`, `tf2_ros`.
-(Python package metadata still carries scaffold-default maintainer/description/license values, and
-the package manifest omits `nav_msgs`; see
-[Known Gaps](../known-gaps.md#code-hygiene).)
+`rclpy`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`, `std_msgs`, `diagnostic_msgs`,
+`patrolbot_interfaces`, `tf2_ros`. Python package metadata still carries a scaffold-default
+maintainer; see [Known Gaps](../known-gaps.md#code-hygiene).
 
 ## Public interfaces
 
@@ -38,15 +39,18 @@ the package manifest omits `nav_msgs`; see
 | Publish | `/sonar` | `sensor_msgs/PointCloud2` (sensor-data BEST_EFFORT QoS) |
 | Publish | `/battery` | `sensor_msgs/BatteryState` |
 | Publish | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` |
+| Publish | `/patrolbot/base_state` | `patrolbot_interfaces/BaseState` |
 | Publish | TF `odom→base_link` | `tf2` (50 Hz) |
 | Subscribe | `/cmd_vel` | `geometry_msgs/Twist` |
+| Service | `/patrolbot/charge_release` | `patrolbot_interfaces/ChargeRelease` |
+| Service | `/patrolbot/motor_enable` | `patrolbot_interfaces/MotorEnable` |
 
 ## Internal architecture
 
 ```mermaid
 flowchart TB
     subgraph THREADS["Threading model"]
-        SPIN["rclpy spin thread\n• /cmd_vel callback\n• 50 Hz TF timer"]
+        SPIN["rclpy spin thread\n• /cmd_vel callback\n• control services\n• 50 Hz TF timer"]
         RECV["background recv thread\n• connect loop\n• continuously drains TCP"]
         NAV["navigation publisher worker\n• latest ODOM/LASER line"]
         AUX["auxiliary publisher worker\n• latest AUX line"]
@@ -76,6 +80,11 @@ Four concerns, with socket I/O isolated from DDS publication:
 4. **TF timer** (50 Hz, on the spin thread): publishes `odom→base_link` from the latest pose,
    **decoupled** from scan arrival so TF is always buffered before a scan reaches a costmap message
    filter.
+
+Control requests are serialized with `DRIVE` writes under the same socket lock. The bridge checks
+fresh charge/base/odometry state, stationary velocity, faults, charging, and E-stop conditions
+before sending a request. A reconnect fails pending operations and increments a process-local
+`session_generation`; callers receive that generation with every result.
 
 The Pi 5 Compose service also sets
 `RMW_FASTRTPS_PUBLICATION_MODE=ASYNCHRONOUS`. `rmw_fastrtps_cpp` otherwise uses

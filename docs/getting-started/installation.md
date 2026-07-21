@@ -16,7 +16,7 @@ day-one run-through is on [Quickstart](quickstart.md).
 |---|---|
 | **Raspberry Pi 5 main driver** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose |
 | **SBC** | C++ toolchain (`g++`, `make`), **ARIA/AriaCoda** at `/usr/local/Aria`, `socat` |
-| **Operator laptop** (optional) | ROS 2 + RViz2 for visualization/commanding |
+| **Operator laptop** (optional) | SSH client or reviewed dashboard client; raw ROS 2 DDS is not exposed |
 
 The SBC and main Pi 5 are already provisioned. You generally
 do **not** reinstall the OS or ROS; you build/deploy the PatrolBot packages on top.
@@ -48,12 +48,12 @@ with a plain `Makefile` (no ROS, no colcon). See
 |---|---|---|
 | Pi 5 | `robot-pi2` / `ubuntu@patrolbot-ros2` | Main Docker driver |
 | SBC | `robot-sbc` / `ros@172.20.87.231` | Hardware server; Pi runtime endpoint is `10.0.0.1:7272` |
-| Pi 5 and operator | same subnet | Required for ROS 2 DDS discovery without extra config |
+| Pi 5 and operator | management network | SSH or reviewed application bridge; raw ROS 2 DDS is loopback-only |
 
-!!! note "Off-site access"
-    ROS 2 discovery (for RViz) uses plain LAN multicast. On the LAN it just works; from home over a
-    VPN/NAT it generally does not. The FastDDS discovery-server experiment was reverted on
-    2026-06-29 — see [Remote Operation](../deployment/remote-operation.md).
+!!! note "Operator access"
+    Every runtime container uses loopback-only ROS 2 discovery. LAN/VPN RViz does not discover the
+    graph by design. Use SSH for observation or a separately reviewed application bridge — see
+    [Remote Operation](../deployment/remote-operation.md).
 
 ## Documentation toolchain (this site)
 

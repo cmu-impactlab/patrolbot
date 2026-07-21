@@ -21,7 +21,7 @@ sequenceDiagram
     Note over SBC: power on
     SBC->>SBC: patrolbot-wired-ip.service keeps enp2s5 at 10.0.0.1/24
     SBC->>SBC: socat-boot.service opens /dev/ttyS0 → TCP:7000
-    SBC->>SBC: patrolbot-server.service: ARIA connect base+laser, enable motors+sonar, listen :7272
+    SBC->>SBC: patrolbot-server.service: ARIA connect base+laser, disable motors, enable sonar, listen :7272
 
     Note over Bs: Pi power on
     Bs->>Bs: patrolbot-bringup container: twist_mux + teleop_velocity_smoother
@@ -43,8 +43,8 @@ sequenceDiagram
 1. `patrolbot-wired-ip.service` (system) keeps `10.0.0.1/24` applied to `enp2s5`.
 2. `socat-boot.service` (system) opens `/dev/ttyS0` and exposes it as `TCP:7000`.
 3. `patrolbot-server.service` (user) runs `patrolbot_server -rh 127.0.0.1 -rrtp 7000`: ARIA
-   connects to the base (via socat) and the SICK laser, enables motors and sonar, and listens on
-   `:7272`.
+   connects to the base (via socat) and the SICK laser, disables motors, enables sonar, and listens
+   on `:7272`.
 
 If the SBC endpoint is temporarily unavailable when the Pi starts, nothing breaks — the bridge
 just retries every 3 s.
@@ -66,21 +66,23 @@ just retries every 3 s.
 
 1. Sets env (`ROS_DOMAIN_ID=0`, `MAGICK_THREAD_LIMIT=1`, `OMP_NUM_THREADS=1`).
 2. Starts `nav2_container` and registers the `OnProcessExit → Shutdown` handler.
-3. **Localization loads immediately** — `map_server` + `amcl`. The map and `map→odom` are ready in
-   a few seconds; *2D Pose Estimate* works almost immediately.
+3. **Localization loads immediately** — `map_server` + `amcl`. AMCL does not assume map origin;
+   `map→odom` remains invalid until an operator supplies a pose or the commissioned dock-pose
+   initializer converges.
 4. **A 20 s `TimerAction` delays navigation** so costmap inflation doesn't starve localization
    during the container's sequential composable-node loading.
 5. Navigation loads — costmaps, planner, controller, behaviors, collision monitor. After the
    boot-time network-wait fix, *Nav2 Goal* is expected around ~70 s from power-on; older cold-boot
    measurements were around ~3 min. *Nav2 Goal* becomes available here.
-6. `joy_node`, `p3dxJoyTeleop`, the safety watchdog, and `laser_static_tf` also start in this container.
+6. `joy_node`, `patrolbot_joy_teleop`, the safety watchdog, fail-closed dock manager, and
+   `laser_static_tf` also start in this container.
 
 ## Readiness checkpoints
 
 | You can… | As soon as… |
 |---|---|
 | See `/odom`, `/scan` | the bridge connects (Stage 2) |
-| See the map, set *2D Pose Estimate* | localization activates (Stage 3.3, seconds) |
+| See the map, provide an authorized initial pose | localization activates (Stage 3.3, seconds) and a local command interface is available |
 | Drive with the joystick | the mobile base + bridge are up (Stages 1–2) |
 | Send a *Nav2 Goal* | navigation fully activates (Stage 3.5, roughly ~70 s expected after the boot-time network-wait fix) |
 

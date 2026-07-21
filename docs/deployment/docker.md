@@ -6,10 +6,10 @@ description: Build, deploy, inspect, and roll back the Dockerized Raspberry Pi 5
 # Docker Deployment
 
 The Raspberry Pi 5 (`robot-pi2`, hostname `patrolbot-rpi5`) is the main driver and
-runs the three active ROS 2 services from this monorepo. On 2026-07-15 all three
-containers were healthy at image `patrolbot:jazzy-fa14b9b5cedf`. The dedicated
-SBC socket, navigation telemetry, lifecycle states, and required TF links were
-also verified live.
+runs the three active ROS 2 services from this monorepo. On 2026-07-22 all three
+containers were healthy at image `patrolbot:git-b98090a7796d`; the image revision,
+embedded source digest, image label, and deployed tree matched. The dedicated SBC
+socket and fresh stationary telemetry were also verified live.
 
 ## Services
 
@@ -19,7 +19,8 @@ also verified live.
 | `bridge` | `patrolbot-bridge` | TCP client to `10.0.0.1:7272` |
 | `navigation` | `patrolbot-navigation` | Nav2 + joystick + safety watchdog + static TF |
 
-All services share one image, host networking, `ROS_DOMAIN_ID=0`, and FastDDS.
+All services share one image, host networking, `ROS_DOMAIN_ID=0`, Fast DDS, and
+`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`.
 Source is bind-mounted read-only from `PATROLBOT_ROOT`. The legacy `rosaria2`
 package is versioned but deliberately excluded from the image.
 
@@ -76,7 +77,7 @@ Docker health checks inspect expected processes without continuously creating
 ROS DDS participants. The on-demand status command adds SBC data-path,
 telemetry freshness, lifecycle, and TF checks:
 
-- `OVERALL=ready` (exit 0): software and hardware data paths are ready.
+- `OVERALL=ready` (exit 0): every software, telemetry, localization, and commissioned hardware gate is ready.
 - `OVERALL=degraded` (exit 2): containers are healthy but hardware or ROS
   readiness is incomplete.
 - `OVERALL=unhealthy` (exit 1): container liveness failed.
@@ -84,10 +85,10 @@ telemetry freshness, lifecycle, and TF checks:
 `degraded reason=sbc-unavailable` means fresh `/odom` was not observed through
 the bridge; it does not mean the containers failed. The command intentionally
 does not open a separate TCP probe to the single-client hardware server. It
-retries lifecycle discovery to tolerate ROS graph startup delay. The final
-2026-07-15 audit found `/odom` and `/scan` fresh, both lifecycle nodes active,
-both required transforms ready, and the status command reported
-`OVERALL=ready`. The command also enforces one publisher for each hardware
+retries lifecycle discovery to tolerate ROS graph startup delay. The 2026-07-22
+stationary acceptance found the containers and telemetry path healthy, while
+status correctly remained degraded on intentionally deferred physical readiness
+such as joystick, localization, dock pose, and bumpers. The command also enforces one publisher for each hardware
 topic and BEST_EFFORT reliability for `/scan` and `/sonar`, so a second bridge or
 an outdated sensor QoS deployment cannot pass readiness unnoticed.
 It also requires the bridge container's Fast DDS publication mode to be
@@ -99,24 +100,21 @@ back-pressures the sensor writer.
 
 ## Rollback
 
-For rollback, preserve both the previous Compose directory and its image tag:
+For rollback, preserve the exact prior image tag, protected environment file, deployed source tree,
+container inspection, and generated checksums before cutover. Restore only the affected services;
+do not use an old unrelated Compose directory:
 
 ```bash
-cd ~/patrolbot-repo/docker
-docker compose down
-cd ~/docker
-docker compose up -d
+cd /home/ubuntu/patrolbot-repo
+# restore the verified prior source and docker/.env from the backup manifest
+docker compose --env-file docker/.env -f docker/docker-compose.yml \
+  up -d --no-deps bringup bridge navigation
 ```
 
-Short-lived repository snapshots made during Pi 5 refreshes are grouped under
-`~/backups/patrolbot-repo-rollbacks/` on `robot-pi2`. They are rollback aids,
-not active runtime state. Retain them according to the project's rollback policy;
-remove obsolete snapshots when their image revisions are no longer supported:
-
-```bash
-du -sh ~/backups/patrolbot-repo-rollbacks
-rm -rf ~/backups/patrolbot-repo-rollbacks
-```
+PB-AUDIT cutover bundles are retained under `/home/ubuntu/patrolbot-backups/` on the Pi and in the
+off-host ignored `backups/` directory. Verify each bundle's `SHA256SUMS` from the copied files
+before relying on it. Do not prune the old image/source backup until its replacement has passed the
+later physical campaign.
 
 After any network or deployment change, verify `/odom`, `/scan`, `/sonar`, `/battery`,
 `/diagnostics`, `odom → base_link`, and `base_link → laser_frame`. Joystick and

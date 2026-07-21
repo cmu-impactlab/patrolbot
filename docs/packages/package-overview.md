@@ -1,18 +1,20 @@
 ---
 title: Package Overview
-description: The ROS 2 packages that make up PatrolBot — four on the Pi plus the SBC's standalone C++ server — with their roles, build types, and deployment targets.
+description: The active Pi packages, legacy ROS driver, and standalone SBC server that make up PatrolBot.
 ---
 
 # Package Overview
 
-PatrolBot's code is organized into **four ROS 2 packages on the Pi** plus **one standalone C++
-program on the SBC**. Only three of the Pi packages are active; the fourth is a superseded legacy
-driver kept as a fallback.
+PatrolBot's code is organized into **six packages built into the Pi image**, one source-only legacy
+ROS driver, and one standalone C++ program on the SBC.
 
 ```mermaid
 flowchart TB
     subgraph PI["Raspberry Pi — ros2_ws/src"]
         BRIDGE["patrolbot_bridge\n(ament_python)\nTCP↔ROS bridge"]
+        IFACE["patrolbot_interfaces\n(ament_cmake)\ntyped contracts"]
+        DM["patrolbot_dock_manager\n(ament_python)\nguarded orchestration"]
+        DP["patrolbot_docking_plugins\n(ament_cmake)\ndormant typed dock plugin"]
         NAV["patrolbot_navigation\n(ament_cmake)\nNav2 + teleop + TF"]
         LAUNCH["patrolbot-launch\n(ament_python)\nmobile base"]
         ROSARIA["rosaria2\n(ament_cmake)\nLEGACY ARIA driver"]
@@ -28,6 +30,9 @@ flowchart TB
 | Package | Build type | Machine | Status | Page |
 |---|---|---|---|---|
 | `patrolbot_bridge` | ament_python | Pi | **Active** — the SBC's only ROS-side presence | [→](patrolbot_bridge.md) |
+| `patrolbot_interfaces` | ament_cmake | Pi | **Active** — typed base/dock/control contracts | [ROS interfaces](../ros2/services.md) |
+| `patrolbot_dock_manager` | ament_python | Pi | **Active, fail-closed** — dock pose and guarded undock | [Actions](../ros2/actions.md#patrolbot-guarded-undock) |
+| `patrolbot_docking_plugins` | ament_cmake | Pi | **Built, dormant** — typed charging plugin for future generic docking review | [Parameters](../ros2/parameters.md#docking-and-hardware-readiness-gates) |
 | `patrolbot_navigation` | ament_cmake | Pi | **Active** — Nav2 bringup, maps, params, joystick teleop, laser TF | [→](patrolbot_navigation.md) |
 | `patrolbot-launch` | ament_python | Pi | **Active** — mobile base: twist_mux + velocity smoother | [→](patrolbot-launch.md) |
 | `rosaria2` | ament_cmake | Pi | **Legacy** — direct ARIA driver, not launched | [→](rosaria2.md) |
@@ -38,6 +43,11 @@ flowchart TB
 - **`patrolbot_hw_server`** (SBC) is the data source. It speaks ARIA to the hardware and a text
   protocol to the Pi.
 - **`patrolbot_bridge`** (Pi) is the translator — the only package that knows the SBC exists.
+- **`patrolbot_interfaces`** (Pi) defines the typed hardware and dock contracts.
+- **`patrolbot_dock_manager`** (Pi) owns fail-closed dock pose and undock orchestration without
+  publishing velocity.
+- **`patrolbot_docking_plugins`** (Pi) is built for a future reviewed Nav2 docking integration but
+  has no active generic docking server.
 - **`patrolbot_navigation`** (Pi) is the autonomy — Nav2, the maps, the joystick, the laser TF.
 - **`patrolbot-launch`** (Pi) is the base controller — velocity arbitration and smoothing between
   the bridge and the autonomy.
@@ -62,10 +72,7 @@ ROS-interface tables there cross-reference the [ROS 2 reference](../ros2/nodes.m
 
 ## Metadata caveat
 
-Several packages still carry scaffold-default metadata. `patrolbot_bridge` and
-`patrolbot-launch` use `ubuntu@todo.todo`/TODO fields in `setup.py` (their
-`package.xml` license is MIT), while `rosaria2/package.xml` still uses
-`joao@todo.todo` and TODO description/license values. Some runtime dependencies
-are also absent from package manifests. See
+Some source-only metadata remains unfinished. `patrolbot_bridge` still carries a placeholder
+maintainer and package description, while `rosaria2` retains legacy placeholder metadata. See
 [Release Process](../contributing/release-process.md) and
 [Known Gaps](../known-gaps.md#code-hygiene).

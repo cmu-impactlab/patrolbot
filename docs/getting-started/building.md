@@ -21,14 +21,18 @@ Build a single package while iterating:
 
 ```bash
 colcon build --packages-select patrolbot_bridge
-# or patrolbot_navigation / patrolbot-launch / rosaria2
+# or patrolbot_interfaces / patrolbot_dock_manager /
+# patrolbot_docking_plugins / patrolbot_navigation / patrolbot-launch
 ```
 
-The workspace has four packages:
+The production image builds six packages; `rosaria2` remains a seventh source-only legacy fallback:
 
 | Package | Build type | Notes |
 |---|---|---|
+| `patrolbot_interfaces` | ament_cmake | typed hardware/docking messages, services, and action |
 | `patrolbot_bridge` | ament_python | the TCP bridge |
+| `patrolbot_dock_manager` | ament_python | guarded dock orchestration |
+| `patrolbot_docking_plugins` | ament_cmake | dormant typed Nav2 charging plugin |
 | `patrolbot_navigation` | ament_cmake | Nav2 + teleop + TF |
 | `patrolbot-launch` | ament_python | mobile base (`twist_mux` + final velocity smoother) |
 | `rosaria2` | ament_cmake | legacy; needs external ARIA and is excluded from Docker |
@@ -38,14 +42,15 @@ The Pi 5 `patrolbot-bringup` container launches the mobile-base package by name:
 old `~/build_backup/patrolbot-launch/` deployment target was removed on 2026-06-28 and should not
 be recreated.
 
-All four packages are versioned by the monorepo. Deployed Pi working trees must not
+All seven source packages are versioned by the monorepo. Deployed Pi working trees must not
 contain nested `.git` directories.
 
 ## SBC: ARIA server
 
 ```bash
 cd ~/patrolbot_hw_server
-make            # g++ -I/usr/local/Aria/include -lAria -lArNetworking -lpthread
+make -B test
+make -B patrolbot_server  # force rebuild because the legacy SBC RTC can skew mtimes
 ```
 
 Produces the `patrolbot_server` binary. No colcon, no ROS. See
@@ -82,7 +87,9 @@ ls -l ~/patrolbot_hw_server/patrolbot_server
 
 ```bash
 cd ~/ros2_ws
-colcon test --packages-select patrolbot_bridge patrolbot-launch
+colcon test --packages-select patrolbot_interfaces patrolbot_bridge \
+  patrolbot_dock_manager patrolbot_docking_plugins patrolbot-launch \
+  patrolbot_navigation
 colcon test-result --verbose
 ```
 

@@ -71,8 +71,8 @@ flowchart TB
         MUX -->|"/cmd_vel"| BRIDGE
     end
 
-    SERVER <==>|"TCP :7272 — ODOM|LASER, AUX, DRIVE"| BRIDGE
-    OP["Operator RViz2\n(network)"] -.->|"DDS"| NAVCON
+    SERVER <==>|"TCP :7272 — telemetry, DRIVE, bounded control"| BRIDGE
+    OP["Operator dashboard / SSH\nreviewed command bridge"] -.-> NAVCON
 ```
 
 ### SBC (robot main PC)
@@ -80,20 +80,26 @@ flowchart TB
 Verified live 2026-06-29 via SSH.
 
 - Runs one C++ program, [`patrolbot_server`](../packages/patrolbot_hw_server.md), linked against
-  ARIA. It connects to the Pioneer base and the SICK laser, enables motors and sonar, and serves
-  a TCP socket on port **7272**.
+  ARIA. It connects to the Pioneer base and the SICK laser, disables motors, enables sonar, and
+  serves a TCP socket on port **7272**.
 - A boot-time `socat` service bridges the base's serial port `/dev/ttyS0` to `TCP:7000` so the
   ARIA server reaches it over a socket rather than holding the serial device directly.
 - Streams two independent text lines: a ~20 Hz **`ODOM|LASER`** navigation line and a ~4–5 Hz
-  **`AUX`** line (sonar, battery, base flags). Accepts **`DRIVE:linear:angular`** back.
+  **`AUX`** line (sonar, battery, base flags). Accepts **`DRIVE:linear:angular`** plus explicit
+  UUID-correlated **`CHARGE_RELEASE`** and **`MOTOR_ENABLE`** requests. `DRIVE` never enables
+  motors.
 
 ### Raspberry Pi (navigation computer)
 
-Verified directly against live source. Four ROS 2 packages, three of them active:
+Verified directly against live source. Six packages build into the active image; one legacy
+direct-ARIA package remains source-only and is excluded:
 
 | Package | Role | Status |
 |---|---|---|
 | [`patrolbot_bridge`](../packages/patrolbot_bridge.md) | TCP↔ROS 2 translation; the SBC's only ROS-side presence | **Active** |
+| `patrolbot_interfaces` | Typed base state, dock readiness, control services, and undock action | **Active** |
+| `patrolbot_dock_manager` | Fail-closed dock-pose and guarded-undock orchestration | **Active but uncommissioned** |
+| `patrolbot_docking_plugins` | Typed charging-state plugin retained for a future reviewed generic docking integration | **Built but dormant** |
 | [`patrolbot_navigation`](../packages/patrolbot_navigation.md) | Nav2 bringup, maps, params, joystick teleop, laser TF | **Active** |
 | [`patrolbot-launch`](../packages/patrolbot-launch.md) | Mobile base: `twist_mux` arbitration + velocity smoother | **Active** |
 | [`rosaria2`](../packages/rosaria2.md) | Legacy direct-ARIA driver, superseded by the bridge | **Legacy / not launched** |
@@ -132,7 +138,7 @@ ends. Each row is detailed on [Communication Architecture](communication-archite
 | Pi vanishes | SBC `send()` hits sustained `EAGAIN` (~3 s) + TCP keepalive | SBC breaks and re-`accept()`s |
 | Nav2 node/container crash | Docker / launch event handler | Whole launch torn down → container restart → fresh stack |
 | Reconnect TF skew | (was) `collision_monitor` extrapolation throw | Fixed with `base_shift_correction: False` (no longer crashes) |
-| Physical SBC reboot | odometry resets to 0,0,0 | **Manual:** operator re-sets pose with *2D Pose Estimate* |
+| Physical SBC reboot | odometry resets to 0,0,0 | Localization remains invalid until an operator deliberately provides a new pose; no automatic origin reset |
 
 ## Scalability notes
 

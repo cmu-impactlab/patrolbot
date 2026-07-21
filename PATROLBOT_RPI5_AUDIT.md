@@ -81,6 +81,7 @@ protocol commissioning and the 2026-07-22 commit-provenance cutover:
 | Manual control | F710/joystick receiver still absent; `/joy` cannot be stationary-validated |
 | SBC-dependent readiness | Single hardware session active; scan, odom, sonar, battery, and base state fresh; the recreated bridge is on its first process-local session generation `1`; motors disabled; charge state `3`; faults zero; odometry zero |
 | Dashboard bridge | Separate container restored after cutover; command mode is enabled and exposes goal/pose operations but no `/cmd_vel` path. No navigation status or queued command appeared during acceptance. |
+| Operational documentation | Reconciled on 2026-07-22 with the deployed protocol, motor policy, command path, loopback DDS boundary, fail-closed docking/localization gates, and verified rollback workflow; strict MkDocs build passed. |
 | Overall status | Stationary cutover ready; localization, bumpers, dock pose, joystick/E-stop, and physical-motion commissioning remain fail-closed, so autonomous operation remains prohibited |
 
 ### Supervised SBC stationary cutover — 2026-07-21

@@ -8,7 +8,7 @@ description: The single TCP socket that joins the SBC and the Pi — its plain-t
 This is the most important integration point in PatrolBot. The two machines do **not** share a
 ROS 2 graph and do **not** use DDS to talk to each other. They meet at exactly one place: a
 **single TCP socket** on which the SBC streams plain-text telemetry and the Pi sends back
-plain-text drive commands.
+plain-text drive and bounded hardware-control requests.
 
 If you understand this page, you understand how the robot is wired together.
 
@@ -24,6 +24,8 @@ flowchart LR
     SRV ==>|"ODOM:x,y,th,vx,vth|LASER:r1..rN\\n  ~20 Hz"| BR
     SRV ==>|"AUX:SONAR=..|BATT=..|FLAGS=..\\n  ~4–5 Hz"| BR
     BR  -->|"DRIVE:linear:angular\\n  on demand"| SRV
+    BR  -->|"CHARGE_RELEASE:uuid / MOTOR_ENABLE:uuid\\n  deliberate only"| SRV
+    SRV -->|"ACK / RESULT\\n  UUID-correlated"| BR
 ```
 
 ## Why a TCP text protocol (and not a ROS 2 bridge)?
@@ -32,9 +34,10 @@ flowchart LR
     **Intent:** keep the SBC a dumb, ROS-free data source so the legacy ARIA toolchain and the
     modern ROS 2 stack never have to coexist on one machine or agree on a DDS version.
 
-    **Why text, not binary or DDS:** the protocol is trivially debuggable (`nc 10.0.0.1 7272`
-    prints readable lines), has zero schema-compiler/versioning burden, and survives partial
-    corruption gracefully (a bad line is just skipped). The cost — a few extra bytes and float
+    **Why text, not binary or DDS:** the protocol is human-readable in captured logs and tests,
+    has zero schema-compiler/versioning burden, and survives partial corruption gracefully (a bad
+    line is just skipped). Do not connect a debugging client to live port 7272: the server is
+    single-client and the Pi bridge owns that session. The cost — a few extra bytes and float
     parsing at 20 Hz — is negligible on this hardware.
 
     **Why TCP, not UDP:** odometry is integrated state; dropping frames silently would accumulate
@@ -100,7 +103,28 @@ DRIVE:linear:angular\n
 ```
 
 Sent by the Pi bridge whenever it receives a `/cmd_vel` message. `linear` is m/s, `angular` is
-rad/s. The SBC reads these non-blocking and forwards them to the base via ARIA.
+rad/s. The SBC reads these non-blocking and forwards them to the base via ARIA. `DRIVE` never
+enables motors and is rejected while charging.
+
+### 4. Hardware-control requests and replies — deliberate only
+
+```text
+CHARGE_RELEASE:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n
+MOTOR_ENABLE:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n
+ACK:COMMAND:request_uuid:ACCEPTED|REPLAYED\n
+RESULT:COMMAND:request_uuid:OK|ERROR:code:message:chargeState:motorsEnabled:eStopPressed\n
+```
+
+The request ID must be a lowercase canonical UUID. The SBC keeps one operation in flight and a
+bounded cache of completed results. Repeating the same command and UUID returns `REPLAYED` plus
+the original terminal result; it does not repeat the hardware action.
+
+`CHARGE_RELEASE` owns only the stationary motor-disable/charge-release transition. It can send
+µARCS command 68 with argument 0 only after its preconditions hold, confirms three stable
+charge-state-zero samples, never sends velocity, and never enables motors. `MOTOR_ENABLE` is a
+separate request rejected while charging, moving, E-stopped, faulted, or telemetry-stale. The Pi
+service response adds the bridge's process-local `session_generation`, so callers can reject a
+result that crossed a reconnect.
 
 ## Connection lifecycle
 
@@ -116,6 +140,10 @@ sequenceDiagram
     loop steady state
         SBC-->>Pi: ODOM|LASER @20 Hz, AUX @~5 Hz
         Pi-->>SBC: DRIVE on each /cmd_vel
+        opt deliberate hardware operation
+            Pi->>SBC: CHARGE_RELEASE or MOTOR_ENABLE + UUID
+            SBC-->>Pi: ACK then terminal RESULT
+        end
     end
     Note over Pi,SBC: link broken (power loss, crash, cable)
     alt SBC vanished
@@ -127,7 +155,8 @@ sequenceDiagram
 ```
 
 The SBC server is **single-client**: an outer `while(robot.isRunning())` loop wraps `accept()`,
-so each Pi disconnect is followed by a fresh `accept()` for the next one.
+so each Pi disconnect is followed by a fresh `accept()` for the next one. Do not use `nc` or any
+other probe against port 7272 while the bridge owns the connection.
 
 ## Self-healing — hardened on both ends
 

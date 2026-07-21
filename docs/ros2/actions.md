@@ -1,26 +1,25 @@
 ---
 title: ROS 2 Actions
-description: The Nav2 action interfaces PatrolBot exposes — navigate_to_pose, follow_path, the recovery behaviors, waypoint following, and docking.
+description: The Nav2 actions and fail-closed custom undock action exposed by PatrolBot.
 ---
 
 # ROS 2 Actions
 
-PatrolBot defines **no custom actions**. All actions in the graph are the standard
-[Nav2](https://docs.nav2.org/) action servers, exposed by the lifecycle nodes composed into
-`nav2_container`. They are listed here because they are the operator-facing entry points into
-autonomy — an RViz *Nav2 Goal* is a `navigate_to_pose` action goal under the hood.
+PatrolBot exposes the standard [Nav2](https://docs.nav2.org/) actions plus one custom guarded
+undock action. They are operator-facing autonomy entry points and can cause motion; listing an
+action here is not authorization to call it.
 
 ## Primary navigation actions
 
 | Action | Type | Server | Triggered by |
 |---|---|---|---|
-| `navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | `bt_navigator` | RViz *Nav2 Goal*, or any client |
+| `navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | `bt_navigator` | reviewed local/dashboard client |
 | `navigate_through_poses` | `nav2_msgs/action/NavigateThroughPoses` | `bt_navigator` | multi-pose runs |
 | `follow_waypoints` | `nav2_msgs/action/FollowWaypoints` | `waypoint_follower` | patrol-style waypoint lists |
 
 ```mermaid
 sequenceDiagram
-    participant Op as Operator (RViz)
+    participant Op as Authorized command client
     participant BT as bt_navigator
     participant Plan as planner_server
     participant Ctrl as controller_server (RPP)
@@ -48,7 +47,23 @@ These are invoked by the behavior tree inside `bt_navigator`, not usually by an 
 | `backup` | `nav2_msgs/action/BackUp` | `behavior_server` | recovery |
 | `drive_on_heading` | `nav2_msgs/action/DriveOnHeading` | `behavior_server` | recovery |
 | `wait` | `nav2_msgs/action/Wait` | `behavior_server` | recovery |
-| `dock_robot` / `undock_robot` | `nav2_msgs/action/DockRobot` | `docking_server` | optional/niche docking |
+
+The generic Nav2 `docking_server`, `dock_robot`, and generic `undock_robot` actions are **not
+launched**. They were removed from the active lifecycle graph because their velocity output bypassed
+the safety chain.
+
+## PatrolBot guarded undock
+
+| Action | Type | Server | Current availability |
+|---|---|---|---|
+| `/patrolbot/undock` | `patrolbot_interfaces/action/Undock` | `patrolbot_dock_manager` | advertised but fail-closed while physical commissioning values remain unset |
+
+The manager publishes no `Twist`. After checking the sole command path, fresh base/odom/sonar,
+mapped bumpers, dock pose, localization, idle actions, charging state, and operator authorization,
+it requests charge release and then invokes Nav2 `BackUp`. It never enables motors itself; a
+separate operator action must satisfy the motor/E-stop window. The active configuration keeps
+`dock_pose_configured=false` and bumper enforcement uncommissioned, so a production undock goal is
+rejected before motion.
 
 ## Sending a goal
 
@@ -61,8 +76,9 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
 !!! warning "Goals require the navigation half to be active"
     Localization activates within seconds, but the navigation half (costmaps, planner, controller)
     is delayed ~20 s and becomes available after staged activation. A `navigate_to_pose` goal
-    sent before then is rejected. Setting an initial pose (*2D Pose Estimate*) does **not** require
-    the navigation half. See [Execution Flow](../architecture/execution-flow.md#nav2-staged-activation).
+    sent before then is rejected. Supplying an initial pose through an authorized local interface
+    does **not** require the navigation half. See
+    [Execution Flow](../architecture/execution-flow.md#nav2-staged-activation).
 
 ## Failure modes
 

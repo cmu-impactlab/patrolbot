@@ -28,22 +28,20 @@ ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
 
 ## Symptom → cause → fix
 
-### "Frame map does not exist" / blank map in RViz { #frame-map-does-not-exist--blank-map-in-rviz }
+### "Frame map does not exist" / localization invalid { #frame-map-does-not-exist--blank-map-in-rviz }
 
 ```mermaid
 flowchart TB
-    A["map missing"] --> B{Fixed Frame = map?}
-    B -->|no| FIX1["Set Global Options → Fixed Frame = map"]
-    B -->|yes| C{amcl publishing map→odom?}
+    A["map frame missing"] --> C{amcl publishing map→odom?}
     C -->|no| D{/scan flowing + initial pose set?}
-    D -->|no| FIX2["Wait for /scan; set 2D Pose Estimate"]
-    C -->|yes, but remote| FIX3["See Remote Operation — multicast over VPN"]
+    D -->|no| FIX2["Wait for /scan; use an authorized local pose interface"]
+    C -->|yes, but laptop sees nothing| FIX3["See Remote Operation — DDS is loopback-only"]
 ```
 
-- Set **Fixed Frame = `map`** (the most common cause).
-- `amcl` needs `/scan` flowing **and** an initial pose. Set *2D Pose Estimate*.
+- `amcl` needs `/scan` flowing **and** an authorized initial pose. Forced map-origin startup is
+  intentionally disabled.
 - Verify: `ros2 topic echo /tf | grep -A1 'frame_id: map'`.
-- If you're remote (VPN) and see *nothing*, it's a transport problem, not data — see
+- If a LAN/VPN laptop sees nothing, loopback-only DDS is working as intended — see
   [Remote Operation](../deployment/remote-operation.md).
 
 ### Nav2 Goal aborts: "No valid trajectories" / "Costmap timed out"

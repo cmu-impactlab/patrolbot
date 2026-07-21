@@ -1369,3 +1369,45 @@ in ignored off-host copies.
 PB-AUDIT-019 and PB-AUDIT-020 are therefore complete. No velocity, goal, pose,
 dock/undock, charge-release, motor-enable, E-stop, joystick, or physical-motion
 operation occurred during this phase.
+
+## 19. Operational documentation reconciliation — 2026-07-22
+
+A post-deployment contradiction sweep found that several tracked operator and
+architecture pages still described the retired startup/DRIVE-triggered motor
+enable, generic docking server, forced-origin localization, pre-arbitration
+command path, and LAN-exposed DDS workflow. Those statements contradicted the
+deployed source and could direct an operator around the commissioned safety
+contract.
+
+The current documentation now records the exact typed hardware services and
+wire replies, the explicit motor policy, the autonomous and final velocity
+muxes, direction-aware scan/sonar protection, fail-closed dock manager,
+loopback-only DDS boundary, six-package production image, stationary
+quickstart, and checksum-backed cutover/rollback procedure. Historical audit
+observations remain labelled as observations from their original window.
+
+At the user's request, the tracked root `AGENTS.md` was deleted and the existing
+`**/AGENTS.md` ignore rule now applies without a root exception. This has no
+runtime effect.
+
+Verification:
+
+- `python3 -m unittest -v
+  ros2_ws/src/patrolbot_navigation/test/test_safety_contract.py`: **30 passed**;
+- `git diff --check`: passed;
+- `.venv/bin/mkdocs build --strict`: passed with no broken-anchor report;
+- repository virtual environment had no `pytest` module, so the two additional
+  pytest-only protocol test files were not rerun locally; production source was
+  unchanged and their deployed-image results remain recorded in §18.1;
+- live Pi state: three healthy core containers, correct revision/digest,
+  loopback DDS, fresh charge state `3`, motors disabled, E-stop clear, faults
+  zero, zero odometry twist, and one `/cmd_vel` publisher/subscriber;
+- live SBC state: synchronized Chrony, active SSH/journald/server units, one TCP
+  7272 client, PID `21102`, and binary hash
+  `b9606502dc815c602397f93f48a0af7eb783ab3e819d87e77fcdf01d40394393`.
+
+Dashboard command mode remained enabled but exposed no direct `/cmd_vel`
+publisher. This phase sent no velocity, goal, pose, hardware-control, docking,
+joystick, E-stop, or motion command. Finding counts remain 8 complete, 15 in
+progress, and 1 untouched; the remaining work is physical commissioning,
+power-fail input/RTC validation, and EOL platform replacement.

@@ -1,116 +1,103 @@
 ---
 title: Quickstart
-description: Bring PatrolBot up from power-on, set an initial pose, and send a navigation goal — plus how to drive it manually with the gamepad.
+description: Bring PatrolBot up to a stationary, fail-closed readiness state before any physical commissioning.
 ---
 
 # Quickstart
 
-The fastest path from power-on to a moving robot. It assumes the SBC and main Pi 5
-are [built](building.md) and [deployed](../deployment/robot-deployment.md). If you're
-starting cold, skim [Installation](installation.md) first.
+The current safe quickstart ends at **stationary readiness**. The software starts
+automatically, but localization, joystick, bumpers, dock pose, successful motor
+enable, and physical motion still require supervised commissioning. Do not turn
+a healthy container status into permission to move the robot.
 
-## 1. Power on — the robot starts itself
+## 1. Power on
 
-The SBC autostarts its systemd services and Docker restarts the Pi 5 containers. You
-do **not** need to launch ROS manually in normal operation.
+The SBC autostarts its systemd services and Docker restores the Pi 5 containers.
+The SBC server connects to the base and laser, enables sonar, and keeps motors
+disabled. The Pi connects as the sole TCP 7272 client.
 
 ```mermaid
 flowchart LR
-    PWR["power on"] --> SBC["SBC: socat + patrolbot_server (:7272)"]
-    PWR --> PI["Pi: bringup → bridge → navigation"]
-    SBC -. ":7272" .-> PI
-    PI --> READY["map + pose in seconds;\ngoals after staged activation"]
+    PWR["power on"] --> SBC["SBC: socat + patrolbot_server"]
+    PWR --> PI["Pi: bringup + bridge + navigation"]
+    SBC -. "single TCP :7272 session" .-> PI
+    PI --> READY["stationary telemetry and safety readiness"]
 ```
 
-## 2. Confirm health
+## 2. Confirm deployed health
 
 ```bash
 ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
-# Expect: three healthy containers and OVERALL=ready
+```
 
+The status report distinguishes software/container health from physical
+commissioning. `OVERALL=degraded reason=ros-readiness` is expected while the
+joystick, localization, dock pose, or bumper mapping is unavailable. It is not
+safe to bypass those gates.
+
+For a bounded telemetry-rate check that does not leave a hidden subscriber:
+
+```bash
 ssh robot-pi2 "docker exec patrolbot-bridge bash -lc \
   'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /odom /scan; do \
      timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
    done'"
-# Expect: /odom and /scan around 20–25 Hz (about 25 Hz observed live)
 ```
 
-If the containers, topics, lifecycle nodes, and TF links are individually healthy
-but the deployed status command reports a lifecycle false negative, use the
-direct `GetState` checks in [Debugging](../development/debugging.md) and deploy the
-latest `docker/status.sh` with the next image revision.
+Expected stationary invariants include:
 
-If `/odom` and `/scan` aren't flowing, the SBC link is unavailable — the bridge will keep retrying every
-3 s. See [Debugging](../development/debugging.md).
+- exactly one established Pi-to-SBC TCP 7272 connection;
+- fresh `/scan`, `/odom`, `/sonar`, `/battery`, and `/patrolbot/base_state`;
+- exactly one `/cmd_vel` publisher (`teleop_velocity_smoother`) and bridge subscriber;
+- zero linear/angular odometry while no motion is authorized;
+- motors disabled while charging and hardware fault flags zero.
 
-## 3. Open RViz (on the LAN)
+## 3. Operator access
 
-```bash
-export ROS_DOMAIN_ID=0
-rviz2
-```
+Raw DDS discovery is loopback-only. A laptop on the LAN or VPN will not discover
+the ROS graph with RViz, even when the robot is healthy. Use SSH for observation
+or the separately reviewed dashboard bridge. See
+[Remote Operation](../deployment/remote-operation.md).
 
-- Set **Global Options → Fixed Frame = `map`**.
-- You should see the map within seconds of the navigation service starting. If you see "Frame map
-  does not exist," the most common cause is the Fixed Frame — then a missing initial pose.
+Dashboard telemetry does not itself authorize commands. Initial pose, goals,
+charge release, motor enable, and velocity are separate state-changing
+operations.
 
-!!! note "From home (VPN)?"
-    Default discovery doesn't cross a VPN, so remote RViz sees nothing until the discovery server is
-    enabled. See [Remote Operation](../deployment/remote-operation.md).
+## 4. Localization
 
-## 4. Set the initial pose
+AMCL no longer assumes that every restart occurred at map origin. A valid pose
+must come from an operator-authorized interface, or from
+`/patrolbot/initialize_dock_pose` after a real dock pose has been surveyed and
+configured. The current `dock_pose_configured=false` makes the dock initializer
+reject rather than publish a guessed pose.
 
-AMCL needs to know where the robot starts.
+Do not send a navigation goal while localization is invalid.
 
-1. Click **2D Pose Estimate** in RViz.
-2. Click the robot's real location on the map and drag in its facing direction.
-3. The map and robot should snap into alignment; `map → odom` starts publishing.
+## 5. Motion commissioning
 
-This works **almost immediately** after boot (localization activates in seconds) — it does **not**
-require the full navigation stack.
+Before any normal goal or manual motion, complete the open audit gates in
+[Known Gaps](../known-gaps.md): E-stop behavior, joystick/deadman, bumper mapping,
+rear sonar and low-obstacle validation, measured footprint/laser geometry, and
+successful explicit motor enable.
 
-## 5. Send a navigation goal
+Any proposed velocity test must first state the exact:
 
-Once the navigation half is active (expected around ~70 s after the boot-time network-wait fix):
+- publication topic and source;
+- linear and angular magnitude;
+- direction;
+- maximum duration or distance;
+- operator/E-stop arrangement;
+- stop and rollback conditions.
 
-!!! warning "Supervise every motion test"
-    Clear the robot's path, keep the gamepad available, and be ready to release the
-    deadman or use the physical emergency stop before sending a goal.
+Only explicit operator approval after those bounds are stated authorizes the
+publication. Dock/undock and guarded reverse remain separate later phases.
 
-1. Click **Nav2 Goal** in RViz.
-2. Click a destination and drag for the final heading.
-3. The robot plans a path and drives to it, avoiding obstacles.
-
-```bash
-# Equivalent from the command line:
-ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
-  "{pose: {header: {frame_id: map}, pose: {position: {x: 2.0, y: 1.0}, orientation: {w: 1.0}}}}"
-```
-
-If a goal is **rejected immediately**, the navigation half isn't active yet — wait and retry. See
-[Actions](../ros2/actions.md).
-
-## 6. Drive manually (gamepad)
-
-The Logitech gamepad (USB on the Pi, switch on **X** for Xinput) overrides autonomy at any time:
-
-- **Hold RB** (deadman) + **left stick Y** = forward/reverse.
-- **Left stick X** = turn; D-pad axes are the fallback.
-- Release RB; the command ramps to zero, then navigation resumes after the mux timeout.
-
-Defaults are 0.35 m/s / 0.7 rad/s under teleop. See [Interfaces](../devices/interfaces.md#logitech-gamepad-manual-override).
-
-## If something's wrong
+## If something is wrong
 
 | Symptom | Go to |
 |---|---|
-| RViz shows nothing | [Debugging](../development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz) |
-| Goal rejected / aborts | [Actions](../ros2/actions.md#failure-modes) |
-| Robot localizes but won't drive | [Debugging](../development/debugging.md#robot-wont-move-under-navigation-but-localization-is-fine) |
-| Scan looks mirrored | [Sensors](../devices/sensors.md#sick-lms-200-laser) |
-| A change didn't take effect | [Updates](../deployment/updates.md) |
-
-## After a physical SBC reboot
-
-A physical SBC power-cycle resets wheel odometry to `0,0,0`. The robot reconnects automatically, but
-AMCL's pose is now wrong — **re-do step 4 (2D Pose Estimate)**.
+| Status reports stale scan/odom or no SBC session | [Debugging](../development/debugging.md) |
+| LAN RViz sees nothing | [Remote Operation](../deployment/remote-operation.md) — expected with loopback-only DDS |
+| Localization invalid | inspect telemetry and provide an authorized pose; never restore forced origin |
+| Motors disabled | inspect charging, E-stop, faults, and physical readiness; `DRIVE` cannot enable motors |
+| A deployment change did not take effect | [Updates](../deployment/updates.md) |

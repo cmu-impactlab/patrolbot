@@ -51,8 +51,8 @@ and `JOY_TIMEOUT=0.4` s drops the deadman on input loss.
 | `min_particles` / `max_particles` | `500` / `1500` | particle budget on the Pi |
 | `laser_model_type` | `likelihood_field` | |
 | `transform_tolerance` | `1.0` | generous, for TF timing on a loaded Pi |
-| `set_initial_pose` | `true` | starts at `initial_pose [0,0,0,0]` |
-| `always_reset_initial_pose` | `true` | re-seeds on (re)activation |
+| `set_initial_pose` | `false` | never claim map origin after a restart |
+| `always_reset_initial_pose` | `false` | requires an operator pose or commissioned dock-pose initializer |
 | `scan_topic` | `scan` | from the bridge |
 
 ### Controller — RPP (`controller_server` / `FollowPath`)
@@ -85,10 +85,11 @@ and `JOY_TIMEOUT=0.4` s drops the deadman on input loss.
 | Parameter | Value | Note |
 |---|---|---|
 | `cmd_vel_in_topic` | `cmd_vel_smoothed` | the smoother's real output (the `cmd_vel_topic` param of the smoother is ignored) |
-| `cmd_vel_out_topic` | `input/navi` | feeds twist_mux at priority 5 |
+| `cmd_vel_out_topic` | `input/navi` | feeds the final twist_mux at priority 5 |
 | `base_shift_correction` | **`False`** | **must stay False** — `True` throws an uncaught extrapolation exception on reconnect that SIGABRTs the whole composed container |
-| `stop_box` | `0.6×0.6 m` polygon | `action_type: stop`, `min_points: 8` |
-| `source_timeout` | `2.0` | |
+| `front_velocity_stop` | direction-selected scan polygon | full 0.6×0.6 m while stopped/forward; rear-only envelope while reversing; `min_points: 8` |
+| `rear_velocity_stop` | direction-selected sonar polygon | rear envelope while stopped/reversing; `min_points: 1` for four sparse transducers |
+| source timeouts | `0.5 s` for `/scan` and `/sonar` | either stale automatic-motion source fails closed |
 
 ### Nav2 internal velocity smoother
 
@@ -99,10 +100,25 @@ and `JOY_TIMEOUT=0.4` s drops the deadman on input loss.
 | `feedback` | `OPEN_LOOP` |
 | (publishes `cmd_vel_smoothed`) | |
 
-### Docking (optional)
+### Docking and hardware-readiness gates
 
-`docking_server` is configured with `opennav_docking::SimpleChargingDock` (`use_battery_status:
-true`, `staging_x_offset: -0.7`). It is wired but niche — patrol operation does not require it.
+The generic `docking_server` parameter block is retained only for a future reviewed integration;
+the node is not launched or lifecycle-managed. Its configured PatrolBot plugin uses typed base
+state rather than inferring charge from `BatteryState.current`.
+
+The active `patrolbot_dock_manager` defaults are deliberately non-operational:
+
+| Parameter | Value | Meaning |
+|---|---|---|
+| `dock_pose_configured` | `false` | no surveyed dock pose; initialize/undock reject |
+| `dock_id` | `main_charger` | expected identifier once commissioned |
+| `sensor_timeout` | `0.5 s` | rear sonar/base state must be fresh |
+| `operator_motor_window` | `10.0 s` | bounded post-release window for separate physical/software motor action |
+| `backup_timeout` | `10.0 s` | upper bound for the guarded Nav2 BackUp phase |
+
+The `nav_command_mux` separately arbitrates autonomous producers before smoothing and collision
+monitoring: controller priority 5, behavior priority 7, and reserved docking priority 9, each with
+a 0.25 s timeout. `/input/docking` intentionally has no publisher.
 
 ## twist_mux (`mux.yaml`)
 
@@ -117,14 +133,19 @@ true`, `staging_x_offset: -0.7`). It is wired but niche — patrol operation doe
 Higher priority wins; the joystick (8) outranks navigation (5). The 1.0 s joy timeout is what lets
 navigation resume after the operator releases the sticks.
 
-## teleop velocity smoother (`smoother.yaml`)
+## Final velocity smoother (`smoother.yaml`)
 
 | Parameter | Value |
 |---|---|
-| `speed_lim_v` / `speed_lim_w` | `1.0` / `5.4` |
-| `accel_lim_v` / `accel_lim_w` | `2.0` / `1.5` |
-| `frequency` | `20.0` Hz |
-| `decel_factor` | `2.5` |
+| `max_velocity` | `[0.35, 0.0, 0.7]` |
+| `min_velocity` | `[-0.35, 0.0, -0.7]` |
+| `max_accel` | `[1.0, 0.0, 1.5]` |
+| `max_decel` | `[-1.4, 0.0, -2.0]` |
+| `smoothing_frequency` | `20.0` Hz |
+| `velocity_timeout` | `0.5 s` |
+
+These are the declared Jazzy `nav2_velocity_smoother` keys. The retired Kobuki-style
+`speed_lim_*`, `accel_lim_*`, `frequency`, and `decel_factor` keys are not valid here.
 
 ## Launch-time environment variables (`bringup.launch.py`)
 

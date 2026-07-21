@@ -40,12 +40,18 @@ stop-box → twist_mux → teleop smoother, so the bridge forwards a single, alr
 
 ### Motors and enabling
 
-Motors are enabled **on the SBC**, inside `patrolbot_server` at startup (ARIA
-`enableMotors()`). If a nonzero `DRIVE` arrives while ARIA reports the motors
-disabled, the server retries `enableMotors()` with a 500 ms throttle. A latched
-hardware e-stop still cannot be overridden in software. (The legacy
-[`rosaria2`](../packages/rosaria2.md) path exposed
-`enable_motors`/`disable_motors` services, but it is not used.)
+The SBC server disables motors at startup. A `DRIVE` line never enables them,
+so a stale or unexpected velocity cannot wake the drive system. Motor power can
+be requested only through `/patrolbot/motor_enable` with a caller-generated
+canonical UUID. Both the Pi bridge and SBC reject it unless the robot is
+stationary, released from charging, E-stop clear, telemetry-valid, and
+fault-free. A latched physical E-stop cannot be overridden in software.
+
+Dock release is deliberately separate: `/patrolbot/charge_release` may send
+µARCS `CHARGE 0`, but it leaves motors disabled and sends no velocity. A later
+operator-approved motion procedure must explicitly enable motors before any
+movement. (The legacy [`rosaria2`](../packages/rosaria2.md) path exposed
+different motor services, but it is not active.)
 
 ### Calibration
 
@@ -63,7 +69,8 @@ hardware e-stop still cannot be overridden in software. (The legacy
 | Bridge can't send `DRIVE` (socket down) | Send is best-effort and dropped silently; no command reaches the base → watchdog stop. |
 | Motor stall / fault | Reported on `/diagnostics` as `ERROR` ("motor stall / fault"); see [Controllers](controllers.md). |
 | `collision_monitor` stop-box triggered | Velocity gated to zero before it reaches the bridge; robot holds position. |
-| **Physical SBC reboot** | Wheel odometry resets to `0,0,0`; the robot keeps reconnecting but AMCL's pose is now wrong — re-set it with *2D Pose Estimate*. This is an inherent caveat of odometry living on the SBC, not a fault. |
+| Motors disabled | `DRIVE` remains motionless; use the explicit motor-enable workflow only after its physical safety prerequisites are met. |
+| **Physical SBC reboot** | Wheel odometry resets to `0,0,0`; the robot reconnects but localization is invalid until an operator deliberately reinitializes pose. No automatic origin reset is allowed. |
 
 ## Scalability / tuning notes { #scalability--tuning-notes }
 

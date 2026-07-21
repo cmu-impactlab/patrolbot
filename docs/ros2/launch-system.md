@@ -17,7 +17,7 @@ together, and the patched Nav2 launch files that make the large map work. Boot o
 |---|---|---|---|
 | `bringup.xml` | `patrolbot-bringup` | `patrolbot-launch` | mobile base: `twist_mux` + `teleop_velocity_smoother` + `lifecycle_mgr.py` |
 | `bridge_node` (run, not launch) | `patrolbot-bridge` | `patrolbot_bridge` | the TCP bridge |
-| `bringup.launch.py` | `patrolbot-navigation` | `patrolbot_navigation` | Nav2 (composed) + `joy_node` + teleop + safety watchdog + `laser_static_tf` |
+| `bringup.launch.py` | `patrolbot-navigation` | `patrolbot_navigation` | Nav2 (composed) + autonomous mux + joy/teleop + safety watchdog + dock manager + `laser_static_tf` |
 
 ## Mobile-base launch (`patrolbot-launch/launch/bringup.xml`) { #mobile-base-launch }
 
@@ -60,8 +60,9 @@ This is a hand-built launch — it deliberately does **not** call `nav2_bringup`
    service container. A component-container respawn would come back empty.
 4. Includes the patched **localization** launch immediately.
 5. Includes the patched **navigation** launch after a 20 s `TimerAction`.
-6. Starts `joy_node`, `p3dxJoyTeleop` (remap `/cmd_vel_joy → /input/joy`),
-   `patrolbot_safety_watchdog.py`, and `laser_static_tf`.
+6. Starts `nav_command_mux`, `joy_node`, `patrolbot_joy_teleop` (remap
+   `/cmd_vel_joy → /input/joy`), `patrolbot_safety_watchdog.py`, the fail-closed
+   `patrolbot_dock_manager`, and `laser_static_tf`.
 
 ```mermaid
 flowchart TB
@@ -69,7 +70,8 @@ flowchart TB
     CONT --> HANDLER["OnProcessExit → Shutdown"]
     CONT --> LOC["patrolbot_localization_launch.py\n(map_server + amcl, bond_timeout 0.0)"]
     LOC -->|"+20 s TimerAction"| NAV["patrolbot_navigation_launch.py\n(costmaps, planner, controller, ...)"]
-    CONT --> JOY["joy_node + p3dxJoyTeleop"]
+    CONT --> JOY["nav_command_mux + joy/teleop"]
+    CONT --> SAFE["safety watchdog + dock manager"]
     CONT --> LTF["laser_static_tf (roll=π)"]
 ```
 

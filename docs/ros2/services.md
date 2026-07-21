@@ -1,16 +1,45 @@
 ---
 title: ROS 2 Services
-description: Services in the PatrolBot graph — the Nav2 lifecycle and clear-costmap services, the smoother state-change client, and the legacy motor-enable services.
+description: PatrolBot hardware-control, dock-pose, lifecycle, and management services.
 ---
 
 # ROS 2 Services
 
-PatrolBot is light on custom services. Most services in the graph are the **standard Nav2
-lifecycle and management services** exposed by the composed nodes; PatrolBot adds one client
-(`lifecycle_mgr.py`) and inherits the rest. The custom bridge defines **no** services — the SBC
-link is a raw socket, not a service interface.
+Most services in the graph are the **standard Nav2 lifecycle and management services** exposed by
+the composed nodes. PatrolBot also provides typed wrappers around the existing SBC socket and an
+operator-authorized dock-pose initialization service.
 
 ## Custom to PatrolBot
+
+### Hardware control
+
+| Service | Type | Server | Safety contract |
+|---|---|---|---|
+| `/patrolbot/charge_release` | `patrolbot_interfaces/ChargeRelease` | `patrolbot_bridge` | stationary/fresh/fault-free; releases charging but leaves motors disabled and sends no velocity |
+| `/patrolbot/motor_enable` | `patrolbot_interfaces/MotorEnable` | `patrolbot_bridge` | stationary, charge state zero, E-stop clear, fresh state, and fault-free; never implied by `DRIVE` |
+
+Each request carries a caller-generated lowercase canonical UUID. Responses preserve acceptance,
+success, code, message, request ID, charge/motor/E-stop state, elapsed time, and the bridge's
+process-local `session_generation`. Reusing a completed UUID replays the cached result without a
+second hardware action.
+
+!!! warning "These are hardware operations"
+    Do not call either service as a connectivity probe. Charge release changes charger hardware;
+    motor enable changes actuator power state. Follow the commissioned operator procedure and
+    obtain the required physical approvals first.
+
+### Dock-pose initialization
+
+| | |
+|---|---|
+| **Service** | `/patrolbot/initialize_dock_pose` |
+| **Type** | `patrolbot_interfaces/InitializeDockPose` |
+| **Server** | `patrolbot_dock_manager` |
+| **Purpose** | Publish the configured, operator-authorized dock pose and return only after AMCL convergence |
+
+The service remains fail-closed while `dock_pose_configured=false`; the active configuration does
+not contain a surveyed pose. It replaced the unsafe assumption that every restart happened at map
+origin.
 
 ### Velocity-smoother lifecycle transition
 
@@ -62,5 +91,6 @@ The legacy [`rosaria2`](../packages/rosaria2.md) driver advertised motor-control
 | `enable_motors` | `std_srvs/Empty` | `rosaria2_node` |
 | `disable_motors` | `std_srvs/Empty` | `rosaria2_node` |
 
-In the current architecture, motor enable/sonar enable happen on the **SBC** inside
-`patrolbot_server` at startup, not via a ROS service.
+In the current architecture, sonar is enabled on the SBC at startup, while motors are explicitly
+disabled. The active motor-enable interface is `/patrolbot/motor_enable`, not either legacy
+`rosaria2` service.

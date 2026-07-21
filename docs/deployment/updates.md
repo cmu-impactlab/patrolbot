@@ -67,9 +67,9 @@ cd ~/patrolbot-repo/docker
 docker compose restart navigation
 ```
 
-After replacing a map, set a fresh *2D Pose Estimate* before sending goals. If the source map is a
-CAD drawing, remove title blocks, border frames, and furniture/hatching artifacts that the laser
-cannot see.
+After replacing a map, keep navigation unavailable until an operator deliberately supplies and
+validates a fresh pose through an authorized local interface. If the source map is a CAD drawing,
+remove title blocks, border frames, and furniture/hatching artifacts that the laser cannot see.
 
 ## Rolling back
 
@@ -89,7 +89,7 @@ ssh robot-pi2 "docker exec patrolbot-navigation bash -lc \
   'source /opt/ros/\$ROS_DISTRO/setup.bash; for topic in /odom /scan /cmd_vel; do \
      timeout --signal=INT --kill-after=2 6 ros2 topic hz \"\$topic\" || true; \
    done'"
-# Set 2D Pose Estimate, then a Nav2 Goal — confirm the robot plans and moves
+# Stop at stationary validation unless the separate physical-motion campaign is approved.
 ```
 
 Re-run the [resilience tests](../development/testing.md#resilience-tests-the-important-ones) after

@@ -14,7 +14,7 @@ separate Makefile project pending a verified source import.
 |---|---|
 | **Pi** | Ubuntu, ROS 2 **Jazzy**, `colcon`, Nav2 (`nav2_bringup`, `nav2_msgs`), `twist_mux`, `joy`, `slam_toolbox` |
 | **SBC** | C++ toolchain (`g++`, `make`), ARIA/AriaCoda installed at `/usr/local/Aria` |
-| **Operator laptop** | ROS 2 + RViz2 for visualization (optional) |
+| **Operator laptop** | SSH client; optional reviewed dashboard tooling |
 
 The robot machines are reached over SSH:
 - **Pi 5:** `ssh ubuntu@patrolbot-ros2`

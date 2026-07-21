@@ -83,9 +83,9 @@ Not a device, but worth naming as the human interface to the running system:
 
 | Interface | Where | Purpose |
 |---|---|---|
-| **RViz2** | operator laptop | set *2D Pose Estimate* + *Nav2 Goal*, visualize map/scan/costmaps |
+| **Reviewed dashboard bridge** | Pi/application service | telemetry; pose/goal only when its separate command mode and physical procedure are authorized |
 | **`docker compose logs` / `docker exec`** | Pi 5 (SSH) | live container logs and ROS 2 inspection |
-| **`rqt_robot_monitor`** | operator laptop | view `/diagnostics` |
+| **Container-local ROS tools** | Pi 5 (SSH) | bounded graph/topic diagnostics without exposing DDS to the LAN |
 
-RViz over a VPN needs special transport setup — see
+Raw RViz discovery is intentionally unavailable on both LAN and VPN — see
 [Remote Operation](../deployment/remote-operation.md).

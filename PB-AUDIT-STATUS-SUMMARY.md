@@ -53,6 +53,44 @@ Classification rules:
 |---|---|
 | PB-AUDIT-023 | Gyro firmware mode and physical performance remain unqueried and unvalidated. |
 
+## Latest safe non-motion completion — 2026-07-22
+
+The tracked operational documentation was reconciled with the commissioned
+runtime after a source-to-doc contradiction sweep. It now consistently records:
+
+- motors disabled at SBC startup and no DRIVE-triggered enable;
+- separate, UUID-correlated `CHARGE_RELEASE` and `MOTOR_ENABLE` operations;
+- the upstream autonomous mux, direction-aware scan/sonar collision path, and
+  single final `/cmd_vel` publisher;
+- the fail-closed dock manager, disabled generic docking server, and invalid
+  localization until an authorized pose converges;
+- loopback-only DDS with SSH/reviewed-bridge operator access; and
+- commit/digest-backed deployment and checksum-verified rollback practice.
+
+The root `AGENTS.md` was also removed and its existing repository-wide ignore
+rule was allowed to apply, as requested. This housekeeping change does not alter
+robot runtime behavior.
+
+Final read-only live checks at approximately 01:40 +03 showed three healthy
+core containers on `patrolbot:git-b98090a7796d`, matching revision/source
+provenance, fresh base state, charge state `3`, motors disabled, E-stop clear,
+zero faults, zero odometry twist, one `/cmd_vel` publisher/subscriber, one TCP
+7272 client, SBC PID `21102`, and unchanged server hash `b9606502...94393`.
+Chrony, SSH, journald, and the hardware-server unit were active. Dashboard
+command mode remained enabled but added no `/cmd_vel` publisher. No velocity,
+goal, pose, hardware-control, docking, joystick, or E-stop command was sent.
+
+The finding counts remain **8 fully completed, 15 in progress, and 1 not
+touched**. All remaining audit closure work is physical or requires a real
+hardware signal/platform change:
+
+- E-stop, joystick/deadman, bumper, sonar, low-obstacle, envelope, LiDAR-height,
+  and gyro commissioning;
+- surveyed dock pose, successful explicit motor enable/PWR ON, exact-bounds
+  guarded reverse, and full undock/re-dock/charging regression; and
+- RTC-battery/cold-boot persistence, a demonstrated SBC power-fail shutdown
+  input, and eventual EOL SBC replacement.
+
 ## Detailed evidence
 
 - `PATROLBOT_RPI5_AUDIT.md` — canonical finding definitions and current

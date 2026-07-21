@@ -31,13 +31,14 @@ and the laser frame transform.
 
 | Path | Role |
 |---|---|
-| `launch/bringup.launch.py` | Top-level launch — container, staged localization/navigation, joy, laser TF |
+| `launch/bringup.launch.py` | Top-level launch — container, staged localization/navigation, joy, safety, dock manager, laser TF |
 | `launch/patrolbot_localization_launch.py` | Patched nav2_bringup localization (`bond_timeout: 0.0`) |
 | `launch/patrolbot_navigation_launch.py` | Patched nav2_bringup navigation (`bond_timeout: 0.0`) |
 | `config/nav2_params.yaml` | Full Nav2 parameter set ([Parameters](../ros2/parameters.md)) |
 | `maps/second_map.{yaml,pgm}` | **Active** map — 3192×2205 @ 0.075 m/px, origin `[-1,-1,0]` |
 | `maps/cmuq_1st_floor.{yaml,pgm}` | Older CMU-Q map — not loaded |
 | `scripts/patrolbot_joy_teleop.py` | Xinput joystick teleop node |
+| `scripts/patrolbot_safety_watchdog.py` | priority-10 telemetry/power/fault/E-stop hold |
 | `scripts/lms200_sanitizer.py` | `/bad_scan → /good_scan` header fixer — **not in active launch** |
 | `scripts/twist_mux.yaml` | reference priority config — twist_mux runs from `patrolbot-launch` |
 | `rviz/patrolbot_nav.rviz` | operator RViz layout |
@@ -49,7 +50,9 @@ Launches the Nav2 nodes (see [Nodes → Nav2](../ros2/nodes.md#nav2-composed-in-
 | Node | Interface |
 |---|---|
 | `joy_node` | pub `/joy` |
-| `p3dxJoyTeleop` | sub `/joy`; pub `/cmd_vel_joy → input/joy` |
+| `patrolbot_joy_teleop` | sub `/joy`; pub `/cmd_vel_joy → input/joy` |
+| `patrolbot_safety_watchdog` | sub scan/odom/battery/base state; pub priority-10 zero hold |
+| `patrolbot_dock_manager` | pub dock readiness; dock-pose service; fail-closed guarded-undock action |
 | `laser_static_tf` | TF `base_link→laser_frame` (`roll=π`) |
 
 ## Internal architecture
@@ -65,6 +68,7 @@ flowchart TB
     B --> L["localization (immediate)"]
     L -->|"+20 s"| N["navigation"]
     B --> J["joy + teleop"]
+    B --> S["safety watchdog + dock manager"]
     B --> T["laser_static_tf"]
     C -. "OnProcessExit → Shutdown" .-> SD["Docker restarts Pi 5 service container"]
 ```
@@ -81,7 +85,7 @@ map work on the Pi:
 - `bond_timeout: 0.0` so map inflation doesn't starve the lifecycle bond.
 
 If replacing the map, preserve the confirmed scale unless the new map is operator-verified against
-real walls in RViz.
+real walls through a reviewed visualization path.
 
 ## Example usage
 

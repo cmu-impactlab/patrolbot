@@ -19,6 +19,8 @@ flowchart TB
 
     subgraph PI["Raspberry Pi — ROS_DOMAIN_ID=0"]
         BRIDGE["patrolbot_bridge"]
+        DOCK["patrolbot_dock_manager"]
+        NAVMUX["nav_command_mux"]
 
         subgraph CONTAINER["nav2_container (single composed process)"]
             MAPSRV["map_server"]
@@ -55,13 +57,17 @@ flowchart TB
     AMCL -->|"TF map→odom"| CONTAINER
 
     BT --> CONTROLLER
-    CONTROLLER -->|"cmd_vel"| VSMOOTH
+    CONTROLLER -->|"input/nav_controller"| NAVMUX
+    BEHAV -->|"input/nav_behavior"| NAVMUX
+    NAVMUX -->|"cmd_vel_nav"| VSMOOTH
     VSMOOTH -->|"cmd_vel_smoothed"| COLMON
     COLMON -->|"input/navi (prio 5)"| TWISTMUX
 
     JOYNODE -->|"/joy"| JOYTELEOP
     JOYTELEOP -->|"input/joy (prio 8)"| TWISTMUX
     WATCHDOG["patrolbot_safety_watchdog"] -->|"input/safety_controller (prio 10)"| TWISTMUX
+    BRIDGE -->|"base state"| DOCK
+    DOCK -.->|"guarded BackUp action; no Twist"| BEHAV
 
     TWISTMUX -->|"cmd_vel_out"| TELEOPSMOOTH
     TELEOPSMOOTH -->|"/cmd_vel"| BRIDGE
@@ -73,7 +79,7 @@ tables are in [Topics](../ros2/topics.md) and [Parameters](../ros2/parameters.md
 
 ## Layers of responsibility
 
-The software falls into four layers, each a clean boundary:
+The software falls into five layers, each a clean boundary:
 
 1. **Transport layer — [`patrolbot_bridge`](../packages/patrolbot_bridge.md).** The only code that
    knows the SBC exists. Converts the TCP text stream into `/odom`, `/scan`, `/sonar`, `/battery`,
@@ -87,6 +93,9 @@ The software falls into four layers, each a clean boundary:
    smoother shapes the result before it reaches the bridge.
 4. **Teleop layer — joystick.** `joy_node` + [`patrolbot_joy_teleop`](../ros2/nodes.md#patrolbot_joy_teleop)
    inject a high-priority manual command that overrides autonomy on demand.
+5. **Dock-safety orchestration — `patrolbot_dock_manager`.** Publishes no velocity. It owns
+   operator-authorized dock-pose initialization and a fail-closed undock state machine that uses
+   the existing typed hardware services and Nav2 BackUp path.
 
 ## The `cmd_vel` arbitration chain
 
@@ -97,8 +106,11 @@ consumes.
 
 ```mermaid
 flowchart LR
-    RPP["controller_server\n(RPP)"] -->|cmd_vel| VS["velocity_smoother\n(in nav2_container)"]
-    VS -->|cmd_vel_smoothed| CM["collision_monitor\nstop-box 0.6×0.6 m"]
+    RPP["controller_server\n(RPP)"] -->|input/nav_controller| NM{{"nav_command_mux"}}
+    BS["behavior_server"] -->|input/nav_behavior| NM
+    FD["reserved docking input\n(no publisher)"] -.->|input/docking| NM
+    NM -->|cmd_vel_nav| VS["velocity_smoother\n(in nav2_container)"]
+    VS -->|cmd_vel_smoothed| CM["collision_monitor\ndirection-aware scan + sonar"]
     CM -->|input/navi · prio 5| TM{{"twist_mux"}}
     JT["patrolbot_joy_teleop"] -->|input/joy · prio 8| TM
     TM -->|cmd_vel_out| TVS["teleop_velocity_smoother"]
@@ -108,9 +120,11 @@ flowchart LR
 
 Reading it carefully:
 
-- Inside `nav2_container`, RPP publishes `cmd_vel`; the Nav2 `velocity_smoother` republishes
-  `cmd_vel_smoothed`; `collision_monitor` reads `cmd_vel_smoothed`, applies its stop-box, and
-  emits the result on **`input/navi`** at twist_mux priority **5**.
+- Inside the navigation Docker container, composed RPP and behavior-server nodes publish to the
+  separate standalone `nav_command_mux` inputs. Its sole output `cmd_vel_nav` enters the composed
+  Nav2 velocity smoother, which republishes `cmd_vel_smoothed`; `collision_monitor` reads that,
+  applies direction-aware scan and sonar stop polygons, and emits **`input/navi`** at final
+  twist_mux priority **5**.
 - `patrolbot_joy_teleop` emits on **`input/joy`** at priority **8** — *higher* than navigation.
   While RB is held it publishes the ramped command at 30 Hz. On RB release or
   0.4 s of `/joy` loss it ramps to zero, publishes one final zero, then goes silent;
@@ -126,10 +140,11 @@ Reading it carefully:
     cmd_vel` (output), so its final output is the real `/cmd_vel`. The remaps are why the names look
     circular. See [Launch System](../ros2/launch-system.md#mobile-base-launch).
 
-!!! warning "Configured but mostly unused mux inputs"
+!!! warning "Reserved mux inputs"
     `input/safety_controller` is active: `patrolbot_safety_watchdog.py` publishes zero Twist at
-    priority 10 when `/scan` or `/odom` goes stale. `input/teleop` (prio 8) and `input/switch`
-    (prio 6) are reserved and have no current publisher.
+    priority 10 on stale/faulted safety state. `input/teleop` (prio 8) and `input/switch` (prio 6)
+    on the final mux are reserved and have no current publisher. `/input/docking` on the upstream
+    autonomous mux is also publisher-free until a future reviewed producer passes commissioning.
 
 **Failure mode — `cmd_vel_in_topic` mismatch.** Earlier, `collision_monitor` read `cmd_vel_raw`,
 which had no publisher, so navigation commands silently never reached the robot. It now reads
@@ -172,8 +187,9 @@ brings up a fresh, fully populated stack. This converts
 Localization (`map_server` + `amcl`) loads first so the map and `map→odom` are ready within
 seconds. The heavy navigation half (costmaps inflating the large map) is delayed **20 s** with a
 `TimerAction` so it does not starve localization during the container's sequential composable-node
-loading. Practical result: the RViz map and *2D Pose Estimate* are usable almost immediately;
-*Nav2 Goal* becomes available a bit later. The full sequence is on
+loading. Practical result: localization services are available early, but the robot remains
+unlocalized until an operator supplies a valid pose; navigation becomes available a bit later.
+The full sequence is on
 [Startup Sequence](../internals/startup-sequence.md).
 
 ## The large-map problem
@@ -205,5 +221,5 @@ out its loss without operator intervention:
   through the highest-priority `twist_mux` input until fresh data returns.
 
 The one case software cannot mask is a **physical SBC reboot**, which resets ARIA odometry to
-`0,0,0`; AMCL's pose is then wrong and the operator must re-set it with *2D Pose Estimate*. See
-[Known Gaps](../known-gaps.md) and [Debugging](../development/debugging.md).
+`0,0,0`; localization must remain invalid until an operator deliberately supplies a fresh pose.
+See [Known Gaps](../known-gaps.md) and [Debugging](../development/debugging.md).

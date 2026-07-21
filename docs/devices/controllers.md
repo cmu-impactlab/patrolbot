@@ -75,7 +75,7 @@ stall_value (16-bit):
 | Motor stall | `/diagnostics` level ERROR, `left/right_motor_stall = True` | base also halts; clear the obstruction, re-enable if needed |
 | Base fault | `/diagnostics` level ERROR, `fault_flags != 0` | inspect on `rqt_robot_monitor` |
 | Malformed `FLAGS` section | no `/diagnostics` update that cycle | dropped in isolation; nav data unaffected |
-| Motors disabled unexpectedly | level WARN, `motors_enabled = False` | nonzero `DRIVE` triggers throttled SBC-side `enableMotors()`; inspect e-stop if it stays disabled |
+| Motors disabled | level WARN, `motors_enabled = False` | `DRIVE` cannot enable motors; inspect charging, E-stop, faults, and telemetry before a deliberate `/patrolbot/motor_enable` request |
 
 ## Where the controller setpoints come from
 

@@ -23,16 +23,16 @@ Short answers with links to the full story.
   it on the Pi (`/odom`, `/scan`, `/sonar`, `/battery`, `/diagnostics`).
 
 **Why TCP text instead of a ROS 2 bridge over DDS?**
-: Debuggability (`nc 10.0.0.1 7272` prints readable lines), no schema/versioning burden, and
-  the SBC needs no DDS at all. See
+: Readable protocol lines, no schema/versioning burden, and the SBC needs no DDS at all. Port 7272
+  is single-client, so never connect `nc` while the Pi bridge is active. See
   [Communication → why a TCP text protocol](architecture/communication-architecture.md#why-a-tcp-text-protocol-and-not-a-ros-2-bridge).
 
 ## "It's not working"
 
 **RViz shows nothing / "Frame map does not exist."**
-: On the LAN: set **Fixed Frame = `map`**, and make sure `/scan` is flowing and you've set a *2D
-  Pose Estimate*. From home over a VPN: it's a **transport** problem — multicast discovery doesn't
-  cross the VPN. See [Remote Operation](deployment/remote-operation.md) and
+: Raw DDS is intentionally loopback-only, so laptop RViz sees nothing on both LAN and VPN. For a
+  local visualization path, verify `/scan` and provide a pose only through an authorized
+  interface. See [Remote Operation](deployment/remote-operation.md) and
   [Debugging](development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz).
 
 **I changed `patrolbot-launch` and nothing happened.**
@@ -54,7 +54,7 @@ Short answers with links to the full story.
 
 **`/odom` and `/scan` stopped.**
 : The SBC link dropped. The bridge reconnects every 3 s. If the SBC was physically rebooted,
-  re-set the pose with *2D Pose Estimate* (odometry reset to 0,0,0). See
+  keep localization invalid until an operator provides a fresh pose (odometry reset to 0,0,0). See
   [Debugging](development/debugging.md).
 
 **Nav2 restarted itself.**
@@ -70,12 +70,14 @@ Short answers with links to the full story.
   patrolbot-bridge` show the main runtime. See [Debugging](development/debugging.md).
 
 **How long until the robot is ready after boot?**
-: Map + pose estimate in a few seconds; full navigation goals are expected around ~70 s after the
-  boot-time network-wait fix, with older cold-boot measurements around ~3 min. See
+: The map/localization services load first; navigation services follow after staged activation.
+  Localization does not become valid until an operator supplies a pose. See
   [Startup Sequence](internals/startup-sequence.md).
 
-**Does the robot keep running if I lose my RViz/SSH connection?**
-: Yes — autonomy continues; a running goal isn't interrupted. The joystick is the local override.
+**Does the robot keep running if I lose my dashboard/SSH connection?**
+: A running goal is not canceled merely because the observer disconnects. The robot's onboard
+  safety chain remains authoritative; normal operation is still prohibited until the physical
+  E-stop/joystick/sensor commissioning gates pass.
 
 **Why is the robot capped at 0.26 m/s?**
 : An indoor-patrol safety choice in the Nav2 smoother; RPP's desired cruise speed

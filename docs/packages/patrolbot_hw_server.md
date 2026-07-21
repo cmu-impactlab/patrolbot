@@ -10,24 +10,25 @@ hardware and a plain-text protocol to the Pi. It is **not a ROS package** — ju
 project linked against ARIA.
 
 !!! info "SBC source and live verification"
-    On 2026-07-15 the two system units (`patrolbot-wired-ip` and `socat-boot`),
-    the user `patrolbot-server` unit, listening socket, source, and a short live
-    telemetry sample were checked. `SKILLS/sbc-architecture.md` records the
-    detailed server behavior, watchdog, stale-laser handling, and diagnostics.
+    On 2026-07-22 the system units, user server unit, single TCP client,
+    deployed source/binary checksums, and live stationary telemetry were
+    revalidated. The commissioned server keeps motors disabled at startup and
+    exposes separate, idempotent charge-release and motor-enable operations.
 
 | | |
 |---|---|
 | **Deploys to** | **SBC** (robot main PC; Pi endpoint `10.0.0.1:7272`, lab SSH may be `172.20.87.231`) |
 | **Build** | `Makefile` (`g++ -I/usr/local/Aria/include -lAria -lArNetworking -lpthread`) |
-| **Binary** | `patrolbot_server` (recorded as last built 2026-06-28 in `SKILLS/sbc-architecture.md`) |
-| **Source** | `patrolbot_hw_server/patrolbot_server.cpp` (on the SBC) |
+| **Binary** | `patrolbot_server` (32-bit i386 executable; deployed atomically from a tested candidate) |
+| **Source** | `hardware/patrolbot_hw_server/` in this repository; deployed to `~/patrolbot_hw_server/` on the SBC |
 | **Runs ROS 2?** | **No** |
 
 ## Purpose
 
 Be the robot's hardware data source. Connect ARIA to the Pioneer base and the SICK laser, enable
-motors and sonar, then stream telemetry to the Pi and accept drive commands back. Nothing on the
-SBC participates in navigation — that all lives on the Pi.
+sonar, keep motors disabled until a deliberate control request succeeds, stream telemetry to the
+Pi, and accept drive and bounded hardware-control requests back. Nothing on the SBC participates
+in navigation — that all lives on the Pi.
 
 ## Interfaces
 
@@ -39,6 +40,8 @@ protocol](../architecture/communication-architecture.md), not ROS:
 | SBC → Pi | `ODOM:x,y,th,vx,vth|LASER:r1,...,rN` | ~20 Hz |
 | SBC → Pi | `AUX:SONAR=..|BATT=..|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed` | ~4–5 Hz (every 5th nav frame) |
 | Pi → SBC | `DRIVE:linear:angular` | on demand |
+| Pi → SBC | `CHARGE_RELEASE:request_uuid` / `MOTOR_ENABLE:request_uuid` | deliberate request only |
+| SBC → Pi | `ACK:...` / `RESULT:...` | correlated control response |
 
 Units are converted from ARIA's mm/deg to m/rad **before** sending.
 
@@ -59,8 +62,8 @@ flowchart TB
 ```
 
 - **ARIA connections:** `ArRobotConnector` to the base (routed through the socat TCP bridge with
-  `-rh 127.0.0.1 -rrtp 7000`), `ArLaserConnector` to the SICK on `/dev/ttyS2`. Motors and sonar are
-  enabled at startup.
+  `-rh 127.0.0.1 -rrtp 7000`), `ArLaserConnector` to the SICK on `/dev/ttyS2`. Sonar is enabled and
+  motors are explicitly disabled at startup.
 - **Telemetry build:** each section is assembled defensively under `robot.lock()`. The `AUX` line
   is emitted as a **separate, independent** line every 5th nav frame so an AUX build/parse problem
   can never disturb the navigation-critical `ODOM|LASER` line.
@@ -71,6 +74,13 @@ flowchart TB
   a full send buffer for minutes).
 - **Command watchdog:** if no `DRIVE` arrives for 750 ms, the server commands zero velocity. It also
   stops the base on Pi disconnect before accepting the next client.
+- **Motor policy:** `DRIVE` never enables motors. Only a canonical-UUID `MOTOR_ENABLE` request can
+  call ARIA `enableMotors()`, and it is rejected unless the robot is stationary, charge state is
+  zero, the E-stop is clear, telemetry is valid, and fault flags are zero.
+- **Charge release:** `CHARGE_RELEASE` disables motors if necessary, confirms them stably off,
+  sends µARCS command 68/argument 0 exactly once, and confirms stable charge state zero. It never
+  sends velocity or enables motors. Reusing the same UUID replays the cached result instead of
+  repeating the hardware action.
 - **Stale laser handling:** stale cached SICK readings are not streamed as live data. When the laser
   is disconnected or stale, the server emits an empty `LASER:` field so the Pi safety path detects
   sensor loss.
@@ -99,9 +109,13 @@ notes record this as done.
 
 ```bash
 cd ~/patrolbot_hw_server
-make                       # g++ ... -lAria -lArNetworking -lpthread
-./patrolbot_server -rh 127.0.0.1 -rrtp 7000
+make -B test               # mandatory: the SBC RTC can make mtimes unreliable
+make -B patrolbot_server   # g++ ... -lAria -lArNetworking -lpthread
 ```
+
+Do not execute a candidate beside the live server: port 7272 and the ARIA/socat path are
+single-owner resources. Deployment uses a checksum-backed backup, atomic binary replacement, and
+a restart of only `patrolbot-server.service`.
 
 ## Where to read more
 

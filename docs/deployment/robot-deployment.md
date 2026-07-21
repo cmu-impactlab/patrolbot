@@ -68,19 +68,20 @@ ssh robot-pi2 'docker logs -f patrolbot-bridge'
 
 | Caveat | Action |
 |---|---|
-| **Physical SBC reboot resets odometry** to 0,0,0 | After reconnect, re-set pose with *2D Pose Estimate* in RViz |
+| **Physical SBC reboot resets odometry** to 0,0,0 | Keep navigation invalid until an operator deliberately supplies a fresh pose through an authorized local interface |
 | Linger not enabled on the SBC | `patrolbot-server.service` will not autostart; Pi 5 uses Docker instead |
 | Map changed | keep `second_map.yaml` at the confirmed `0.075 m/px` scale unless a new operator-verified map replaces it |
 
 ## First-time deployment checklist
 
-1. **SBC:** build `patrolbot_server` (`make`), install the two system units plus
+1. **SBC:** build and test `patrolbot_server` with `make -B test` and `make -B patrolbot_server`, install the two system units plus
    the user server unit, `sudo loginctl enable-linger ros`,
    reboot, confirm :7272 is listening.
 2. **Pi 5:** configure `eth0` as `10.0.0.2/24`, build an immutable image revision,
    and start the three Compose services.
-3. **Verify:** `docker/status.sh` reports ready; `/odom` and `/scan` flow; set an
-   initial pose and a goal in RViz.
+3. **Verify stationary state:** `docker/status.sh`, fresh telemetry, one TCP client, one final
+   `/cmd_vel` publisher, motors disabled, and zero odometry. Pose and motion commissioning are
+   separate operator-approved phases.
 
 Follow [Docker Deployment](docker.md) for image versioning, health checks, and rollback.
 

@@ -1,74 +1,60 @@
 ---
 title: Remote Operation
-description: Operating PatrolBot from off-site — why RViz over a VPN sees nothing, the reverted FastDDS Discovery Server experiment, and the LAN fallback.
+description: Safe remote observation and the loopback-only ROS 2 command boundary.
 ---
 
 # Remote Operation
 
-Operating PatrolBot on the **LAN** is straightforward; operating it **from home over a VPN** is not
-currently supported for RViz, because ROS 2's default multicast discovery does not survive VPN/NAT.
-The FastDDS Discovery Server experiment was reverted on 2026-06-29.
+PatrolBot's ROS 2 graph is deliberately **not exposed to the LAN or VPN**. Every
+runtime container uses `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, so raw RViz or
+ROS CLI processes on an operator laptop cannot discover topics, services, or
+actions. This closes the unauthenticated DDS command path identified by
+PB-AUDIT-017.
 
-## On the LAN (the easy path)
+## Supported observation path
 
-On the same subnet as the robot, multicast discovery works. From the operator laptop:
-
-```bash
-export ROS_DOMAIN_ID=0
-rviz2                       # set Fixed Frame = map; use 2D Pose Estimate + Nav2 Goal
-```
-
-You should see `/map`, `/scan`, the TF tree, and be able to set an initial pose and goals. SSH
-gives you the rest:
+Use SSH for read-only status and logs:
 
 ```bash
 ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
 ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
+ssh robot-pi2 'docker logs --tail 100 patrolbot-bridge'
 ```
 
-## From home (VPN/NAT) — the problem
+The optional web dashboard uses a separate application bridge on the Pi. It
+does not open another SBC connection. Its command capability is a distinct,
+explicit mode and must be reviewed independently; telemetry availability does
+not imply permission to send a goal or initial pose.
 
-Running RViz from home (a VM behind VMware NAT + a Cisco VPN) shows **nothing**: no TF, no map,
-"Frame map does not exist". The cause is **transport, not data**:
-
-- The Pi uses FastDDS with `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET` (multicast).
-- **Multicast does not cross the VPN/NAT.** The robot's ROS graph is healthy; the remote client
-  simply can't *discover* it.
+## Why LAN RViz no longer discovers the robot
 
 ```mermaid
 flowchart LR
-    PI["Pi ROS graph (healthy)"] -. "multicast discovery\nblocked by VPN/NAT" .-> HOME["Home RViz\n(sees nothing)"]
-    PI ==>|"future unicast/relay design"| HOME2["Home RViz\n(not active today)"]
+    subgraph PI["Pi host namespace"]
+        CORE["bringup + bridge + navigation"]
+        CORE <-->|"loopback DDS"| APP["optional reviewed app bridge"]
+    end
+    LAP["LAN/VPN laptop\nRViz or ROS CLI"] -. "DDS discovery blocked" .-> CORE
+    LAP -->|"SSH management"| PI
 ```
 
-## Discovery Server Status
+This is expected policy, not a transport fault. The old Fast DDS Discovery
+Server experiment remains disabled, and `SUBNET` discovery must not be restored
+as a convenience workaround.
 
-The robot is back on plain LAN multicast discovery:
+## Command boundary
 
-| Piece | Where | Status |
-|---|---|---|
-| `patrolbot-discovery.service` | historical user-service configuration | **disabled** |
-| `FASTRTPS_DEFAULT_PROFILES_FILE` | Pi 5 containers | **not set** |
-| FastDDS XML profiles | backups / old files | **not runtime state** |
+- Read-only SSH checks are safe when they do not create a second TCP 7272 client.
+- A navigation goal, initial pose, hardware-control service, or velocity is an
+  explicit robot command even when sent through a dashboard.
+- Velocity publication requires the operator to be told the exact topic,
+  magnitude, direction, duration/distance, safety bounds, and stop conditions,
+  followed by explicit approval.
+- Current physical audit gates still prohibit normal autonomous operation.
 
-If VPN RViz is needed again, re-enable it as a deliberate project from backups, then verify LAN RViz,
-on-Pi ROS CLI, TF, map QoS, and Nav2 goals before considering it production.
+If richer remote visualization is needed later, use an authenticated,
+allowlisted bridge and separately review its command permissions. Do not expose
+the raw ROS graph to the campus LAN.
 
-## Remote RViz noise (harmless)
-
-Even when remote viz works, expect client-side log noise that does not indicate a robot fault:
-
-- `glsl120/indexed_8bit_image ... same texture image unit` — OGRE/Mesa Map-display shader bug.
-- `Message Filter dropping message ... laser_frame ... queue is full` tagged `[rviz2]` — RViz's own
-  scan-display TF queue.
-
-## Safe remote operation
-
-- Prefer SSH + `docker/status.sh` and container logs for *observing*; use RViz
-  for *commanding* (pose/goal).
-- The robot is resilient to losing the operator entirely — autonomy continues; the joystick is the
-  local override. Losing RViz does not stop a running goal.
-- Remember the [physical-reboot caveat](robot-deployment.md#operational-caveats): after an SBC
-  power-cycle, re-set the pose.
-
-See [Network Setup](network-setup.md) for the underlying topology and ports.
+See [Network Setup](network-setup.md) for the underlying topology and
+[Known Gaps](../known-gaps.md) for the physical commissioning state.

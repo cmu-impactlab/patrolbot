@@ -194,6 +194,21 @@ class SafetyContractTest(unittest.TestCase):
         status = STATUS_FILE.read_text(encoding='utf-8')
         self.assertIn('expected LOCALHOST in every container', status)
 
+    def test_optional_dashboard_profile_does_not_block_core_compose(self):
+        compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
+        web_bridge = compose['services']['web-bridge']
+        self.assertEqual(
+            web_bridge['environment']['WEB_BRIDGE_SERVER_URL'],
+            '${WEB_BRIDGE_SERVER_URL:-}')
+        self.assertEqual(
+            web_bridge['environment']['WEB_BRIDGE_TOKEN'],
+            '${WEB_BRIDGE_TOKEN:-}')
+        command = web_bridge['command'][0]
+        self.assertIn(
+            '$${WEB_BRIDGE_SERVER_URL:?set WEB_BRIDGE_SERVER_URL', command)
+        self.assertIn('$${WEB_BRIDGE_TOKEN:?set WEB_BRIDGE_TOKEN', command)
+        self.assertIn('$$PYTHONPATH', command)
+
     def test_image_provenance_digest_is_build_and_runtime_enforced(self):
         dockerfile = DOCKERFILE.read_text(encoding='utf-8')
         compose = COMPOSE_FILE.read_text(encoding='utf-8')

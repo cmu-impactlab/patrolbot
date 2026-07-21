@@ -76,19 +76,24 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       PATROLBOT_ROLE: web-bridge
-      WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:?set WEB_BRIDGE_SERVER_URL in docker/.env}"
-      WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:?set WEB_BRIDGE_TOKEN in docker/.env}"
+      # Keep the opt-in profile from making unrelated core-stack Compose
+      # operations require dashboard secrets. The shell command below enforces
+      # both values only when this profile is actually started.
+      WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:-}"
+      WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:-}"
     # The shared healthcheck script knows the ROS roles, not this bridge.
     healthcheck:
       disable: true
     entrypoint: ["bash", "-lc"]
     command:
       - >-
+        : "$${WEB_BRIDGE_SERVER_URL:?set WEB_BRIDGE_SERVER_URL in docker/.env}" &&
+        : "$${WEB_BRIDGE_TOKEN:?set WEB_BRIDGE_TOKEN in docker/.env}" &&
         source /opt/ros/jazzy/setup.bash &&
         source /opt/patrolbot_ws/install/setup.bash 2>/dev/null;
-        export PYTHONPATH=/opt/web_bridge:$PYTHONPATH &&
+        export PYTHONPATH=/opt/web_bridge:$$PYTHONPATH &&
         python3 -m patrolbot_web_bridge.bridge_node
-        --ros-args -p server_url:="$WEB_BRIDGE_SERVER_URL" -p token:="$WEB_BRIDGE_TOKEN"
+        --ros-args -p server_url:="$$WEB_BRIDGE_SERVER_URL" -p token:="$$WEB_BRIDGE_TOKEN"
     volumes:
       - ${WEB_BRIDGE_ROOT:-/home/ubuntu/patrolbot-dashboard}/ros2_ws/src/patrolbot_web_bridge:/opt/web_bridge:ro
 

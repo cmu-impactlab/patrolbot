@@ -1,11 +1,6 @@
 <launch>
-  <!-- 1. Start a Component Container (Replaces Nodelet Manager) -->
-  <!-- respawn: self-heal on crash so the cmd_vel path never stays down. -->
-  <node pkg="rclcpp_components" exec="component_container" name="mobile_base_nodelet_manager"
-        respawn="true" respawn_delay="2.0" />
-
-  <!-- 2. Load the Multiplexer -->
-  <!-- Note: Using twist_mux is the standard ROS 2 replacement for yocs_cmd_vel_mux -->
+  <!-- twist_mux is a normal process; no components are loaded in this package,
+       so the former empty component container was removed. -->
   <!-- respawn: twist_mux is the single velocity arbiter; if it dies the robot loses
        all command arbitration, so it MUST come back on its own. (Plain node, so a
        respawn returns fully functional.) -->

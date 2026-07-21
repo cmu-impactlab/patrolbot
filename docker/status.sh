@@ -30,6 +30,33 @@ revision=$(docker inspect patrolbot-navigation \
   --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' 2>/dev/null || true)
 printf '  %-24s %s\n' "revision" "${revision:-unknown}"
 
+image_source_digest=$(docker inspect patrolbot-navigation \
+  --format '{{index .Config.Labels "io.patrolbot.source-tree-sha256"}}' \
+  2>/dev/null || true)
+deployed_source_digest=$(
+  "$SCRIPT_DIR/source-tree-digest.sh" "${PATROLBOT_ROOT:-$SCRIPT_DIR/..}" \
+  2>/dev/null || true)
+printf '  %-24s %s\n' "image source digest" \
+  "${image_source_digest:-unset}"
+printf '  %-24s %s\n' "deployed source digest" \
+  "${deployed_source_digest:-unavailable}"
+source_digest_ok=false
+if [[ -n "$image_source_digest" && \
+      "$image_source_digest" != unknown && \
+      "$image_source_digest" == "$deployed_source_digest" ]]; then
+  source_digest_ok=true
+fi
+
+discovery_ok=true
+for container in "${CONTAINERS[@]}"; do
+  discovery_range=$(docker inspect "$container" \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | sed -n 's/^ROS_AUTOMATIC_DISCOVERY_RANGE=//p' | head -n 1)
+  printf '  %-24s %s\n' "$container discovery" \
+    "${discovery_range:-unset}"
+  [[ "$discovery_range" == LOCALHOST ]] || discovery_ok=false
+done
+
 bridge_publication_mode=$(docker inspect patrolbot-bridge \
   --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
   | sed -n 's/^RMW_FASTRTPS_PUBLICATION_MODE=//p' | head -n 1)
@@ -72,6 +99,33 @@ topic_publisher_count() {
     sleep 1
   done
   return 1
+}
+
+topic_endpoint_nodes() {
+  local topic=$1 endpoint_type=$2 output nodes attempt
+  for attempt in 1 2 3; do
+    output=$(ros_exec patrolbot-navigation "ros2 topic info -v '$topic' 2>&1") || output=""
+    nodes=$(awk -v endpoint_type="$endpoint_type" '
+      /^Node name:/ { node = $3 }
+      /^Endpoint type:/ && $3 == endpoint_type { print node }
+    ' <<<"$output" | sort -u | paste -sd, -)
+    if [[ -n "$nodes" ]]; then
+      printf '%s\n' "$nodes"
+      return 0
+    fi
+    if [[ -n "$output" && "$output" != *"Unknown topic"* && "$attempt" -eq 3 ]]; then
+      printf '\n'
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+ros_name_exists() {
+  local kind=$1 name=$2 output
+  output=$(ros_exec patrolbot-navigation "ros2 '$kind' list 2>&1") || return 1
+  grep -Fxq "$name" <<<"$output"
 }
 
 topic_publisher_reliability() {
@@ -124,6 +178,22 @@ printf '\nSBC and ROS readiness\n'
 # both accurate and non-invasive.
 ready=true
 
+if [[ "$source_digest_ok" != true ]]; then
+  printf '  %-24s mismatch (image must match deployed source)\n' \
+    "source provenance"
+  ready=false
+else
+  printf '  %-24s verified\n' "source provenance"
+fi
+
+if [[ "$discovery_ok" != true ]]; then
+  printf '  %-24s invalid (expected LOCALHOST in every container)\n' \
+    "DDS discovery scope"
+  ready=false
+else
+  printf '  %-24s LOCALHOST only\n' "DDS discovery scope"
+fi
+
 monitor_processes=""
 for container in "${CONTAINERS[@]}"; do
   found=$(docker exec "$container" ps -eo pid,args 2>/dev/null \
@@ -143,6 +213,114 @@ fi
 if [[ "$bridge_publication_mode" != ASYNCHRONOUS ]]; then
   printf '  %-24s %s (expected ASYNCHRONOUS)\n' \
     "bridge DDS publication" "${bridge_publication_mode:-unset}"
+  ready=false
+fi
+
+printf '\nPi safety architecture\n'
+
+for specification in \
+    "/input/safety_controller PUBLISHER patrolbot_safety_watchdog" \
+    "/input/nav_controller PUBLISHER controller_server" \
+    "/input/nav_controller SUBSCRIPTION nav_command_mux" \
+    "/input/nav_behavior PUBLISHER behavior_server" \
+    "/input/nav_behavior SUBSCRIPTION nav_command_mux" \
+    "/input/docking PUBLISHER " \
+    "/input/docking SUBSCRIPTION nav_command_mux" \
+    "/cmd_vel_nav PUBLISHER nav_command_mux" \
+    "/cmd_vel_nav SUBSCRIPTION velocity_smoother" \
+    "/cmd_vel_out PUBLISHER cmd_vel_mux" \
+    "/cmd_vel_out SUBSCRIPTION patrolbot_safety_watchdog,teleop_velocity_smoother" \
+    "/cmd_vel PUBLISHER teleop_velocity_smoother" \
+    "/cmd_vel SUBSCRIPTION patrolbot_bridge"; do
+  read -r topic endpoint expected <<<"$specification"
+  actual=$(topic_endpoint_nodes "$topic" "$endpoint") || actual=unknown
+  if [[ "$actual" == "${expected:-}" ]]; then
+    printf '  %-24s %s\n' "$topic $endpoint" "${actual:-none}"
+  else
+    printf '  %-24s %s (expected %s)\n' \
+      "$topic $endpoint" "${actual:-none}" "${expected:-none}"
+    ready=false
+  fi
+done
+
+if ros_name_exists node /docking_server; then
+  printf '  %-24s PRESENT (must remain disabled)\n' "/docking_server"
+  ready=false
+else
+  printf '  %-24s absent\n' "/docking_server"
+fi
+
+if ros_name_exists topic /scan_unfiltered_candidate; then
+  printf '  %-24s PRESENT (must remain uncommissioned)\n' \
+    "/scan_unfiltered_candidate"
+  ready=false
+else
+  printf '  %-24s absent/uncommissioned\n' \
+    "/scan_unfiltered_candidate"
+fi
+
+smoother_max=$(ros_exec patrolbot-bringup \
+  "ros2 param get /teleop_velocity_smoother max_velocity 2>&1" || true)
+if [[ "$smoother_max" == *"[0.35, 0.0, 0.7]"* ]]; then
+  printf '  %-24s [0.35, 0.0, 0.7]\n' "teleop smoother max"
+else
+  printf '  %-24s %s (unexpected)\n' "teleop smoother max" \
+    "${smoother_max:-unavailable}"
+  ready=false
+fi
+
+battery_stop=$(ros_exec patrolbot-navigation \
+  "ros2 param get /patrolbot_safety_watchdog battery_stop_voltage 2>&1" || true)
+bumper_enforcement=$(ros_exec patrolbot-navigation \
+  "ros2 param get /patrolbot_safety_watchdog bumper_enforcement_enabled 2>&1" || true)
+if [[ "$battery_stop" == *"23.0"* ]]; then
+  printf '  %-24s 23.0 V\n' "battery motion stop"
+else
+  printf '  %-24s %s (expected 23.0 V)\n' "battery motion stop" \
+    "${battery_stop:-unavailable}"
+  ready=false
+fi
+if [[ "$bumper_enforcement" == *"False"* ]]; then
+  printf '  %-24s disabled/uncommissioned\n' "bumper enforcement"
+else
+  printf '  %-24s %s (requires physical mapping review)\n' \
+    "bumper enforcement" "${bumper_enforcement:-unavailable}"
+  ready=false
+fi
+
+if docker exec patrolbot-navigation test -e /dev/input/js0 2>/dev/null; then
+  if topic_is_fresh /joy; then
+    printf '  %-24s receiver present; /joy fresh\n' "manual control"
+  else
+    printf '  %-24s receiver present; /joy stale\n' "manual control"
+    ready=false
+  fi
+else
+  printf '  %-24s joystick receiver absent\n' "manual control"
+  ready=false
+fi
+
+for specification in \
+    "service /patrolbot/charge_release" \
+    "service /patrolbot/motor_enable" \
+    "service /patrolbot/initialize_dock_pose" \
+    "action /patrolbot/undock"; do
+  read -r kind name <<<"$specification"
+  if ros_name_exists "$kind" "$name"; then
+    printf '  %-24s advertised\n' "$name"
+  else
+    printf '  %-24s missing\n' "$name"
+    ready=false
+  fi
+done
+
+readiness_publishers=$(topic_publisher_count /patrolbot/dock_readiness) || \
+  readiness_publishers=unknown
+if [[ "$readiness_publishers" == 1 ]]; then
+  printf '  %-24s one publisher\n' "/patrolbot/dock_readiness"
+else
+  printf '  %-24s %s publishers (expected one)\n' \
+    "/patrolbot/dock_readiness" "$readiness_publishers"
   ready=false
 fi
 

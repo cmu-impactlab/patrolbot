@@ -9,10 +9,11 @@ that and re-configures+activates it within a couple of seconds, restoring the
 cmd_vel path without a full bringup restart.
 """
 import time
+
+from lifecycle_msgs.msg import State, Transition
+from lifecycle_msgs.srv import ChangeState, GetState
 import rclpy
 from rclpy.node import Node
-from lifecycle_msgs.srv import ChangeState, GetState
-from lifecycle_msgs.msg import Transition, State
 
 SMOOTHER = '/teleop_velocity_smoother'
 
@@ -20,7 +21,8 @@ SMOOTHER = '/teleop_velocity_smoother'
 class LifecycleManager(Node):
     def __init__(self):
         super().__init__('lifecycle_manager_script')
-        self.change_cli = self.create_client(ChangeState, SMOOTHER + '/change_state')
+        self.change_cli = self.create_client(
+            ChangeState, SMOOTHER + '/change_state')
         self.get_cli = self.create_client(GetState, SMOOTHER + '/get_state')
 
     def _call(self, client, req, timeout=5.0):
@@ -46,9 +48,11 @@ class LifecycleManager(Node):
     def ensure_active(self):
         sid = self.get_state()
         if sid is None or sid == State.PRIMARY_STATE_ACTIVE:
-            return  # service absent (mid-respawn) or already active -> nothing to do
+            # Service absent (mid-respawn) or already active: nothing to do.
+            return
         if sid == State.PRIMARY_STATE_UNCONFIGURED:
-            self.get_logger().info('smoother UNCONFIGURED (fresh/respawned) -> bringing up')
+            self.get_logger().info(
+                'smoother UNCONFIGURED (fresh/respawned) -> bringing up')
             if self.change(Transition.TRANSITION_CONFIGURE, 'configure'):
                 self.change(Transition.TRANSITION_ACTIVATE, 'activate')
         elif sid == State.PRIMARY_STATE_INACTIVE:
@@ -58,7 +62,8 @@ class LifecycleManager(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LifecycleManager()
-    node.get_logger().info('Lifecycle manager up — keeping smoother ACTIVE (self-heals respawns).')
+    node.get_logger().info(
+        'Lifecycle manager up — keeping smoother ACTIVE (self-heals respawns).')
     try:
         while rclpy.ok():
             node.ensure_active()

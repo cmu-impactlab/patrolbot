@@ -3,15 +3,19 @@
 <package format="3">
   <name>patrolbot-launch</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="ubuntu@todo.todo">ubuntu</maintainer>
+  <description>PatrolBot command arbitration and final velocity smoothing.</description>
+  <maintainer email="yousefh@andrew.cmu.edu">Yousef Hussein</maintainer>
   <license>MIT</license>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend>
+  <exec_depend>rclpy</exec_depend>
   <exec_depend>ros2launch</exec_depend>
+  <exec_depend>twist_mux</exec_depend>
   <export>
     <build_type>ament_python</build_type>
   </export>

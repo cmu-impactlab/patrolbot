@@ -1,0 +1,46 @@
+# Goal. Distances and speeds are additionally bounded by server-side hard caps.
+string dock_id
+float32 reverse_distance
+float32 reverse_speed
+bool validation_mode
+bool operator_authorized
+---
+uint16 OK=0
+uint16 REJECTED=1
+uint16 PRECHECK_FAILED=2
+uint16 RELEASE_FAILED=3
+uint16 MOTOR_STATE_FAILED=4
+uint16 SENSOR_FAILED=5
+uint16 LOCALIZATION_FAILED=6
+uint16 COMMAND_PATH_FAILED=7
+uint16 MOTION_FAILED=8
+uint16 CANCELED=9
+uint16 TIMEOUT=10
+uint16 SESSION_CHANGED=11
+uint16 SAFETY_FAULT=12
+
+bool success
+uint16 code
+string message
+string final_state
+float32 distance_traveled
+float32 elapsed_seconds
+int16 initial_charge_state
+int16 final_charge_state
+bool final_motors_enabled
+bool final_estop_pressed
+geometry_msgs/PoseWithCovarianceStamped final_pose
+bool manual_recovery_required
+---
+string state
+float32 elapsed_seconds
+float32 state_timeout_remaining
+float32 sonar_age
+float32 base_state_age
+float32 localization_age
+bool rear_clear
+bool localization_valid
+int16 charge_state
+bool motors_enabled
+bool estop_pressed
+uint64 session_generation

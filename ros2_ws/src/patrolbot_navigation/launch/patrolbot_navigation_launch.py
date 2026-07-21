@@ -50,7 +50,6 @@ def generate_launch_description():
         'collision_monitor',
         'bt_navigator',
         'waypoint_follower',
-        'docking_server',
     ]
 
     # Map fully qualified names to relative ones so the node's namespace can be prepended.
@@ -134,7 +133,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=['--ros-args', '--log-level', log_level],
-                remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
+                remappings=remappings + [('cmd_vel', 'input/nav_controller')],
             ),
             Node(
                 package='nav2_smoother',
@@ -178,7 +177,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=['--ros-args', '--log-level', log_level],
-                remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
+                remappings=remappings + [('cmd_vel', 'input/nav_behavior')],
             ),
             Node(
                 package='nav2_bt_navigator',
@@ -226,17 +225,6 @@ def generate_launch_description():
                 remappings=remappings,
             ),
             Node(
-                package='opennav_docking',
-                executable='opennav_docking',
-                name='docking_server',
-                output='screen',
-                respawn=use_respawn,
-                respawn_delay=2.0,
-                parameters=[configured_params],
-                arguments=['--ros-args', '--log-level', log_level],
-                remappings=remappings,
-            ),
-            Node(
                 package='nav2_lifecycle_manager',
                 executable='lifecycle_manager',
                 name='lifecycle_manager_navigation',
@@ -259,7 +247,8 @@ def generate_launch_description():
                         plugin='nav2_controller::ControllerServer',
                         name='controller_server',
                         parameters=[configured_params],
-                        remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
+                        remappings=remappings +
+                        [('cmd_vel', 'input/nav_controller')],
                     ),
                     ComposableNode(
                         package='nav2_smoother',
@@ -287,7 +276,8 @@ def generate_launch_description():
                         plugin='behavior_server::BehaviorServer',
                         name='behavior_server',
                         parameters=[configured_params],
-                        remappings=remappings + [('cmd_vel', 'cmd_vel_nav')],
+                        remappings=remappings +
+                        [('cmd_vel', 'input/nav_behavior')],
                     ),
                     ComposableNode(
                         package='nav2_bt_navigator',
@@ -319,13 +309,6 @@ def generate_launch_description():
                         remappings=remappings,
                     ),
                     ComposableNode(
-                        package='opennav_docking',
-                        plugin='opennav_docking::DockingServer',
-                        name='docking_server',
-                        parameters=[configured_params],
-                        remappings=remappings,
-                    ),
-                    ComposableNode(
                         package='nav2_lifecycle_manager',
                         plugin='nav2_lifecycle_manager::LifecycleManager',
                         name='lifecycle_manager_navigation',
@@ -353,6 +336,21 @@ def generate_launch_description():
     ld.add_action(declare_container_name_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    # PB-AUDIT-001 containment: explicitly arbitrate every autonomous
+    # navigation producer before smoothing and collision monitoring. The
+    # docking input intentionally has no publisher while the generic dock node is
+    # disabled; retaining the input makes any future reintroduction follow the
+    # same fail-closed path instead of publishing directly to /cmd_vel.
+    ld.add_action(Node(
+        package='twist_mux',
+        executable='twist_mux',
+        name='nav_command_mux',
+        output='screen',
+        respawn=use_respawn,
+        respawn_delay=2.0,
+        parameters=[configured_params],
+        remappings=[('cmd_vel_out', 'cmd_vel_nav')],
+    ))
     # Add the actions to launch all of the navigation nodes
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)

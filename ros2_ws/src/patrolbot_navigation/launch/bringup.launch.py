@@ -14,8 +14,6 @@ def generate_launch_description():
 
     map_yaml_file = os.path.join(pkg_dir, 'maps', 'second_map.yaml')
     nav2_params_file = os.path.join(pkg_dir, 'config', 'nav2_params.yaml')
-    ekf_config_file = '/home/ubuntu/ros2_ws/ekf_test.yaml'
-
     # We do NOT use nav2_bringup's bringup_launch.py because its lifecycle
     # managers hard-code bond_timeout (4.0s) and never read our params file.
     # Inflating the large 3192x2205 map starves map_server's bond heartbeat
@@ -120,7 +118,13 @@ def generate_launch_description():
         # automatically when they return. Sensor-loss safe-hold for the whole stack.
         Node(package='patrolbot_navigation', executable='patrolbot_safety_watchdog.py',
              name='patrolbot_safety_watchdog', output='screen',
+             parameters=[nav2_params_file],
              respawn=True, respawn_delay=2.0),
+        # Guarded undock orchestration. It publishes no Twist and remains
+        # fail-closed until bumper mapping and a verified dock pose are configured.
+        Node(package='patrolbot_dock_manager', executable='dock_manager',
+             name='patrolbot_dock_manager', output='screen',
+             parameters=[nav2_params_file], respawn=True, respawn_delay=2.0),
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',

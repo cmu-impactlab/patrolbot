@@ -3,16 +3,29 @@
 
 !docker/
 !docker/Dockerfile
+!docker/docker-compose.yml
 !docker/healthcheck.py
+!docker/source-tree-digest.sh
+!docker/status.sh
 
 !ros2_ws/
 !ros2_ws/src/
 !ros2_ws/src/patrolbot_bridge/
 !ros2_ws/src/patrolbot_bridge/**
+!ros2_ws/src/patrolbot_interfaces/
+!ros2_ws/src/patrolbot_interfaces/**
+!ros2_ws/src/patrolbot_dock_manager/
+!ros2_ws/src/patrolbot_dock_manager/**
+!ros2_ws/src/patrolbot_docking_plugins/
+!ros2_ws/src/patrolbot_docking_plugins/**
 !ros2_ws/src/patrolbot-launch/
 !ros2_ws/src/patrolbot-launch/**
 !ros2_ws/src/patrolbot_navigation/
 !ros2_ws/src/patrolbot_navigation/**
+
+!hardware/
+!hardware/patrolbot_hw_server/
+!hardware/patrolbot_hw_server/**
 
 **/.git
 **/.git/**
@@ -30,5 +43,7 @@
 **/install/**
 **/log/
 **/log/**
+**/patrolbot_server
+**/tests/protocol_test
 **/*.bak
 **/*~

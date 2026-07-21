@@ -12,6 +12,10 @@ x-common: &common
   environment:
     ROS_DOMAIN_ID: "0"
     RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    # ROS 2 Jazzy discovery stays inside the Pi network namespace. The three
+    # host-network containers still discover each other via loopback, while an
+    # unauthenticated Wi-Fi participant can no longer discover command topics.
+    ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
   healthcheck:
     test: ["CMD", "/usr/local/bin/patrolbot-healthcheck"]
     interval: 30s
@@ -31,6 +35,7 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       PATROLBOT_ROLE: bringup
     command: ["ros2", "launch", "patrolbot-launch", "bringup.xml"]
     volumes:
@@ -43,6 +48,7 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       # Keep DDS network I/O out of the bridge's sensor publisher workers. Fast
       # DDS defaults to synchronous publication, which can block publish() on a
       # stalled DDS reader and starve both /odom and /scan.
@@ -53,6 +59,39 @@ services:
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
 
+  # Read-only telemetry bridge for the web dashboard (patrolbot-dashboard
+  # repo). Opt-in: it only starts when named explicitly —
+  #   docker compose up -d web-bridge
+  # It subscribes to existing topics, opens NO SBC connections, and does not
+  # publish unless WEB_BRIDGE_ENABLE_COMMANDS=1 is added deliberately.
+  # The stock image lacks python3-websockets/psutil; use the derived image
+  # built on the Pi (see patrolbot-dashboard/docs/PI_DEPLOY.md §2).
+  web-bridge:
+    <<: *common
+    image: ${WEB_BRIDGE_IMAGE:-patrolbot-web-bridge:dev}
+    container_name: patrolbot-web-bridge
+    profiles: ["web-bridge"]
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      PATROLBOT_ROLE: web-bridge
+      WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:?set WEB_BRIDGE_SERVER_URL in docker/.env}"
+      WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:?set WEB_BRIDGE_TOKEN in docker/.env}"
+    # The shared healthcheck script knows the ROS roles, not this bridge.
+    healthcheck:
+      disable: true
+    entrypoint: ["bash", "-lc"]
+    command:
+      - >-
+        source /opt/ros/jazzy/setup.bash &&
+        source /opt/patrolbot_ws/install/setup.bash 2>/dev/null;
+        export PYTHONPATH=/opt/web_bridge:$PYTHONPATH &&
+        python3 -m patrolbot_web_bridge.bridge_node
+        --ros-args -p server_url:="$WEB_BRIDGE_SERVER_URL" -p token:="$WEB_BRIDGE_TOKEN"
+    volumes:
+      - ${WEB_BRIDGE_ROOT:-/home/ubuntu/patrolbot-dashboard}/ros2_ws/src/patrolbot_web_bridge:/opt/web_bridge:ro
+
   navigation:
     <<: *common
     container_name: patrolbot-navigation
@@ -62,9 +101,11 @@ services:
       args:
         ROS_DISTRO: jazzy
         PATROLBOT_REVISION: ${PATROLBOT_REVISION:?set PATROLBOT_REVISION in docker/.env or pass --env-file docker/.env}
+        PATROLBOT_SOURCE_SHA256: ${PATROLBOT_SOURCE_SHA256:-unknown}
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       PATROLBOT_ROLE: navigation
     command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
     volumes:

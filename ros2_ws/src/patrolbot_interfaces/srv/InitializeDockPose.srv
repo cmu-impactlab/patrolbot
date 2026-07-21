@@ -1,0 +1,16 @@
+string dock_id
+bool operator_authorized
+---
+uint16 OK=0
+uint16 REJECTED=1
+uint16 NOT_CONFIGURED=2
+uint16 PRECONDITION_FAILED=3
+uint16 TIMEOUT=4
+
+bool success
+uint16 code
+string message
+string dock_id
+geometry_msgs/PoseWithCovarianceStamped requested_pose
+geometry_msgs/PoseWithCovarianceStamped confirmed_pose
+float32 elapsed_seconds

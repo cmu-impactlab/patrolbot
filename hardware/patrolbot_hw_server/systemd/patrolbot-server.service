@@ -1,0 +1,13 @@
+[Unit]
+Description=PatrolBot Hardware Server (ARIA via socat TCP bridge)
+After=network-online.target socat-boot.service
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/ros/patrolbot_hw_server
+ExecStart=/home/ros/patrolbot_hw_server/patrolbot_server -rh 127.0.0.1 -rrtp 7000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+patrolbot_bridge:
+  ros__parameters:
+    # Fail closed until controlled testing maps every physical bumper segment.
+    bumpers_mapped: false
+    front_bumper_mask: 0
+    rear_bumper_mask: 0
+    # Candidate commissioning topic only. It is never an active safety source
+    # until physical self-occlusion testing explicitly approves it.
+    publish_unfiltered_scan_candidate: false
+    unfiltered_scan_topic: "/scan_unfiltered_candidate"

@@ -1,0 +1,11 @@
+<library path="patrolbot_charging_dock">
+  <class
+    name="patrolbot_docking_plugins::PatrolBotChargingDock"
+    type="patrolbot_docking_plugins::PatrolBotChargingDock"
+    base_class_type="opennav_docking_core::ChargingDock">
+    <description>
+      Charging dock adapter using fresh PatrolBot BaseState charge state and
+      the bridge /battery stream without inferring charge from battery current.
+    </description>
+  </class>
+</library>

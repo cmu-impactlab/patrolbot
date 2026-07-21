@@ -9,8 +9,16 @@
 **/.claude/
 **/.codex/
 
+/misc/
 # Live SSHFS mount points
 /.remote/
+/pi/
+/sbc/
+
+# Merged-in local dirs from Projects/patrolbot (kept local, not tracked)
+/backups/
+/rpi_3d_model/
+/merge-backup-from-patrolbot/
 
 # Local deployment configuration and credentials
 **/.env

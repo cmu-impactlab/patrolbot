@@ -1,9 +1,22 @@
-teleop_velocity_smoother:  # This MUST match the 'name' in your launch file
+teleop_velocity_smoother:
   ros__parameters:
-    speed_lim_v: 1.0
-    speed_lim_w: 5.4
-    accel_lim_v: 2.0
-    accel_lim_w: 1.5
-    frequency: 20.0
-    decel_factor: 2.5
-    robot_feedback: 0
+    # Official nav2_velocity_smoother parameter names for ROS 2 Jazzy.
+    # Keep the cap aligned with patrolbot_joy_teleop's deliberate limits so the
+    # final smoother cannot silently permit a faster manual command.
+    smoothing_frequency: 20.0
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.35, 0.0, 0.7]
+    min_velocity: [-0.35, 0.0, -0.7]
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 0.5
+    # Linear acceleration stays below the manual's 1.4 m/s^2 firmware top.
+    # Deceleration is intentionally bounded rather than using the obsolete
+    # decel_factor multiplier from the ignored Kobuki-era configuration.
+    max_accel: [1.0, 0.0, 1.5]
+    max_decel: [-1.4, 0.0, -2.0]
+    odom_topic: "/odom"
+    odom_duration: 0.1
+    enable_stamped_cmd_vel: false
+    stamp_smoothed_velocity_with_smoothing_time: false
+    use_realtime_priority: false

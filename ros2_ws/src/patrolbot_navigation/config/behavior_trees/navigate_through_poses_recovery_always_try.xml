@@ -4,6 +4,8 @@
   navigate_through_poses_w_replanning_and_recovery.xml: the WouldA*RecoveryHelp
   gate is replaced with AlwaysSuccess so a failure mid-patrol-route always backs
   up + spins to re-scan before giving up, and number_of_retries raised 6 -> 9.
+  BackUp is intentionally first and conservative so recovery near a forward
+  obstruction cannot begin by rotating into it.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -40,9 +42,9 @@
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
+            <BackUp backup_dist="0.10" backup_speed="0.05" error_code_id="{backup_error_code}"/>
             <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="3.0"/>
-            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_error_code}"/>
           </RoundRobin>
         </ReactiveFallback>
       </Sequence>

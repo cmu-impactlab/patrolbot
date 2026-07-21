@@ -1,0 +1,6 @@
+# Merge these directives into /etc/ssh/sshd_config after key-only access has
+# been tested in a second session. OpenSSH 7.2 does not support the modern
+# sshd_config Include workflow used by newer releases.
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+PermitRootLogin no

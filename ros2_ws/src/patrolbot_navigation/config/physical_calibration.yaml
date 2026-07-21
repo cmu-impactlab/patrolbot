@@ -1,0 +1,33 @@
+# Commissioning record for physical values that must never be guessed.
+schema_version: 1
+commissioned: false
+
+low_obstacle_sensor:
+  physically_present: null
+  driver_package: "urg_node"
+  driver_executable: "urg_node_driver"
+  stable_serial_device: ""
+  frame_id: ""
+  scan_topic: "/scan_low"
+  transform:
+    measured: false
+    x_m: null
+    y_m: null
+    z_m: null
+    yaw_rad: null
+    pitch_rad: null
+    roll_rad: null
+
+footprint:
+  measured: false
+  points_m: []
+
+main_lidar:
+  height_measured: false
+  z_m: null
+
+near_field_safety_scan:
+  candidate_topic: "/scan_unfiltered_candidate"
+  self_occlusion_tested: false
+  stop_distance_tested: false
+  approved_for_collision_monitor: false

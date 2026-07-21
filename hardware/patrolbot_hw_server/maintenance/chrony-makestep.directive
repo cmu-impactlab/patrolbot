@@ -1,0 +1,3 @@
+# Merge this directive into /etc/chrony/chrony.conf on the Xenial SBC.
+# Chrony 2.1 has no enabled conf.d include in the deployed configuration.
+makestep 1.0 -1

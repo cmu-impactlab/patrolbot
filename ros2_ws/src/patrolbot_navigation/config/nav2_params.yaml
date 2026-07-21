@@ -36,8 +36,12 @@ amcl:
     z_rand: 0.2
     z_short: 0.05
     scan_topic: "scan"
-    set_initial_pose: true
-    always_reset_initial_pose: true
+    # Never claim map origin after a restart. A valid pose must come from the
+    # operator or the guarded dock-pose initializer after it has proved the
+    # robot is on a known dock. Navigation/undock readiness remains false until
+    # that input converges and passes the localization-health checks.
+    set_initial_pose: false
+    always_reset_initial_pose: false
     initial_pose: [0.0, 0.0, 0.0, 0.0]
 
 behavior_server:
@@ -51,6 +55,12 @@ behavior_server:
       plugin: "nav2_behaviors::Spin"
     backup:
       plugin: "nav2_behaviors::BackUp"
+      # Dock validation starts at 0.05 m/s. Keep the behavior's deadband low
+      # enough for that explicit goal while retaining hard caps in the dock
+      # manager and both velocity smoothers.
+      minimum_speed: 0.05
+      acceleration_limit: 0.25
+      deceleration_limit: -0.5
     drive_on_heading:
       plugin: "nav2_behaviors::DriveOnHeading"
     wait:
@@ -64,7 +74,9 @@ bt_navigator:
     odom_topic: "odom"
     bt_loop_duration: 10
     default_server_timeout: 20
-    error_code_name_prefixes: ["follow_path", "compute_path"]
+    error_code_name_prefixes: ["follow_path", "compute_path", "backup", "spin", "wait"]
+    default_nav_to_pose_bt_xml: "$(find-pkg-share patrolbot_navigation)/config/behavior_trees/navigate_recovery_always_try.xml"
+    default_nav_through_poses_bt_xml: "$(find-pkg-share patrolbot_navigation)/config/behavior_trees/navigate_through_poses_recovery_always_try.xml"
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
@@ -145,11 +157,13 @@ docking_server:
     dock_prestaging_tolerance: 0.5
     dock_plugins: ["charging_dock"]
     charging_dock:
-      plugin: "opennav_docking::SimpleChargingDock"
-      use_battery_status: true
-      use_external_detection_pose: false
-      charging_threshold: 0.5
-      docking_threshold: 0.05
+      # This plugin remains dormant while docking_server is disabled. Unlike
+      # SimpleChargingDock, it never infers charging from BatteryState.current;
+      # fresh typed BaseState is authoritative and /battery freshness confirms
+      # that the bridge's auxiliary telemetry path is alive.
+      plugin: "patrolbot_docking_plugins::PatrolBotChargingDock"
+      telemetry_timeout: 0.5
+      release_timeout: 7.0
       staging_x_offset: -0.7
       staging_yaw_offset: 0.0
 
@@ -302,13 +316,14 @@ velocity_smoother:
     use_sim_time: False
     smoothing_frequency: 20.0
     odom_topic: "odom"
-    cmd_vel_topic: "cmd_vel_raw"
     scale_velocities: False
     feedback: "OPEN_LOOP"
     max_velocity: [0.26, 0.0, 1.0]
     min_velocity: [-0.26, 0.0, -1.0]
     max_accel: [2.5, 0.0, 3.2]
     max_decel: [-2.5, 0.0, -3.2]
+    velocity_timeout: 1.0
+    enable_stamped_cmd_vel: false
 
 waypoint_follower:
   ros__parameters:
@@ -319,6 +334,66 @@ waypoint_follower:
     wait_at_waypoint:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"
       time_to_wait: 0.0
+
+patrolbot_safety_watchdog:
+  ros__parameters:
+    scan_timeout: 0.5
+    odom_timeout: 0.5
+    battery_timeout: 1.0
+    base_state_timeout: 0.75
+    battery_stop_voltage: 23.0
+    stop_on_faults: true
+    stop_on_estop: true
+    # Implemented but intentionally not commissioned. Enabling this with zero
+    # masks makes the watchdog hold fail-closed until every bumper is mapped.
+    bumper_enforcement_enabled: false
+    rate: 10.0
+
+patrolbot_dock_manager:
+  ros__parameters:
+    # These defaults intentionally make autonomous undock unreachable. Set the
+    # pose only after controlled dock-pose measurement and localization review.
+    dock_pose_configured: false
+    dock_id: "main_charger"
+    dock_pose_x: 0.0
+    dock_pose_y: 0.0
+    dock_pose_yaw: 0.0
+    dock_position_tolerance: 0.25
+    dock_yaw_tolerance: 0.35
+    max_position_variance: 0.25
+    max_yaw_variance: 0.25
+    allow_front_bumper_at_dock: false
+    sensor_timeout: 0.5
+    precheck_timeout: 5.0
+    # Binding amendment A-1: physical PWR ON and explicit software-enable
+    # confirmation share this one post-release operator window.
+    operator_motor_window: 10.0
+    backup_timeout: 10.0
+    dock_pose_initialization_timeout: 5.0
+    initial_pose_xy_variance: 0.04
+    initial_pose_yaw_variance: 0.0685
+
+# PB-AUDIT-001 upstream autonomous-command arbiter. All Nav2 motion producers
+# enter here before the navigation velocity smoother and collision monitor.
+# The docking input stays publisher-free until a reviewed docking implementation
+# is enabled. Short timeouts prevent stale commands from surviving a producer
+# crash or a change in arbitration ownership.
+nav_command_mux:
+  ros__parameters:
+    use_stamped: false
+    topics:
+      controller:
+        topic: "input/nav_controller"
+        timeout: 0.25
+        priority: 5
+      behavior:
+        topic: "input/nav_behavior"
+        timeout: 0.25
+        priority: 7
+      docking:
+        topic: "input/docking"
+        timeout: 0.25
+        priority: 9
 
 collision_monitor:
   ros__parameters:
@@ -336,7 +411,11 @@ collision_monitor:
     cmd_vel_out_topic: "input/navi"
     state_topic: "collision_monitor_state"
     transform_tolerance: 1.0
-    source_timeout: 2.0
+    # Both automatic-motion sources are fail-closed. /scan is ~20-25 Hz and
+    # /sonar is ~5 Hz; 0.5 s tolerates one missed sonar period but stops after
+    # roughly 2-3 missed samples. Never set either timeout to zero.
+    source_timeout: 0.5
+    enable_stamped_cmd_vel: false
     # MUST stay False. With True, collision_monitor looks up laser_frame->odom at
     # each scan's exact timestamp to compensate for robot motion. After a bridge/SBC
     # reconnect there is a brief TF gap, so a scan can arrive stamped earlier than the
@@ -346,18 +425,86 @@ collision_monitor:
     # transform instead, which is fine at this robot's 0.26 m/s top speed (~1 cm of
     # motion per scan). This is the root cause of the TODO item-1 reconnect crash.
     base_shift_correction: False
-    polygons: ["stop_box"]
-    stop_box:
-      type: "polygon"
-      points: "[[0.3, 0.3], [0.3, -0.3], [-0.3, -0.3], [-0.3, 0.3]]"
+    # Velocity-selected zones let a front-docked robot reverse straight away
+    # from the dock wall without disabling front safety. Each polygon covers
+    # the complete commanded envelope; sub-polygons are ordered so the shared
+    # +/-0.01 m/s boundaries select rotation_or_stopped deterministically.
+    polygons: ["front_velocity_stop", "rear_velocity_stop"]
+    front_velocity_stop:
+      type: "velocity_polygon"
       action_type: "stop"
       min_points: 8
+      sources_names: ["scan"]
       visualize: True
-      polygon_pub_topic: "stop_box_polygon"
-    observation_sources: ["scan"]
+      polygon_pub_topic: "front_velocity_stop_polygon"
+      holonomic: false
+      velocity_polygons: ["rotation_or_stopped", "forward", "reverse"]
+      rotation_or_stopped:
+        points: "[[0.3, 0.3], [0.3, -0.3], [-0.3, -0.3], [-0.3, 0.3]]"
+        linear_min: -0.01
+        linear_max: 0.01
+        theta_min: -1.0
+        theta_max: 1.0
+      forward:
+        points: "[[0.3, 0.3], [0.3, -0.3], [-0.3, -0.3], [-0.3, 0.3]]"
+        linear_min: 0.01
+        linear_max: 0.26
+        theta_min: -1.0
+        theta_max: 1.0
+      reverse:
+        # During reverse, scan points at the dock wall in front are outside the
+        # selected travel-direction zone; the front scanner remains fresh and
+        # rotation/forward immediately restore the full front stop envelope.
+        points: "[[-0.2, 0.3], [-0.2, -0.3], [-0.55, -0.3], [-0.55, 0.3]]"
+        linear_min: -0.26
+        linear_max: -0.01
+        theta_min: -1.0
+        theta_max: 1.0
+    rear_velocity_stop:
+      type: "velocity_polygon"
+      action_type: "stop"
+      # Four sparse transducers produce at most four live points; one credible
+      # echo must be able to stop reverse motion.
+      min_points: 1
+      sources_names: ["sonar"]
+      visualize: True
+      polygon_pub_topic: "rear_velocity_stop_polygon"
+      holonomic: false
+      velocity_polygons: ["rotation_or_stopped", "forward", "reverse"]
+      rotation_or_stopped:
+        points: "[[0.3, 0.3], [0.3, -0.3], [-0.55, -0.3], [-0.55, 0.3]]"
+        linear_min: -0.01
+        linear_max: 0.01
+        theta_min: -1.0
+        theta_max: 1.0
+      forward:
+        # Rear sonar cannot see this front-only inactive envelope. It remains
+        # fresh, while the scan polygon owns forward protection.
+        points: "[[0.55, 0.3], [0.55, -0.3], [0.2, -0.3], [0.2, 0.3]]"
+        linear_min: 0.01
+        linear_max: 0.26
+        theta_min: -1.0
+        theta_max: 1.0
+      reverse:
+        points: "[[-0.2, 0.3], [-0.2, -0.3], [-0.55, -0.3], [-0.55, 0.3]]"
+        linear_min: -0.26
+        linear_max: -0.01
+        theta_min: -1.0
+        theta_max: 1.0
+    observation_sources: ["scan", "sonar"]
     scan:
       type: "scan"
-      topic: "scan"
+      topic: "/scan"
+      source_timeout: 0.5
+      enabled: True
+    sonar:
+      type: "pointcloud"
+      topic: "/sonar"
+      source_timeout: 0.5
+      min_height: -0.1
+      max_height: 0.5
+      min_range: 0.0
+      enabled: True
 
 # NOTE: nav2_bringup does NOT load this params file into its lifecycle_manager
 # nodes (it only passes autostart + node_names inline), so bond_timeout cannot be

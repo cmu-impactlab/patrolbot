@@ -1282,3 +1282,90 @@ the SBC and in the ignored off-host copy. Final live evidence showed:
 
 PB-AUDIT-012 remains unchanged: no graceful-shutdown daemon is installed
 without a demonstrated power-fail input.
+
+## 18. Final PB-AUDIT-019/020 deployment — 2026-07-22
+
+### 18.1 Dependency cleanup and final runtime commit
+
+PB-AUDIT-019 dependency review separated recoverable rollback assets from dead
+production inputs. The source-only `rosaria2` package remains an explicit
+offline fallback and is excluded by the Dockerfile. Historical Pi and SBC
+images remain inactive rollback layers; the SBC has zero containers. Eight
+unreferenced alternate-driver, duplicate teleop, obsolete smoother, and LiDAR
+launch experiments were removed so they can no longer enter the installed
+production package. Git history and the existing verified backups preserve
+them if historical recovery is ever required.
+
+The resulting maintenance/cleanup commit was `510bf9fe...`, but its first
+guarded deployment dry run exposed a Compose integration defect: required
+dashboard URL/token interpolation was evaluated even when the opt-in
+`web-bridge` profile was not selected. Source and protected environment had
+been staged, but no core container was recreated. The exact pre-deploy source
+and environment were restored immediately; digest `fc0b8eab...03eb6`, all old
+core containers, and the dashboard returned unchanged.
+
+Commit `b98090a7796d9418cb9df92903ff56b439323114` fixes that defect. Inactive
+dashboard profiles now default their environment entries to empty so core
+Compose operations remain independent, while container-side parameter
+expansion rejects an explicitly started dashboard profile without both values.
+Container-side `PYTHONPATH`, URL, and token references are escaped from host
+Compose interpolation. A static contract and a real `docker compose config
+--quiet` invocation with dashboard variables unset passed.
+
+The final deterministic runtime digest is
+`a15131fc354c272c9ba4abdab2414157051943f9c2959e408e08aa84c1beffcd`.
+Image `patrolbot:git-b98090a7796d`, ID
+`sha256:8952b2094246f35845ef5070ba76897e6e936708aaeb6ded1ae378c148978b48`,
+records the full commit and matching digest in its labels and embedded digest
+file. All six ROS packages built. Disposable network-isolated acceptance
+produced 104 focused passes, ten expected environment skips, and five enabled
+fake-hardware ROS integration passes. The integration process emitted one
+non-failing `Destroyable` teardown warning after all five passes.
+
+### 18.2 Controlled Pi cutover
+
+The separately managed dashboard container had command mode enabled. It was
+stopped before cutover, removing its Nav2 client and `/initialpose` publisher;
+the remaining pose publisher was the fail-closed dock manager, `/cmd_vel` still
+had one publisher, no navigation status was active, and odometry was zero.
+
+The exact committed runtime source was synchronized from isolated staging, the
+protected environment atomically selected the final image/revision/digest, and
+Compose validation passed without dashboard credentials. Only `bringup`,
+`bridge`, and `navigation` were recreated. All three became healthy with zero
+restarts and the expected image ID.
+
+The SBC journal shows exactly one planned disconnect at 01:13:26 +03 and one
+reconnect at 01:13:30 +03. The hardware server retained PID 21102 and binary
+hash `b9606502...94393`. The new bridge reports session generation `1`, which
+is correct because this generation counter begins at zero in each bridge
+process and increments on its first TCP connection; it is not persisted across
+container recreation.
+
+Full readiness verified image/source identity, loopback DDS scope, no
+unattended monitors, the complete command path, one final `/cmd_vel` publisher,
+fresh scan/odom/sonar, sensor QoS, active smoother/controller, and required TF.
+It ended with the expected `OVERALL=degraded reason=ros-readiness` because
+joystick, bumper, localization, dock pose, and other physical commissioning
+gates remain intentionally unavailable. This is not a hardware-link,
+provenance, or container failure.
+
+Base state remained charge `3`, motors disabled, E-stop clear, zero fault
+flags, and fresh telemetry. No `/cmd_vel` or `/cmd_vel_out` sample was emitted
+at idle, no navigation status appeared, and every odometry twist component was
+zero. The dashboard container was then restored unchanged; it added no
+`/cmd_vel` publisher and no queued goal or pose command appeared.
+
+### 18.3 Final rollback and evidence
+
+Pre-deploy set `20260721T212034Z-pb020-commit-provenance` preserves the exact
+old source, protected environment, image/container identity, and socket state;
+the old image remains on the Pi. Post-change set
+`20260721T221729Z-pb020-commit-provenance-postchange` preserves the final source,
+environment, image/container inspection, readiness output, ROS stationary
+state, and dashboard gate. Both sets pass checksum verification on the Pi and
+in ignored off-host copies.
+
+PB-AUDIT-019 and PB-AUDIT-020 are therefore complete. No velocity, goal, pose,
+dock/undock, charge-release, motor-enable, E-stop, joystick, or physical-motion
+operation occurred during this phase.

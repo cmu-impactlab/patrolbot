@@ -14,7 +14,7 @@ Classification rules:
 - **Not touched:** no remediation has been performed beyond investigation and
   documentation.
 
-## Fully completed — 7
+## Fully completed — 8
 
 | ID | Short status |
 |---|---|
@@ -24,9 +24,10 @@ Classification rules:
 | PB-AUDIT-016 | Unexplained-outage cause resolved from operator and log evidence; prevention is tracked by PB-AUDIT-012. |
 | PB-AUDIT-017 | External DDS command-graph exposure contained with loopback-only discovery. |
 | PB-AUDIT-019 | Proven-dead launch/container artifacts removed; retained source/images have explicit offline rollback roles. |
+| PB-AUDIT-020 | Commit-SHA-labelled image/source provenance is deployed and live-verified with checksum-backed rollback. |
 | PB-AUDIT-024 | Informational protocol-design review accepted; no corrective action required. |
 
-## In progress — 16
+## In progress — 15
 
 | ID | Short status |
 |---|---|
@@ -43,7 +44,6 @@ Classification rules:
 | PB-AUDIT-013 | Compatible user unit and bounded persistent journal are live; reboot-persistence validation remains. |
 | PB-AUDIT-015 | Device/readiness support exists; joystick receiver and stationary control validation remain. |
 | PB-AUDIT-018 | Direction-aware mitigations and opt-in sensor scaffold exist; physical near-field validation remains. |
-| PB-AUDIT-020 | Clean commit-SHA image is built and tested; live cutover awaits reconciliation of dashboard command mode. |
 | PB-AUDIT-021 | Measurement gate exists; main-LiDAR height measurement and TF correction remain. |
 | PB-AUDIT-022 | Key-only/no-root-login SSH hardening is live-verified; eventual SBC platform replacement remains. |
 

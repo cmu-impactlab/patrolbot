@@ -63,13 +63,13 @@ The superseding design and exact implementation are recorded separately in
 ### Current Raspberry Pi 5 state
 
 The following was live-revalidated after the 2026-07-21 stationary Pi/SBC
-cutover and zero-motion protocol commissioning:
+protocol commissioning and the 2026-07-22 commit-provenance cutover:
 
 | Item | Current result |
 |---|---|
-| Production image | `patrolbot:pb002-manual-release-20260721t210500z`; image ID `sha256:2b683343b4afdb4d1b24e7368469f94051456f9ada3e30c07d91b90d3e766d59`; revision `pb002-manual-release-20260721T210500Z` |
+| Production image | `patrolbot:git-b98090a7796d`; image ID `sha256:8952b2094246f35845ef5070ba76897e6e936708aaeb6ded1ae378c148978b48`; revision `b98090a7796d9418cb9df92903ff56b439323114` |
 | Containers | bringup, bridge, and navigation healthy; zero restarts |
-| Source provenance | Image label and deployed source both equal SHA-256 `fc0b8eabc028748873ed7af3ba2e8ef12bbad434866ed13b5ad33dbe48603eb6` |
+| Source provenance | Image label, embedded digest, and deployed source all equal SHA-256 `a15131fc354c272c9ba4abdab2414157051943f9c2959e408e08aa84c1beffcd` |
 | DDS exposure | All three host-network containers use Jazzy `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`; remote DDS/RViz discovery is intentionally unavailable, while SSH management remains available |
 | PB-AUDIT-001 containment | `docking_server` absent; generic docking actions absent |
 | Upstream arbitration | controller → `/input/nav_controller`; behavior server → `/input/nav_behavior`; reserved docking input `/input/docking` has zero publishers; `nav_command_mux` alone publishes `/cmd_vel_nav` |
@@ -79,7 +79,8 @@ cutover and zero-motion protocol commissioning:
 | Priority-10 policy | Scan, odometry, battery freshness/23.0 V minimum, typed hardware state, E-stop, and FAULTFLAGS enforced; bumper enforcement installed but deliberately disabled until physical mapping |
 | Physical-value scaffolds | URG candidate launch, physical-calibration schema, footprint/main-laser/near-field gates installed but all remain uncommissioned and absent from the active launch |
 | Manual control | F710/joystick receiver still absent; `/joy` cannot be stationary-validated |
-| SBC-dependent readiness | Single hardware session active; scan, odom, sonar, battery, and base state fresh; session generation `2`; motors disabled; charge state `3`; faults zero; odometry zero |
+| SBC-dependent readiness | Single hardware session active; scan, odom, sonar, battery, and base state fresh; the recreated bridge is on its first process-local session generation `1`; motors disabled; charge state `3`; faults zero; odometry zero |
+| Dashboard bridge | Separate container restored after cutover; command mode is enabled and exposes goal/pose operations but no `/cmd_vel` path. No navigation status or queued command appeared during acceptance. |
 | Overall status | Stationary cutover ready; localization, bumpers, dock pose, joystick/E-stop, and physical-motion commissioning remain fail-closed, so autonomous operation remains prohibited |
 
 ### Supervised SBC stationary cutover — 2026-07-21
@@ -207,7 +208,7 @@ not substitute for SBC or physical commissioning.
 | PB-AUDIT-017 | **External DDS exposure contained on Pi** | Jazzy discovery is now `LOCALHOST` in every container. The host-network containers still communicate via loopback, but LAN/Wi-Fi DDS participants cannot discover the command graph. SSH management was preserved; remote DDS/RViz is intentionally unavailable. | **Current exposure addressed.** Any future remote visualization must use a separately reviewed secure transport or coordinated SROS2 design, never by silently restoring `SUBNET` discovery. |
 | PB-AUDIT-018 | **Intentional filter retained; candidate scaffold uncommissioned** | `SCAN_RANGE_MIN=0.25` remains pinned. Direction-aware velocity polygons preserve front protection and add sonar protection for reverse. A separately named raw-scan candidate publisher exists but defaults false and is not an active topic or safety source. | **Safe Pi scaffold completed.** Self-occlusion and physical stop tests are mandatory before that candidate can be enabled or connected. |
 | PB-AUDIT-019 | **Closed after dependency review** | Removed the empty component container, ignored `cmd_vel_topic`, obsolete LiDAR/alternate-driver/teleop/smoother launch experiments, unused EKF reference, and 14 stopped SBC experiment containers. `rosaria2` source and old images are explicitly retained offline rollback assets. | **Completed.** No dormant alternate command launcher remains in the production image; retained rollback assets are excluded from runtime. |
-| PB-AUDIT-020 | **Clean commit/candidate complete; live cutover pending** | Commit `edaca6504e3b` produced image `patrolbot:git-edaca6504e3b` with matching revision/source labels and isolated acceptance tests. The currently running image still has the older timestamp revision. | **Build complete.** Live cutover awaits removal or explicit reconciliation of dashboard goal/pose command mode. |
+| PB-AUDIT-020 | **Closed live** | Runtime commit `b98090a7796d` produced and now runs image `patrolbot:git-b98090a7796d`; revision, embedded digest, image label, and deployed source match. Pre/post rollback sets verify locally and off-host. | **Completed.** Exact commit/image/source identity and drift refusal are live-verified. |
 | PB-AUDIT-021 | **Measurement scaffold complete; finding open** | The physical-calibration record requires a measured main-LiDAR height before commissioning. The active static TF was not guessed or changed. | **Pi preparation completed; closure requires measurement.** |
 | PB-AUDIT-022 | **SSH hardened live; platform replacement open** | Password and challenge-response authentication and root login are disabled. Two fresh key-only paths passed and password-only authentication was refused. | **No for full closure.** The addressable SSH exposure is fixed; platform closure still requires Pi-direct µARCS/SICK migration or SBC replacement. |
 | PB-AUDIT-023 | **Unverified** | Gyro FLASH mode and physical performance remain unknown. | **No.** Requires µARCS/physical validation. |
@@ -946,7 +947,7 @@ RTPS/UDP sockets bound on 0.0.0.0 and the Wi-Fi address (`ss` on the Pi); no SRO
 
 ### PB-AUDIT-019 (Low): Vestigial components. **Current status: closed after dependency review.** The empty `mobile_base_nodelet_manager`, ignored `cmd_vel_topic`, obsolete `readlidar.py`, unused EKF reference, unreferenced alternate-driver/teleop/smoother/LiDAR launchers, and 14 dormant SBC experiment containers have been removed. The source-only `rosaria2` package is an explicit offline fallback excluded from the image; retained SBC images and bind-mounted data are rollback assets with no containers. Git history and verified backup `20260721T195507Z-pb019-container-cleanup` preserve every deletion. Evidence: recursive launch/package references, Dockerfile exclusion, zero SBC containers, post-cleanup service/socket/Pi readiness, and zero odometry.
 
-### PB-AUDIT-020 (Low): Deployment provenance. Pi tree is a plain copy (no `.git`); comment-level drift already exists vs workstation HEAD; `.bak` files are the only on-robot history; image tag pinned only via `docker/.env`. Recommendation: make the Pi tree a git clone (or record rsync manifests + repo commit in a VERSION file baked at deploy time). Evidence: `git -C /home/ubuntu/patrolbot-repo` fails; nav2_params diff.
+### PB-AUDIT-020 (Low): Deployment provenance. **Current status: closed live.** The Pi tree remains a deployment copy rather than a Git checkout, but image `patrolbot:git-b98090a7796d` records full commit `b98090a7796d9418cb9df92903ff56b439323114`; its embedded and labelled source digest equals deployed source digest `a15131fc354c272c9ba4abdab2414157051943f9c2959e408e08aa84c1beffcd`. Readiness fails on any drift. Pre/post backup sets `20260721T212034Z-pb020-commit-provenance` and `20260721T221729Z-pb020-commit-provenance-postchange` verify on-host and off-host; the old image remains retained. Evidence: image inspection, deterministic digest, readiness output, container identity, and verified manifests.
 
 ### PB-AUDIT-021 (Low): Laser TF height 0.20 m vs manual ~0.30 m. No 2-D nav effect (planar scan) but wrong for any future 3-D use and for test-report accuracy. Measure during §19 Test 2 and correct the `laser_static_tf` z argument. Evidence: launch args vs Guide p.32.
 

@@ -286,14 +286,13 @@ recheck.
 ## Root-maintenance and provenance follow-up — 2026-07-22
 
 The later supervised non-motion session resolved the immediately addressable
-parts of the final paragraph above. Commit
-`edaca6504e3bc3ae097821781b8a73dd02786237` now identifies the reviewed
-remediation, and commit-labelled Pi image `patrolbot:git-edaca6504e3b` passed
-isolated build, digest, focused-contract, and five fake-hardware integration
-gates. It remains staged rather than live because the independent dashboard
-bridge currently exposes goal and initial-pose commands; it has no direct
-velocity path, but that command mode must be reconciled before core-container
-cutover.
+parts of the final paragraph above. Runtime commit
+`b98090a7796d9418cb9df92903ff56b439323114` now identifies the reviewed
+remediation. Commit-labelled image `patrolbot:git-b98090a7796d` passed isolated
+build, digest, 104 focused-contract passes, and five fake-hardware integration
+passes, then deployed successfully. The dashboard bridge was stopped during
+cutover to remove its independent goal/initial-pose endpoint and restored only
+after stationary acceptance; it still has no direct velocity path.
 
 With motors disabled and odometry zero, the SBC clock was advanced to current
 time using authenticated Chrony 2.1 command mode, persistent `makestep` policy
@@ -302,6 +301,12 @@ to key-only/no-root-login. Neither the hardware server nor its TCP session was
 restarted. Pre/post host-local and off-host rollback sets verified, and final
 telemetry remained fresh with charge state `3`, motors disabled, zero faults,
 session generation `2`, one `/cmd_vel` publisher, and zero odometry.
+
+The three core containers are healthy with zero restarts. Image revision,
+embedded digest, labelled digest, and deployed source match; one planned SBC
+disconnect/reconnect occurred, charge stayed `3`, motors stayed disabled,
+faults stayed zero, and odometry stayed exactly zero. The recreated bridge's
+session generation is correctly `1` because the counter is process-local.
 
 Remaining SBC items are now narrower: RTC-battery replacement plus cold-boot
 time/journal validation, a real graceful-shutdown input for PB-AUDIT-012, and

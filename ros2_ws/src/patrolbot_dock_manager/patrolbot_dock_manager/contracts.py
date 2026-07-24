@@ -121,8 +121,14 @@ def precheck_failures(
 
 
 def reverse_failures(
-        state: SafetySnapshot, expected_session: int) -> List[str]:
-    """Validate every continuously monitored reverse-motion gate."""
+        state: SafetySnapshot, expected_session: int,
+        allow_front_bumper_while_reversing: bool = False) -> List[str]:
+    """Validate every continuously monitored reverse-motion gate.
+
+    A physically commissioned dock may hold a front panel while the robot
+    backs straight away from it. Rear contact always blocks reverse. The caller
+    must still require all bumpers clear before declaring the dock cleared.
+    """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:
         failures.append('hardware link/state invalid')
@@ -138,8 +144,11 @@ def reverse_failures(
         failures.append('hardware fault flags are nonzero')
     if not state.bumpers_valid:
         failures.append('bumper state invalid')
-    if state.front_bumper_pressed or state.rear_bumper_pressed:
-        failures.append('bumper pressed')
+    if (state.front_bumper_pressed and
+            not allow_front_bumper_while_reversing):
+        failures.append('front bumper pressed')
+    if state.rear_bumper_pressed:
+        failures.append('rear bumper pressed')
     if not state.sonar_fresh or not state.rear_clear:
         failures.append('rear sonar stale or obstructed')
     if not state.odom_fresh:

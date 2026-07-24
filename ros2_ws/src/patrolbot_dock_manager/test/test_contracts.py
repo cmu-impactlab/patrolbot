@@ -95,6 +95,17 @@ def test_each_reverse_input_aborts(field, value):
     assert reverse_failures(replace(SAFE_REVERSE, **{field: value}), 7)
 
 
+def test_commissioned_front_dock_contact_allows_only_straight_reverse_away():
+    front_contact = replace(SAFE_REVERSE, front_bumper_pressed=True)
+    assert reverse_failures(
+        front_contact, 7,
+        allow_front_bumper_while_reversing=True) == []
+    assert reverse_failures(front_contact, 7)
+    assert reverse_failures(
+        replace(front_contact, rear_bumper_pressed=True), 7,
+        allow_front_bumper_while_reversing=True)
+
+
 def test_hardware_reconnect_aborts_reverse():
     assert reverse_failures(replace(SAFE_REVERSE, session_generation=8), 7)
 

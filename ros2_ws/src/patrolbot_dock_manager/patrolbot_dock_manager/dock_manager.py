@@ -34,6 +34,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default, qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2, PointField
+from std_srvs.srv import Empty
 
 
 class DockManager(Node):
@@ -65,6 +66,7 @@ class DockManager(Node):
         self._other_action_active = {}
         self._owned_backup_goal_id = None
         self._active_correlation_id = ''
+        self._last_localization_update_request_at = 0.0
 
         self.declare_parameter('dock_pose_configured', False)
         self.declare_parameter('dock_id', 'main_charger')
@@ -110,6 +112,9 @@ class DockManager(Node):
 
         self._release_client = self.create_client(
             ChargeRelease, '/patrolbot/charge_release',
+            callback_group=self._callbacks)
+        self._localization_update_client = self.create_client(
+            Empty, '/request_nomotion_update',
             callback_group=self._callbacks)
         self._backup_client = ActionClient(
             self, BackUp, '/backup', callback_group=self._callbacks)
@@ -408,7 +413,11 @@ class DockManager(Node):
                     initial_charge, manual_recovery=True)
 
             self._transition('VERIFY_REAR_SONAR', correlation_id)
-            failures = reverse_failures(self._snapshot(), expected_session)
+            allow_front = bool(
+                self.get_parameter('allow_front_bumper_at_dock').value)
+            failures = reverse_failures(
+                self._snapshot(), expected_session,
+                allow_front_bumper_while_reversing=allow_front)
             if failures:
                 return self._abort(
                     goal_handle, Undock.Result.SENSOR_FAILED,
@@ -416,7 +425,8 @@ class DockManager(Node):
                     manual_recovery=True)
 
             self._transition('VERIFY_LOCALIZATION', correlation_id)
-            if not self._snapshot().localization_valid:
+            if not self._wait_for_localization(
+                    goal_handle, 1.0, correlation_id):
                 return self._abort(
                     goal_handle, Undock.Result.LOCALIZATION_FAILED,
                     'localization invalid immediately before reverse',
@@ -445,10 +455,12 @@ class DockManager(Node):
                     manual_recovery=True, distance=traveled)
 
             self._transition('CLEAR_OF_DOCK', correlation_id)
-            if not self._wait_stationary(goal_handle, 2.0, correlation_id):
+            if not self._wait_clear_of_dock(
+                    goal_handle, 2.0, correlation_id):
                 return self._abort(
                     goal_handle, Undock.Result.SAFETY_FAULT,
-                    'robot did not become stationary after BackUp',
+                    'robot did not become stationary with charge and all '
+                    'bumper contacts clear after BackUp',
                     initial_charge, manual_recovery=True, distance=traveled)
             self._transition('STOPPED', correlation_id)
             self._transition('COMPLETE', correlation_id)
@@ -481,6 +493,7 @@ class DockManager(Node):
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during precheck'
+            self._request_localization_update()
             failures = precheck_failures(
                 self._snapshot(), bool(
                     self.get_parameter('allow_front_bumper_at_dock').value))
@@ -501,6 +514,7 @@ class DockManager(Node):
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False
+            self._request_localization_update()
             state = self._snapshot()
             if (state.session_generation != expected_session or
                     not state.link_connected or not state.hardware_state_valid):
@@ -511,6 +525,34 @@ class DockManager(Node):
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
         return False
+
+    def _wait_for_localization(
+            self, goal_handle, timeout, correlation_id):
+        """Force a stationary AMCL update and require a fresh valid estimate."""
+        deadline = time.monotonic() + timeout
+        self._request_localization_update(force=True)
+        while time.monotonic() < deadline:
+            if goal_handle.is_cancel_requested:
+                return False
+            self._request_localization_update()
+            state = self._snapshot()
+            if state.localization_fresh and state.localization_valid:
+                return True
+            self._publish_feedback(goal_handle, deadline, correlation_id)
+            time.sleep(0.05)
+        return False
+
+    def _request_localization_update(self, force=False):
+        """Ask AMCL to update from the next scan even without odometry motion."""
+        now = time.monotonic()
+        if (not force and
+                now - self._last_localization_update_request_at < 0.20):
+            return False
+        if not self._localization_update_client.service_is_ready():
+            return False
+        self._localization_update_client.call_async(Empty.Request())
+        self._last_localization_update_request_at = now
+        return True
 
     def _run_backup(
             self, goal_handle, expected_session, distance, speed,
@@ -548,7 +590,12 @@ class DockManager(Node):
             if goal_handle.is_cancel_requested:
                 reason = 'goal canceled during reverse'
                 break
-            failures = reverse_failures(self._snapshot(), expected_session)
+            self._request_localization_update()
+            failures = reverse_failures(
+                self._snapshot(), expected_session,
+                allow_front_bumper_while_reversing=bool(
+                    self.get_parameter(
+                        'allow_front_bumper_at_dock').value))
             if failures:
                 reason = '; '.join(failures)
                 break
@@ -591,14 +638,20 @@ class DockManager(Node):
             time.sleep(0.05)
         return future.done()
 
-    def _wait_stationary(self, goal_handle, timeout, correlation_id):
+    def _wait_clear_of_dock(
+            self, goal_handle, timeout, correlation_id):
         deadline = time.monotonic() + timeout
         stable_since = None
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False
             state = self._snapshot()
-            if state.odom_fresh and state.stationary:
+            clear_and_stopped = (
+                state.odom_fresh and state.stationary and
+                state.charge_state_valid and state.charge_state == 0 and
+                state.bumpers_valid and not state.front_bumper_pressed and
+                not state.rear_bumper_pressed)
+            if clear_and_stopped:
                 if stable_since is None:
                     stable_since = time.monotonic()
                 elif time.monotonic() - stable_since >= 0.5:

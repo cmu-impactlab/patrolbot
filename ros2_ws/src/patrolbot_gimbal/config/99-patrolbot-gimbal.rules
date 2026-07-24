@@ -1,0 +1,30 @@
+# Stable device name for the SimpleBGC gimbal controller.
+#
+# Install:
+#   sudo cp 99-patrolbot-gimbal.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#
+# Fill in the real IDs first:
+#   lsusb
+#   udevadm info -a -n /dev/ttyUSB0 | grep -m2 'idVendor\|idProduct'
+#
+# Without this the board is /dev/ttyUSB0 or /dev/ttyACM0 depending on what
+# else was plugged in first, which is exactly the kind of thing that works on
+# the bench and fails on the robot.
+#
+# SimpleBGC 32-bit boards appear either as a USB-serial bridge (CP210x, FTDI)
+# or as a native STM32 CDC device, depending on revision. Uncomment whichever
+# matches, or add your own.
+
+# Silicon Labs CP210x
+#SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="patrolbot_gimbal", MODE="0660", GROUP="dialout"
+
+# FTDI FT232
+#SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", SYMLINK+="patrolbot_gimbal", MODE="0660", GROUP="dialout"
+
+# STM32 native CDC (BaseCam boards that enumerate directly)
+#SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", SYMLINK+="patrolbot_gimbal", MODE="0660", GROUP="dialout"
+
+# If two USB-serial devices share a vendor/product pair, disambiguate by
+# serial number instead:
+#SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="XXXXXXXX", SYMLINK+="patrolbot_gimbal", MODE="0660", GROUP="dialout"

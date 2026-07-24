@@ -171,3 +171,64 @@ def test_gimbal_launch_starts_no_navigation_or_base_nodes():
     for token in ('nav2', 'twist_mux', 'velocity_smoother', 'controller_server',
                   'patrolbot_bridge', 'component_container'):
         assert token not in text, f'{token} must not be launched by the gimbal'
+
+
+def test_gimbal_launch_only_starts_gimbal_package_nodes():
+    launch = PACKAGE_ROOT / 'launch' / 'gimbal.launch.py'
+    if not launch.exists():
+        pytest.skip('launch file arrives in phase 6')
+    packages = re.findall(r"package\s*=\s*['\"]([^'\"]+)['\"]",
+                          launch.read_text(encoding='utf-8'))
+    assert packages, 'no nodes found in the gimbal launch'
+    assert set(packages) == {'patrolbot_gimbal'}, (
+        f'gimbal launch starts nodes from {sorted(set(packages))}')
+
+
+# ------------------------------------------------------ deployment opt-in --
+
+def _repository_root():
+    for candidate in PACKAGE_ROOT.parents:
+        if (candidate / 'docker' / 'docker-compose.yml').exists():
+            return candidate
+    return None
+
+
+def test_gimbal_compose_service_is_behind_a_non_default_profile():
+    """The gimbal must never start with `docker compose up`.
+
+    A Compose service without a profile starts by default. If the gimbal ever
+    lost its profile it would come up alongside navigation, which is precisely
+    the coupling this package is built to avoid.
+    """
+    root = _repository_root()
+    if root is None:
+        pytest.skip('compose file not present in this checkout')
+
+    import yaml
+    compose = yaml.safe_load(
+        (root / 'docker' / 'docker-compose.yml').read_text(encoding='utf-8'))
+    service = compose.get('services', {}).get('gimbal')
+    if service is None:
+        pytest.skip('gimbal compose service not defined yet')
+
+    profiles = service.get('profiles') or []
+    assert profiles, 'gimbal service has no profile, so it starts by default'
+    assert 'gimbal' in profiles
+
+
+def test_navigation_compose_service_does_not_depend_on_the_gimbal():
+    """Navigation must not wait on, or be ordered after, the gimbal."""
+    root = _repository_root()
+    if root is None:
+        pytest.skip('compose file not present in this checkout')
+
+    import yaml
+    compose = yaml.safe_load(
+        (root / 'docker' / 'docker-compose.yml').read_text(encoding='utf-8'))
+    for name, service in (compose.get('services') or {}).items():
+        if name == 'gimbal' or not isinstance(service, dict):
+            continue
+        depends = service.get('depends_on') or []
+        keys = depends.keys() if isinstance(depends, dict) else depends
+        assert 'gimbal' not in keys, (
+            f'service {name!r} depends on the gimbal')

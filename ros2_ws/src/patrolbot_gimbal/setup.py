@@ -25,9 +25,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # Nodes land here in phases 3-5. Kept empty for now so the package
-            # installs cleanly without advertising executables that do not
-            # exist yet.
+            'gimbal_driver = patrolbot_gimbal.driver_node:main',
+            'gimbal_joy = patrolbot_gimbal.joy_node:main',
+            'gimbal_mux = patrolbot_gimbal.mux_node:main',
         ],
     },
 )

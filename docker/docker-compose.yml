@@ -104,6 +104,41 @@ services:
     volumes:
       - ${WEB_BRIDGE_ROOT:-/home/ubuntu/patrolbot-dashboard}/ros2_ws/src/patrolbot_web_bridge:/opt/web_bridge:ro
 
+  gimbal:
+    <<: *common
+    container_name: patrolbot-gimbal
+    # Opt-in only. The camera gimbal must never come up with the navigation
+    # stack: it is a peripheral, and a missing or faulty gimbal board must not
+    # be able to delay or disturb the robot's motion stack in any way.
+    #   docker compose --profile gimbal up -d gimbal
+    profiles: ["gimbal"]
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      PATROLBOT_ROLE: gimbal
+    # The shared healthcheck script knows the navigation roles, not this one.
+    healthcheck:
+      disable: true
+    command:
+      - ros2
+      - launch
+      - patrolbot_gimbal
+      - gimbal.launch.py
+      - "port:=${PATROLBOT_GIMBAL_PORT:-/dev/patrolbot_gimbal}"
+    volumes:
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_gimbal:/opt/patrolbot_ws/src/patrolbot_gimbal:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/gimbal:/root/.ros/log
+      # Read-only: this container reads /joy from the shared ROS graph and
+      # never opens an input device itself.
+      - /dev/input:/dev/input:ro
+      # The gimbal's own serial port, via the udev symlink.
+      - ${PATROLBOT_GIMBAL_PORT:-/dev/patrolbot_gimbal}:${PATROLBOT_GIMBAL_PORT:-/dev/patrolbot_gimbal}
+    device_cgroup_rules:
+      - "c 13:* r"        # input devices, read
+      - "c 166:* rwm"     # USB CDC ACM
+      - "c 188:* rwm"     # USB serial
+
   navigation:
     <<: *common
     container_name: patrolbot-navigation

@@ -1,0 +1,56 @@
+# PatrolBot camera gimbal parameters.
+#
+# Travel limits here are a convenience, not the real protection. Set the
+# authoritative limits in the SimpleBGC GUI: this software cannot stop the
+# board doing something its own configuration allows.
+
+gimbal_driver:
+  ros__parameters:
+    # Prefer the udev symlink over /dev/ttyUSB0, which renumbers depending on
+    # what else was plugged in first.
+    port: "/dev/patrolbot_gimbal"
+    baud: 115200
+
+    rate_hz: 30.0            # control frames per second
+    state_rate_hz: 10.0      # gimbal/state publish rate
+
+    # If no valid command arrives within this window the driver holds. This is
+    # the fail-closed guarantee: a publisher that dies stops the camera.
+    # Must be comfortably longer than 1/rate_hz of every upstream publisher.
+    command_timeout: 0.5
+    reconnect_delay: 2.0
+
+    max_pan_deg_s: 45.0
+    max_tilt_deg_s: 45.0
+    max_roll_deg_s: 30.0
+
+    # Measure these on the real mount before trusting them. The tilt range is
+    # asymmetric because most camera mounts run out of upward travel first.
+    pan_min_deg: -170.0
+    pan_max_deg: 170.0
+    tilt_min_deg: -90.0
+    tilt_max_deg: 40.0
+    roll_min_deg: -45.0
+    roll_max_deg: 45.0
+
+    invert_pan: false
+    invert_tilt: false
+    invert_roll: false
+
+gimbal_mux:
+  ros__parameters:
+    # Slightly above the publishers' 30 Hz cadence, so a brief scheduling
+    # hiccup does not look like a dead publisher.
+    input_timeout: 0.5
+    rate_hz: 30.0
+
+gimbal_joy:
+  ros__parameters:
+    max_pan_deg_s: 45.0
+    max_tilt_deg_s: 45.0
+    max_roll_deg_s: 30.0
+    invert_pan: false
+    invert_tilt: false
+    invert_roll: false
+    deadzone: 0.12
+    rate_hz: 30.0

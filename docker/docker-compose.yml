@@ -54,7 +54,14 @@ services:
       # stalled DDS reader and starve both /odom and /scan.
       RMW_FASTRTPS_PUBLICATION_MODE: ASYNCHRONOUS
       PATROLBOT_ROLE: bridge
-    command: ["ros2", "run", "patrolbot_bridge", "bridge_node"]
+    command:
+      - ros2
+      - run
+      - patrolbot_bridge
+      - bridge_node
+      - --ros-args
+      - --params-file
+      - /opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml
     volumes:
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log

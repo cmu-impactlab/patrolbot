@@ -34,7 +34,7 @@ COPY ros2_ws/src/patrolbot_navigation src/patrolbot_navigation
 # cannot set velocity or enable motors as a side effect.
 COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server
 COPY docker/Dockerfile docker/docker-compose.yml docker/status.sh \
-  docker/source-tree-digest.sh docker/
+  docker/source-tree-digest.sh docker/capture-nav-goal.sh docker/
 COPY --chmod=0755 docker/source-tree-digest.sh /usr/local/bin/patrolbot-source-tree-digest
 
 ARG PATROLBOT_SOURCE_SHA256=unknown

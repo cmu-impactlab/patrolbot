@@ -416,7 +416,8 @@ Before the remaining SBC deployment and commissioning:
 Before any autonomous reverse:
 
 1. Determine whether docking/charging asserts the reported E-stop flag.
-2. Confirm both red E-stop buttons' physical state.
+2. Confirm the single red E-stop button's physical state and whether the
+   required PWR ON reset has been performed.
 3. Test µARCS command 68/argument 0 with motors disabled and zero motion.
 4. Determine whether physical PWR ON is required after release.
 5. Confirm the dock cannot release into gravity-driven rolling.
@@ -1408,6 +1409,62 @@ Verification:
 
 Dashboard command mode remained enabled but exposed no direct `/cmd_vel`
 publisher. This phase sent no velocity, goal, pose, hardware-control, docking,
-joystick, E-stop, or motion command. Finding counts remain 8 complete, 15 in
-progress, and 1 untouched; the remaining work is physical commissioning,
-power-fail input/RTC validation, and EOL platform replacement.
+joystick, E-stop, or motion command. At the end of this 2026-07-22 phase,
+finding counts were 8 complete, 15 in progress, and 1 untouched; the later
+2026-07-23 reboot acceptance below closes PB-AUDIT-013.
+
+## 20. Real power-cycle and PB-AUDIT-013 acceptance — 2026-07-23
+
+The operator shut down and later powered up the Pi and SBC. The first live
+check correctly found the Pi command graph fail-closed with no hardware
+connection. After the operator powered the onboard computer while an E-stop
+was latched, the SBC Ethernet appeared, the server completed its bounded SICK
+laser initialization, and exactly one Pi client connected to TCP 7272.
+
+Read-only acceptance established:
+
+- enabled `patrolbot-server.service` auto-started and remained active;
+- `socat-boot`, wired-IP, Chrony, and SSH services were active;
+- the running/deployed binary SHA-256 remained
+  `b9606502dc815c602397f93f48a0af7eb783ab3e819d87e77fcdf01d40394393`;
+- persistent journal boot `-1` retained the complete 2026-07-22 clean shutdown;
+- boot `0` recorded laser connection, server listen, and the sole Pi
+  reconnection;
+- journal usage remained bounded at 16 MiB;
+- the RTC again supplied 2008 at boot, after which the deployed Chrony policy
+  automatically stepped the system to current 2026 time and synchronized
+  normally;
+- ROS reported fresh scan, odometry, sonar, battery, and typed base state,
+  charge state `3`, motors disabled, the operator-latched E-stop, zero faults,
+  and zero odometry twist;
+- `/input/safety_controller`, `/cmd_vel_out`, and `/cmd_vel` each produced zero,
+  and `/cmd_vel` retained exactly one publisher and one subscriber.
+
+This is the previously deferred reboot-survival evidence and closes
+PB-AUDIT-013. PB-AUDIT-010 remains open specifically for RTC-battery
+replacement and a post-replacement cold-boot validation. No velocity, goal,
+pose, docking, motor, charge-release, or other hardware command was sent.
+
+## 21. Stationary E-stop signal and recovery commissioning — 2026-07-23
+
+The operator physically identified one top/rear twist-release E-stop. This
+matches the manufacturer datasheet and most guide descriptions; the guide's
+two isolated references to “both” E-stop buttons are inconsistent with the
+robot and its own equipment table.
+
+The test remained docked, charging, motor-disabled, and zero-motion:
+
+- initial operator-latched state: `estop_pressed=true`, raw flags `1060`;
+- twist-release without PWR ON: latch correctly remained asserted;
+- documented physical PWR ON reset: state changed to false, raw flags `1028`;
+- repeated physical E-stop press: state changed false to true, raw flags
+  returned to `1060`;
+- the priority-10 watchdog published zero while asserted and went silent after
+  the clear state stabilized;
+- final `/cmd_vel` and odometry twist stayed zero, charge state stayed `3`,
+  motors stayed disabled, and fault flags stayed zero.
+
+The signal, telemetry, software hold, and physical reset sequence are now
+commissioned. Motor-power removal with enabled motors remains deliberately
+unclaimed and must be observed during the later supervised motor-enable test.
+No ROS or hardware control command was sent.

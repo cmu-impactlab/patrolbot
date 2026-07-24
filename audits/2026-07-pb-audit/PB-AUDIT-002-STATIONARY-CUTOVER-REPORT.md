@@ -312,3 +312,42 @@ Remaining SBC items are now narrower: RTC-battery replacement plus cold-boot
 time/journal validation, a real graceful-shutdown input for PB-AUDIT-012, and
 eventual replacement of the EOL appliance. All physical commissioning and
 motion gates listed above remain unchanged.
+
+## Power-cycle persistence acceptance — 2026-07-23
+
+The operator subsequently performed a real shutdown and power-up. With an
+E-stop latched and no motion command, the enabled hardware-server unit
+auto-started, initialized the laser, and accepted exactly one Pi client. The
+running binary remained SHA-256 `b9606502...94393`.
+
+Persistent journal boot `-1` retained the complete prior clean shutdown and
+boot `0` recorded the new server/laser/bridge startup. Journal usage remained
+16 MiB. This closes the remaining PB-AUDIT-013 reboot-persistence acceptance.
+
+The power cycle also reconfirmed the narrower PB-AUDIT-010 hardware defect:
+the SBC initially booted with its 2008 RTC time, then the deployed Chrony
+policy stepped it automatically to current 2026 time and synchronized.
+RTC-battery replacement and a post-replacement cold-boot test remain open.
+
+After reconnection, charge state was `3`, motors were disabled, the E-stop was
+engaged, fault flags were zero, all final command samples and odometry twist
+were zero, and scan/sonar/battery/base telemetry was fresh. No velocity, goal,
+pose, docking, motor, charge-release, or other hardware command was sent.
+
+## Stationary E-stop follow-up — 2026-07-23
+
+The operator confirmed the robot has one physical top/rear twist-release
+E-stop; the manual's two stray plural references conflict with the datasheet,
+equipment table, operating description, and actual robot.
+
+Twist-release alone correctly left the ESRB latch asserted. Physical PWR ON
+then changed typed E-stop state from true to false (`flags 1060 -> 1028`) while
+charge stayed `3`, motors stayed disabled, and odometry stayed zero. A repeated
+button press changed the state false to true, restored raw flags `1060`, and
+caused the priority-10 watchdog to publish zero. Final command and odometry
+remained zero throughout.
+
+This verifies button detection, typed reporting, fail-closed software response,
+and the required PWR ON recovery. It does not yet prove physical power removal
+from enabled motors; that observation remains with the supervised motor-enable
+phase. No ROS or hardware control command was sent.

@@ -107,20 +107,21 @@ The SBC-only audit findings were refreshed again during supervised root
 maintenance on 2026-07-22. No PatrolBot process was restarted and no hardware
 command was sent:
 
-- **PB-AUDIT-010 is corrected in software; physical persistence remains
-  open:** authenticated legacy `chronyc -a makestep` advanced the system clock
+- **PB-AUDIT-010 is corrected in software and survived a real reboot; RTC
+  hardware remains open:** authenticated legacy `chronyc -a makestep` advanced the system clock
   to current 2026 time, and `makestep 1.0 -1` is active in `chrony.conf`.
   Chrony restarted active and synchronized within a millisecond. The RTC still
-  reports 2008, so battery replacement and a cold-boot validation remain.
+  reports 2008. The 2026-07-23 power cycle proved automatic Chrony recovery;
+  battery replacement and a post-replacement cold-boot validation remain.
 - **PB-AUDIT-012 SBC portion remains open:** no `genpowerd`, UPS daemon, or
   equivalent graceful shutdown process is installed. The active socat bridge
   still carries serial bytes through TCP and provides no demonstrated RI-based
   shutdown handoff.
-- **PB-AUDIT-013 is fixed live except for reboot acceptance:** the compatible
-  user unit remains active, and a root-owned persistent journal is now live
-  with a 128 MiB cap, 2 GiB free-space floor, compression, and 30-day maximum
-  retention. It held 16 MiB after installation and contained current-time
-  `patrolbot_server` records. Reboot survival remains coupled to the RTC work.
+- **PB-AUDIT-013 is closed after reboot acceptance:** the compatible user unit
+  auto-started after the 2026-07-23 power cycle, and the root-owned persistent
+  journal retained both the prior clean shutdown and the current boot. It
+  remained bounded at 16 MiB and recorded laser initialization, the 7272
+  listener, and the sole Pi reconnection.
 - **PB-AUDIT-019 residual SBC container cleanup is complete:** all 14 stopped
   experimental containers were removed after preserving container/image
   inspection, logs, and the only non-empty writable filesystem in verified
@@ -151,6 +152,32 @@ telemetry, motors disabled, and zero odometry. PB-AUDIT-012 still has no
 executable SBC shutdown service because the live serial-to-TCP topology exposes
 no demonstrated RI or other power-fail signal to Linux; deploying a daemon
 without a real input would only create false confidence.
+
+### Stationary E-stop signal/reset commissioning — 2026-07-23
+
+Operator inspection resolved the inventory ambiguity: this physical robot has
+one top/rear twist-release E-stop. The datasheet, equipment table, emergency
+instructions, and §6.4 operating description are singular; only the JoyDrive
+and reset procedures contain stray “both buttons” wording. Operational
+instructions now follow the observed single-button hardware.
+
+With the robot charging, software motors disabled, and every velocity/odometry
+sample zero:
+
+1. the operator-latched E-stop reported `estop_pressed=true`, `flags=1060`;
+2. twist-releasing the button alone left the ESRB latch asserted, as expected;
+3. physical PWR ON cleared the latch to `estop_pressed=false`, `flags=1028`;
+4. the priority-10 watchdog stopped publishing after the clear state stabilized;
+5. pressing the E-stop again produced `false -> true`, restored `flags=1060`,
+   and caused the watchdog to publish zero; and
+6. charge state remained `3`, motors remained disabled, fault flags remained
+   zero, and command/odometry remained zero throughout.
+
+This commissions physical-button detection, the mandatory PWR ON recovery
+sequence, typed telemetry, and the software fail-closed path. It does not prove
+the ESRB removed power from enabled motors because motors were deliberately
+disabled throughout; that final hardware-cutoff observation remains coupled to
+the later supervised motor-enable phase.
 
 The deployed safe navigation path is now:
 
@@ -191,20 +218,20 @@ not substitute for SBC or physical commissioning.
 | ID | Current disposition | What changed or remains | Can be completed with the Raspberry Pi 5 only? |
 |---|---|---|---|
 | PB-AUDIT-001 | **Contained and live-verified on Pi** | Generic docking server removed from both launch variants and lifecycle management. An upstream mux reserves `/input/docking`; the final `/cmd_vel` has one controlled publisher. | **Yes for active-stack containment, completed.** Future automated docking still needs the physical campaign before its producer may be enabled. |
-| PB-AUDIT-002 | **Open; stationary cutover and release commissioned** | Typed services and corrected SBC protocol are deployed. Charging motor-enable rejection, stable-zero charge release, UUID replay, reconnect generation, automatic recharge, disabled motors, and zero motion passed. | **No.** Stationary software/protocol commissioning is complete; closure still requires E-stop/joystick, measured bumpers/sonar, dock localization, successful motor enable, guarded reverse, full undock, and re-docking regressions. |
+| PB-AUDIT-002 | **Open; stationary cutover, release, and bumper mapping commissioned** | Typed services and corrected SBC protocol are deployed. Charging motor-enable rejection, stable-zero charge release, UUID replay, automatic recharge, all 12 bumper masks, disabled motors, and zero motion passed. | **No.** Closure still requires dock localization, successful motor enable, guarded reverse, full undock, and re-docking regressions. |
 | PB-AUDIT-003 | **Pi implementation complete; live motion regression pending** | Custom recovery BTs are selected; a 0.10 m, 0.05 m/s BackUp precedes Spin. RPP reversing remains disabled. | **Software yes, completed.** Activation and physical behavior cannot be closed without fresh hardware telemetry and controlled testing. |
 | PB-AUDIT-004 | **Pi integration complete; sensor validation pending** | Collision Monitor and the dock manager consume `/sonar`; rear stop uses `min_points: 1`, a 0.5 s timeout, and stale/missing data blocks reverse. Fresh empty clouds remain valid clear observations. | **Software yes, completed.** Actual geometry, dropout, obstacle stop, and bumper fallback require the SBC and robot. |
 | PB-AUDIT-005 | **Pi scaffold complete; physical finding open** | Official Jazzy `urg_node` is in the image and an opt-in candidate launch exists, but it requires an identified stable device and measured transform. It is not in active bringup. Low forward obstacles remain physically invisible to the main scan; URG presence/cabling remains unknown. | **Pi preparation completed.** Presence, mounting, power, interface, transform, coverage, and stopping tests are physical prerequisites. |
-| PB-AUDIT-006 | **Pi safety path implemented but uncommissioned; finding open** | Typed bumper validity/configurable masks now feed a direction-aware priority-10 hold. `bumpers_mapped=false`, zero masks, and `bumper_enforcement_enabled=false` deliberately prevent guessed activation. Firmware BumpStall and all 12 segments remain unverified. | **Pi software completed.** Masks and closure require physical mapping and µARCS validation; enforcement must remain disabled until then. |
+| PB-AUDIT-006 | **All 12 panels mapped; motion cutoff validation remains** | Physical presses established front mask `0x7e00` and rear mask `0x007e`; the bridge now publishes valid typed contact state. The dock-held center-front baseline is accepted only for straight guarded reverse, while rear contact remains an abort. General priority-10 bumper enforcement remains disabled. | **Partly.** Mapping and typed undock gating are complete; firmware BumpStall and enabled-motion cutoff behavior still require supervised physical validation. |
 | PB-AUDIT-007 | **Pi mechanism implemented; dock pose uncommissioned** | Forced origin reset removed. Operator-authorized `/patrolbot/initialize_dock_pose` waits for AMCL convergence. `dock_pose_configured=false` keeps undock blocked. | **Partly.** The service and tests are complete; a surveyed pose and live scan/odom convergence require the robot and SBC. |
 | PB-AUDIT-008 | **Open** | Footprint still reflects the ARIA body rather than a verified bumper/attachment envelope. | **Configuration can be changed on Pi, but must not be guessed.** Measure first, then update both costmaps and run doorway/near-wall tests. |
 | PB-AUDIT-009 | **Live defect corrected; successful-enable physical test pending** | The deployed server never enables motors at startup or from DRIVE. The explicit service rejected enable while charging and motors stayed disabled through release/recharge. | **Software and charging-rejection path completed.** Successful enable and any PWR ON interaction remain coupled to the later supervised motion phase. |
-| PB-AUDIT-010 | **Software clock fix live; RTC/reboot pending** | The system clock was stepped to current time and `makestep 1.0 -1` is active; Chrony is synchronized. The RTC still reports 2008. | **Partly.** Software remediation is live; RTC-battery replacement and cold-boot validation require physical maintenance. |
+| PB-AUDIT-010 | **Software clock fix reboot-verified; RTC hardware pending** | The system clock was stepped to current time and `makestep 1.0 -1` is active. A real power cycle again began from the bad 2008 RTC, after which Chrony automatically stepped to current 2026 time and synchronized. | **Partly.** RTC-battery replacement and a post-replacement cold-boot validation require physical maintenance. |
 | PB-AUDIT-011 | **Pi interface corrected; release/recharge transition verified** | The PatrolBot Jazzy plugin uses typed raw charge state plus fresh `/battery`; live release reached raw state `0` and contact charging resumed at state `3`. Generic docking stays disabled. | **Software and stationary transition completed.** Full docking-server enablement still requires the physical dock campaign. |
 | PB-AUDIT-012 | **Pi portion implemented; SBC shutdown path open** | Documented FAULTFLAGS are decoded into named bridge diagnostics. The priority-10 watchdog now blocks motion on stale battery, voltage below 23.0 V, faults, invalid hardware state, or E-stop; 24.0 V is reported as the recharge warning threshold. | **Pi portion completed.** The serial-RI/genpowerd graceful SBC shutdown path still requires SBC/hardware work. |
-| PB-AUDIT-013 | **Logging fixed live; reboot acceptance pending** | The compatible journal-only unit/drop-in and bounded persistent journal are active. Current-time server records are queryable; PID/session stayed unchanged. | **Software complete.** Reboot-survival verification remains coupled to RTC replacement. |
+| PB-AUDIT-013 | **Closed after live reboot acceptance** | The compatible journal-only unit auto-started after a real power cycle. The bounded persistent journal retained the prior clean shutdown and current boot, including laser/server startup and the sole Pi reconnection. | **Completed and live-verified.** |
 | PB-AUDIT-014 | **Closed on Pi** | Ignored Kobuki-era keys were replaced with declared Jazzy `nav2_velocity_smoother` parameters. Static contracts and live readback verify the final cap `[0.35, 0.0, 0.7]`, 0.5 s timeout, and explicit accel/decel limits. | **Completed and deployed.** Physical manual-control response remains part of PB-AUDIT-015, not this configuration defect. |
-| PB-AUDIT-015 | **Open; hardware unavailable** | The Pi device mount and readiness check are present, but the joystick receiver is absent and `/joy` cannot be stationary-validated. | **Blocked on receiver availability.** Attach it and perform stationary `/joy`, deadman, timeout, priority, and zero-output checks before motion. |
+| PB-AUDIT-015 | **Software corrected; receiver unavailable** | F710 defaults and a deadman takeover path are deployed. RB cancels active Nav2 goals, drives through `/input/joy`, and cannot resume the canceled goal on release. The receiver is absent, so `/joy` cannot be physically validated. | **Blocked on receiver availability.** Attach it and perform stationary deadman, timeout, priority, and zero-output checks before motion. |
 | PB-AUDIT-016 | **Cause resolved; prevention remains under PB-AUDIT-012** | Operator confirmed the earlier outages were forced shutdowns before the main PC/SBC completed its shutdown sequence. | **Root cause closed by operator evidence.** Prevention requires the documented orderly shutdown procedure now and a real automatic shutdown signal path later. |
 | PB-AUDIT-017 | **External DDS exposure contained on Pi** | Jazzy discovery is now `LOCALHOST` in every container. The host-network containers still communicate via loopback, but LAN/Wi-Fi DDS participants cannot discover the command graph. SSH management was preserved; remote DDS/RViz is intentionally unavailable. | **Current exposure addressed.** Any future remote visualization must use a separately reviewed secure transport or coordinated SROS2 design, never by silently restoring `SUBNET` discovery. |
 | PB-AUDIT-018 | **Intentional filter retained; candidate scaffold uncommissioned** | `SCAN_RANGE_MIN=0.25` remains pinned. Direction-aware velocity polygons preserve front protection and add sonar protection for reverse. A separately named raw-scan candidate publisher exists but defaults false and is not an active topic or safety source. | **Safe Pi scaffold completed.** Self-occlusion and physical stop tests are mandatory before that candidate can be enabled or connected. |
@@ -397,7 +424,7 @@ Legend: green=confirmed active; blue=safety path; amber=active with a defect; re
 | Front bumpers (6 seg.) | contact stop (BumpStall) + dock-contact detection | Confirmed installed (manual std.; .p FrontBumpers=6) | stall-word bumper bits in SIP | µARCS | raw bits in /diagnostics only | telemetry only | **Partially utilized / unverified** | Medium | constant raw bit (left=8) even idle; manual self-contradicts on BumpStall FLASH encoding — PB-AUDIT-006 |
 | Rear bumpers (6 seg.) | contact stop while reversing | Confirmed installed (manual std.) | as above | µARCS | as above | telemetry only | **Unverified** | Medium | PB-AUDIT-006 |
 | AUX bumper inputs (8) | payload bumpers | Present (I/O well) | manual; no payload configured | — | — | — | Optional, not in use | Medium | no attached payload declared |
-| E-Stop system (2 latching buttons + ESRB) | remove motor power; reset requires button release **+ physical PWR ON** | Confirmed present | live: `estop_pressed=True` while docked; manual §6.4 | µARCS flags bit 5 | /diagnostics | operator | Reported to telemetry; hardware function **requires physical validation** | Medium | software cannot clear it (correct) |
+| E-Stop system (single latching button + ESRB) | remove motor power; reset requires button release **+ physical PWR ON** | Confirmed present | operator physically identified the single top/rear twist-release button; live state transition observed; manual §6.4 | µARCS flags bit 5 | /diagnostics | operator | Reported to telemetry; hardware power-removal function still requires an enabled-motor validation | High for inventory/signal path | The guide is internally inconsistent: most descriptions and the datasheet are singular, while two procedures incorrectly say “both.” |
 | Joystick (F710 USB receiver, replaces inductive joystick) | manual drive | **Configured but not detected** | `lsusb`: root hubs only; `/joy` silent | joy_node (running) | /joy → input/joy | twist_mux | **Unused at audit time** | High | PB-AUDIT-015; teleop joy-loss watchdog makes absence safe |
 | Motion lamps | flash when driving | Installed (std.) | µARCS MOTIONLAMPPORT default 12 | µARCS-managed | none | — | Firmware-managed, unverified | Low | no software involvement needed |
 | LCD + Scroll/Select | status/manual control | Installed (std.) | manual | µARCS | none | operator | Firmware-managed | Medium | shows E/S/B/G indicators — useful during deferred tests |
@@ -986,7 +1013,7 @@ RTPS/UDP sockets bound on 0.0.0.0 and the Wi-Fi address (`ss` on the Pi); no SRO
 
 **Procedure (recommend, not executed):**
 1. Capture the docked scan, sonar, TF, costmaps, pose, charging state, motor state.
-2. **Attribution step:** with both red E-stop buttons confirmed released (twist-to-release), observe `/diagnostics` — if `estop_pressed` stays True while charging, the dock/charge state asserts it; then verify (controlled server change or uARCScf session) that µARCS `CHARGE 0` release de-asserts it and what motor-enable then requires (software ENABLE vs physical PWR ON).
+2. **Attribution step:** with the single red E-stop confirmed released (twist-to-release), observe `/diagnostics`; then press physical PWR ON as the manual requires and verify the stop flag clears. Do not infer a charge-related E-stop assertion from the latched relay state before PWR ON.
 3. Confirm reverse velocity is permitted by every command-path component (per this audit it is **not** today — PB-AUDIT-001…004 fixes must land first).
 4. Confirm the rear path is clear in sensor data *and* physical inspection.
 5. Command only a very short, low-speed reverse departure; stop immediately after clearing the dock.

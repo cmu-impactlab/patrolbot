@@ -35,7 +35,7 @@ Manual facts controlling this design are:
 
 - Charging permits operation other than driving. `CHARGE 1` halts motion, disables motors, and deploys the dock electromagnet; `CHARGE 0` gracefully cancels charging.
 - Raw charge states are 0 not charging, 1 bulk, 2 overcharge, and 3 float.
-- A physical red E-stop removes motor power. After both red buttons are released, physical PWR ON is required to restore motor power.
+- The physical red E-stop removes motor power. After its single latching button is twist-released, physical PWR ON is required to restore motor power. The manufacturer guide contains stray “both buttons” wording that does not match this robot, the guide’s own equipment description, or the datasheet.
 - A fresh OPEN session has motors disabled and expects an explicit enable.
 - The rear sonar is intended for obstacle sensing while backing.
 - Original docking was a slow forward approach, front-bumper contact, stop, then `CHARGE 1`.
@@ -355,7 +355,7 @@ The action server runs on the Raspberry Pi as `patrolbot_dock_manager`. It accep
 | `PRECHECK` | Goal includes operator authorization and limits within hard caps | Confirm both hosts/bridge fresh, one hardware session, robot stationary, charge state fresh/nonzero, no navigation/docking goals, exactly one final `/cmd_vel` producer, watchdog/mux/Collision Monitor active, scan/odom/sonar/base state fresh, rear clear, bumper state valid, physical E-stop-button status confirmed, dock pose configured | 5 s | All gates stable for 1 s → `REQUEST_DOCK_RELEASE` | Any failure → `ABORTED`; motors remain disabled; no movement; log each failed gate |
 | `REQUEST_DOCK_RELEASE` | PRECHECK passed; zero velocity stable | Send one `ChargeRelease` service request with UUID; never retry with a new ID; record raw pre-state | 1 s to accept | Accepted/pending → `WAIT_FOR_CHARGE_RELEASE` | Reject/unavailable/cancel → `ABORTED`; no motors/motion; service may finish in background and its result is drained/logged |
 | `WAIT_FOR_CHARGE_RELEASE` | SBC accepted same UUID | Observe structured result, raw charge state, battery status, E-stop and motor state; maintain zero | 6 s (SBC operation 5 s + transport margin) | Charge state `0` for three consecutive AUX samples and matching SBC OK → `VERIFY_ESTOP_STATE` | Timeout, contradictory state, disconnect, or motors enabling → `FAULT`; ordinary rejection → `ABORTED`; no motion |
-| `VERIFY_ESTOP_STATE` | Charge release acknowledged | Require fresh E-stop state; operator confirms both red buttons physically released; distinguish charge-related flag deassertion from physical latch | 3 s | Unambiguously not pressed → `VERIFY_MOTOR_STATE` | True/unknown → `ABORTED` with `PHYSICAL_ESTOP_OR_INHIBIT`; never clear in software; motors off; no motion |
+| `VERIFY_ESTOP_STATE` | Charge release acknowledged | Require fresh E-stop state; operator confirms the single red latching button is physically released and performs the documented PWR ON reset when prompted; distinguish the retained ESRB latch from charge state | 15 s operator window | Unambiguously not pressed → `VERIFY_MOTOR_STATE` | True/unknown → `ABORTED` with `PHYSICAL_ESTOP_OR_INHIBIT`; never bypass in software; motors off; no motion |
 | `VERIFY_MOTOR_STATE` | E-stop clear, release stable | Require motors initially remain disabled. Follow the approved policy: operator presses physical PWR ON if required; an optional future explicit enable request is a separate reviewed step, never a DRIVE side effect | 10 s operator window | Motors enabled only after recorded authorized event and zero velocity remains stable → `VERIFY_REAR_SONAR` | Early/unexpected enable → `FAULT`; no transition/ambiguous source → `ABORTED`; no movement |
 | `VERIFY_REAR_SONAR` | Motors enabled deliberately but command lease absent | Require `/sonar` age ≤0.5 s, compatible QoS, collision source current, rear zone clear, sensor geometry plausible, and base/bumper state age ≤0.25 s | 3 s | Stable clear/valid for 1 s → `VERIFY_LOCALIZATION` | Stale, empty transport, implausible geometry, obstacle, or bumper invalid/pressed → `ABORTED`; explicit zero; motors may remain enabled under operator control, no movement |
 | `VERIFY_LOCALIZATION` | Sensor gates pass | Require `map→odom→base_link`, AMCL pose age ≤0.5 s, covariance thresholds, configured dock-pose agreement, and scan-map/dock consistency; no blind assumption that charging implies dock identity | 15 s | Health stable 2 s → `VERIFY_COMMAND_PATH` | Invalid/nonconverged → `ABORTED`; operator may provide an initial pose and start a new goal; no movement |
@@ -678,7 +678,7 @@ The robot remains docked and motors remain disabled for this level. No action or
 ### B. Charging, hardware state, and localization observation
 
 1. Compare raw charge state, BaseState, `/battery.power_supply_status`, plugin `isCharging`, motors, E-stop, and fault/bumper state over at least 30 s.
-2. With both red buttons physically confirmed released but untouched, record whether E-stop remains asserted while charging. Do not infer the cause.
+2. With the single red E-stop physically confirmed released but before PWR ON, record whether the ESRB latch remains asserted while charging. Then perform the documented PWR ON reset and correlate the transition; do not infer charge attribution from the pre-reset latch.
 3. Confirm `/battery_state` has the intended docking consumer only if enabled, and that its semantic result follows raw state rather than `current=0.0`.
 4. Initialize the configured dock pose through the approved conditional path; visualize particles/TF; verify message age, covariance, pose/yaw tolerances, and scan-map consistency. Repeat negative tests with a deliberately rejected wrong/stale candidate in a test namespace, not the live AMCL instance.
 
@@ -708,7 +708,7 @@ No Level 3 test may begin until every Level 1 and Level 2 criterion passes and a
 
 ### Test 1 — motor and hardware safety attribution
 
-1. Start docked, charging, motors disabled, zero command, both red E-stops physically released.
+1. Start docked, charging, motors disabled, zero command, and the single red E-stop physically released.
 2. Perform approved zero-motion release. Observe whether dock-related E-stop clears.
 3. Determine whether physical PWR ON is required. If it is, record that as the production procedure. Do not introduce software enable.
 4. If software enable is separately approved for investigation, test only the explicit zero-motion enable interface; verify a nonzero DRIVE cannot enable. This is a separate test and approval.
@@ -939,7 +939,7 @@ Exact backup roots and restore constraints are in section 6. Restoring charging 
 
 ## 23. Open questions requiring operator or physical confirmation
 
-1. Were both red E-stop buttons physically released during the 2026-07-16 observation?
+1. Was the single red E-stop physically released, and had the required PWR ON reset been performed, during the 2026-07-16 observation?
 2. Does dock/charge engagement itself assert the reported stop/E-stop flag, or was a physical button latched?
 3. Does `CHARGE 0` deassert that flag on this robot, and at which raw-state transition?
 4. After `CHARGE 0`, is physical PWR ON required to enable motors? Does any software ENABLE work, and should it ever be permitted?

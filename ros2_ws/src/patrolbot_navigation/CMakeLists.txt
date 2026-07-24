@@ -12,6 +12,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_safety_contract test/test_safety_contract.py)
   ament_add_pytest_test(test_safety_policy test/test_safety_policy.py)
+  ament_add_pytest_test(test_joystick_policy test/test_joystick_policy.py)
   ament_add_pytest_test(
     test_physical_calibration
     test/test_physical_calibration.py)
@@ -33,6 +34,7 @@ install(DIRECTORY
 
 # Install Python scripts as executable ROS 2 nodes
 install(PROGRAMS
+  scripts/capture_nav_command_path.py
   scripts/patrolbot_joy_teleop.py
   scripts/patrolbot_safety_watchdog.py
   scripts/validate_physical_calibration.py

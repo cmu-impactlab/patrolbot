@@ -40,6 +40,7 @@ install(PROGRAMS
 )
 
 install(FILES
+  scripts/joystick_policy.py
   scripts/safety_policy.py
   DESTINATION lib/${PROJECT_NAME}
 )

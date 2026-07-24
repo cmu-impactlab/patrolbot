@@ -12,7 +12,10 @@ cmd_vel_mux:             # Must match the 'name' in your launch file
         priority: 8
       joy:
         topic: "input/joy"
-        timeout: 1.0
+        # Slightly above the teleop's 0.4 s receiver watchdog. Once its final
+        # zero lands, manual ownership releases promptly without reviving a
+        # prior Nav2 goal (RB takeover cancels that goal explicitly).
+        timeout: 0.5
         priority: 8
       switch:
         topic: "input/switch"

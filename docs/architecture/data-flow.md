@@ -112,9 +112,10 @@ flowchart LR
 ```
 
 The teleop node publishes at 30 Hz while RB is held, even when the sticks are
-centered. On RB release or 0.4 s of `/joy` loss, it ramps to zero, sends one final
-zero, then goes silent so twist_mux times the joy input out (1 s) and navigation
-resumes.
+centered, and the RB edge cancels any active Nav2 goal. On RB release or 0.4 s
+of `/joy` loss, it ramps to zero and holds priority 8 until cancellation is
+confirmed. It then sends one final zero and goes silent; the 0.5 s mux timeout
+does not revive the canceled goal.
 
 ## Data integrity and failure behavior
 

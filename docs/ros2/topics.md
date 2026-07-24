@@ -21,7 +21,7 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 | `/patrolbot/base_state` | `patrolbot_interfaces/BaseState` | `patrolbot_bridge` | safety watchdog, dock manager | ~5 Hz |
 | `/patrolbot/dock_readiness` | `patrolbot_interfaces/DockReadiness` | `patrolbot_dock_manager` | monitoring | 2 Hz |
 | `/joy` | `sensor_msgs/Joy` | `joy_node` | `patrolbot_joy_teleop` | event-driven |
-| `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `patrolbot_joy_teleop` | `twist_mux` (prio 8) | 30 Hz while RB held or ramping to stop; one final zero |
+| `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `patrolbot_joy_teleop` | `twist_mux` (prio 8) | 30 Hz while RB held/ramping or awaiting Nav2 cancellation; one final zero |
 | `/input/nav_controller` | `geometry_msgs/Twist` | `controller_server` (RPP) | `nav_command_mux` | 5 Hz |
 | `/input/nav_behavior` | `geometry_msgs/Twist` | `behavior_server` | `nav_command_mux` | behavior-dependent |
 | `/input/docking` | `geometry_msgs/Twist` | none (reserved) | `nav_command_mux` | no publisher until commissioned |

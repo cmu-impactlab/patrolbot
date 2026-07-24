@@ -33,15 +33,16 @@ The **only** device wired to the Pi, and the operator's manual-override interfac
 While RB is held, the teleop publishes its acceleration-ramped command at 30 Hz,
 including zero when the sticks are centered, at twist_mux **priority 8** (above
 navigation's 5). A 0.4 s `/joy` watchdog drops the deadman if the controller stream
-disappears. On RB release it ramps to zero, publishes one final zero, and goes silent,
-so twist_mux times the input out (1 s) and navigation resumes. See
+disappears. The rising RB edge cancels any active Nav2 goal. On RB release it ramps
+to zero, publishes one final zero, and goes silent after cancellation is confirmed;
+the canceled goal never resumes automatically. See
 [Nodes → patrolbot_joy_teleop](../ros2/nodes.md#patrolbot_joy_teleop).
 
 ### Failure conditions
 
 | Condition | Symptom | Effect |
 |---|---|---|
-| Controller unplugged | no `/dev/input/js*`, no `/joy` | 0.4 s watchdog drops the deadman and ramps to zero; navigation resumes after mux timeout |
+| Controller unplugged | no `/dev/input/js*`, no `/joy` | 0.4 s watchdog drops the deadman and ramps to zero; a canceled goal stays canceled |
 | Switch on **D** (DirectInput) | wrong axis/button map | sticks do nothing useful — set the switch to **X** |
 | Deadman not held | sticks ignored | by design (interlock) |
 

@@ -126,9 +126,11 @@ Reading it carefully:
   applies direction-aware scan and sonar stop polygons, and emits **`input/navi`** at final
   twist_mux priority **5**.
 - `patrolbot_joy_teleop` emits on **`input/joy`** at priority **8** — *higher* than navigation.
-  While RB is held it publishes the ramped command at 30 Hz. On RB release or
-  0.4 s of `/joy` loss it ramps to zero, publishes one final zero, then goes silent;
-  twist_mux times the input out after 1 s and navigation resumes.
+  A rising RB edge cancels any active Nav2 goal, while the ramped command publishes
+  at 30 Hz. On RB release or 0.4 s of `/joy` loss it ramps to zero and retains a
+  priority-8 zero until cancellation is confirmed; it then sends one final zero
+  and goes silent so the mux input times out after 0.5 s. The canceled goal does
+  not resume.
 - `twist_mux` publishes the winner on `cmd_vel_out`. A *second*, separate
   `teleop_velocity_smoother` (the `nav2_velocity_smoother` executable started by the mobile-base
   launch) re-shapes it and republishes **`/cmd_vel`**, which the bridge forwards to the SBC.

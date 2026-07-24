@@ -77,8 +77,8 @@ Not a classic FSM, but a priority selection that behaves like one over time:
 ```mermaid
 stateDiagram-v2
     [*] --> Navigation
-    Navigation --> Joystick: joystick moves (input/joy, prio 8 > 5)
-    Joystick --> Navigation: joystick released → 1 s timeout
+    Navigation --> Joystick: RB held → cancel goal + input/joy (prio 8 > 5)
+    Joystick --> [*]: RB released → zero + 0.5 s timeout
     note right of Navigation
         Default: collision_monitor → input/navi (prio 5)
     end note
@@ -87,10 +87,12 @@ stateDiagram-v2
     end note
 ```
 
-The joystick (priority 8) preempts navigation (priority 5) the instant a stick moves; on release
-the teleop goes silent and twist_mux times the joy input out after 1 s, handing control back to
-navigation. Configured-but-unused inputs (safety 10, teleop 8, switch 6) would slot into this
-ordering if a publisher appeared.
+The joystick (priority 8) preempts navigation (priority 5) when RB is held and
+cancels the active Nav2 goal. On release the teleop ramps to zero and stays at
+priority 8 until cancellation is confirmed, then goes silent and times out
+after 0.5 s. A new autonomous goal must be sent explicitly. Configured-but-unused
+inputs (safety 10, teleop 8, switch 6) would slot into this ordering if a
+publisher appeared.
 
 ## Joystick interlock (deadman)
 
@@ -103,7 +105,8 @@ stateDiagram-v2
     Stopping --> Idle: publish one zero, then silent
 ```
 
-The teleop publishes **only** while commanded, so an idle-but-connected controller never blocks
-autonomy. The single explicit zero on release ensures the robot stops promptly rather than coasting
-on a stale command; then silence lets the twist_mux timeout return control to navigation. See
+The teleop publishes **only** while commanded or while waiting for takeover
+cancellation, so an idle-but-connected controller never blocks autonomy. The
+explicit zero on release prevents coasting; silence begins only after the prior
+Nav2 goal cannot resume. See
 [Nodes → patrolbot_joy_teleop](../ros2/nodes.md#patrolbot_joy_teleop).

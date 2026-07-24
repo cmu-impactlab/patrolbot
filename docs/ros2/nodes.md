@@ -147,8 +147,9 @@ nothing to act on; navigation is unaffected.
 **Controls:** hold **RB** (button 5); left-stick Y drives and left-stick X turns.
 D-pad axes 7/6 are fallbacks; A/Y and X/B trim the speed limits.
 **Failure mode:** if `/joy` is stale for 0.4 s, or RB is released, the target is
-zeroed and the command ramps to a stop. One final zero is published before silence,
-then twist_mux times the joy input out and navigation resumes.
+zeroed and the command ramps to a stop. RB takeover cancels any active Nav2
+goal; priority-8 zero remains asserted until cancellation is confirmed, then
+one final zero is published before silence. The canceled goal does not resume.
 
 ### laser_static_tf
 

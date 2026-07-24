@@ -1,6 +1,6 @@
 ---
 title: Known Gaps
-description: Current open PatrolBot commissioning and platform work, updated 2026-07-22.
+description: Current open PatrolBot commissioning and platform work, updated 2026-07-23.
 ---
 
 # Known Gaps
@@ -8,11 +8,14 @@ description: Current open PatrolBot commissioning and platform work, updated 202
 The stationary SBC/Pi cutover and safe software remediation are deployed. The
 items below remain open because they require physical inspection, supervised
 actuation, a real hardware signal, or platform replacement. The authoritative
-finding-by-finding index is `PB-AUDIT-STATUS-SUMMARY.md` in the repository root.
+finding-by-finding index is
+`audits/2026-07-pb-audit/PB-AUDIT-STATUS-SUMMARY.md`.
 
 ## Physical safety commissioning
 
-- Validate both hardware E-stops and any required physical PWR ON recovery.
+- Validate the single hardware E-stop's physical motor-power cutoff with motors
+  enabled. Its button signal, priority-10 hold, and required physical PWR ON
+  recovery are already stationary-validated.
 - Attach and stationary-test the joystick receiver, centered sticks, deadman,
   timeouts, priority, and zero output before allowing manual motion.
 - Map every bumper segment and verify firmware BumpStall before enabling the

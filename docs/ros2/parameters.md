@@ -126,12 +126,14 @@ a 0.25 s timeout. `/input/docking` intentionally has no publisher.
 |---|---|---|---|---|
 | safety_controller | `input/safety_controller` | 10 | 0.2 s | **yes** (`patrolbot_safety_watchdog.py`) |
 | teleop | `input/teleop` | 8 | 1.0 s | no publisher |
-| **joy** | `input/joy` | 8 | 1.0 s | **yes** (`p3dxJoyTeleop`) |
+| **joy** | `input/joy` | 8 | 0.5 s | **yes** (`p3dxJoyTeleop`) |
 | switch | `input/switch` | 6 | 1.0 s | no publisher |
 | **navigation** | `input/navi` | 5 | 1.0 s | **yes** (`collision_monitor`) |
 
-Higher priority wins; the joystick (8) outranks navigation (5). The 1.0 s joy timeout is what lets
-navigation resume after the operator releases the sticks.
+Higher priority wins; the joystick (8) outranks navigation (5). RB cancels the
+active Nav2 goal, and the 0.5 s timeout releases the manual mux input only after
+the zero ramp and cancellation confirmation. Navigation never resumes that
+canceled goal automatically.
 
 ## Final velocity smoother (`smoother.yaml`)
 

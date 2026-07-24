@@ -103,10 +103,24 @@ def generate_launch_description():
         # Navigation after a short delay so it doesn't slow localization startup.
         TimerAction(period=20.0, actions=[navigation]),
 
-        Node(package='joy', executable='joy_node', name='joy_node',
-             parameters=[{'use_sim_time': False}], respawn=True, respawn_delay=2.0),
+        Node(
+            package='joy',
+            executable='joy_node',
+            name='joy_node',
+            parameters=[{
+                'use_sim_time': False,
+                'device_id': 0,
+                'deadzone': 0.05,
+                'autorepeat_rate': 20.0,
+                'sticky_buttons': False,
+                'coalesce_interval_ms': 1,
+            }],
+            respawn=True,
+            respawn_delay=2.0,
+        ),
         # Joystick teleop feeds twist_mux's 'input/joy' (priority 8 > nav's 5),
-        # so moving the sticks overrides navigation; releasing them lets nav resume.
+        # so RB immediately overrides and cancels navigation. Releasing RB ramps
+        # to zero and never resumes the canceled goal automatically.
         # respawn so a teleop crash self-heals; its own joy-loss watchdog drops the
         # deadman if joy_node dies, so a crash can't leave the robot driving.
         Node(package='patrolbot_navigation', executable='patrolbot_joy_teleop.py',

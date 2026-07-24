@@ -351,18 +351,23 @@ patrolbot_safety_watchdog:
 
 patrolbot_dock_manager:
   ros__parameters:
-    # These defaults intentionally make autonomous undock unreachable. Set the
-    # pose only after controlled dock-pose measurement and localization review.
-    dock_pose_configured: false
+    # Measured in the main charger after operator localization on 2026-07-23.
+    # The guarded initializer republishes this pose only while dock evidence
+    # proves the stationary robot is charging with its motors disabled.
+    dock_pose_configured: true
     dock_id: "main_charger"
-    dock_pose_x: 0.0
-    dock_pose_y: 0.0
-    dock_pose_yaw: 0.0
+    dock_pose_x: 99.28925458355519
+    dock_pose_y: 126.33778290362004
+    dock_pose_yaw: -1.578938606346
     dock_position_tolerance: 0.25
     dock_yaw_tolerance: 0.35
     max_position_variance: 0.25
     max_yaw_variance: 0.25
-    allow_front_bumper_at_dock: false
+    # The PatrolBot manual specifies docking until a front bumper triggers.
+    # Physical mapping on 2026-07-23 confirmed the dock holds the two center
+    # front panels active. Straight reverse may move away from that contact;
+    # rear contact still aborts, and completion requires every panel clear.
+    allow_front_bumper_at_dock: true
     sensor_timeout: 0.5
     precheck_timeout: 5.0
     # Binding amendment A-1: physical PWR ON and explicit software-enable

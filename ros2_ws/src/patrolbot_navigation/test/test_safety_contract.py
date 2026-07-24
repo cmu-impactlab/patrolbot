@@ -130,10 +130,27 @@ class SafetyContractTest(unittest.TestCase):
     def test_guarded_undock_defaults_remain_fail_closed(self):
         manager = self.params['patrolbot_dock_manager']['ros__parameters']
         self.assertIs(manager['dock_pose_configured'], False)
-        self.assertIs(manager['allow_front_bumper_at_dock'], False)
+        self.assertIs(manager['allow_front_bumper_at_dock'], True)
         self.assertEqual(manager['sensor_timeout'], 0.5)
         self.assertEqual(manager['operator_motor_window'], 10.0)
         self.assertEqual(manager['dock_pose_initialization_timeout'], 5.0)
+
+    def test_measured_bumper_masks_are_loaded_by_compose(self):
+        bridge = yaml.safe_load((
+            PACKAGE_ROOT.parent / 'patrolbot_bridge' / 'config' /
+            'bridge_params.yaml').read_text(encoding='utf-8'))[
+                'patrolbot_bridge']['ros__parameters']
+        self.assertIs(bridge['bumpers_mapped'], True)
+        self.assertEqual(bridge['front_bumper_mask'], 0x7e00)
+        self.assertEqual(bridge['rear_bumper_mask'], 0x007e)
+        compose = yaml.safe_load((
+            REPOSITORY_ROOT / 'docker' /
+            'docker-compose.yml').read_text(encoding='utf-8'))
+        bridge_command = compose['services']['bridge']['command']
+        self.assertIn('--params-file', bridge_command)
+        self.assertIn(
+            '/opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml',
+            bridge_command)
 
     def test_system_watchdog_enforces_power_and_hardware_state(self):
         watchdog = (
@@ -227,6 +244,43 @@ class SafetyContractTest(unittest.TestCase):
         status = STATUS_FILE.read_text(encoding='utf-8')
         self.assertIn('/dev/input/js0', status)
         self.assertIn('joystick receiver absent', status)
+
+    def test_joystick_takeover_cancels_navigation_and_fails_closed(self):
+        teleop = (
+            PACKAGE_ROOT / 'scripts' /
+            'patrolbot_joy_teleop.py').read_text(encoding='utf-8')
+        bringup = (
+            PACKAGE_ROOT / 'launch' /
+            'bringup.launch.py').read_text(encoding='utf-8')
+        mux = yaml.safe_load((
+            LAUNCH_PACKAGE_ROOT / 'param' / 'defaults' /
+            'mux.yaml').read_text(encoding='utf-8'))[
+                'cmd_vel_mux']['ros__parameters']
+
+        self.assertIn(
+            "'/navigate_to_pose/_action/cancel_goal'", teleop)
+        self.assertIn('CancelGoal.Request()', teleop)
+        self.assertIn('self.active or moving or self._takeover_pending', teleop)
+        self.assertIn("'device_id': 0", bringup)
+        self.assertIn("'autorepeat_rate': 20.0", bringup)
+        self.assertIn("'sticky_buttons': False", bringup)
+        self.assertEqual(mux['topics']['joy'], {
+            'topic': 'input/joy', 'timeout': 0.5, 'priority': 8})
+
+    def test_nav_goal_capture_is_bounded_and_read_only(self):
+        capture = (
+            PACKAGE_ROOT / 'scripts' /
+            'capture_nav_command_path.py').read_text(encoding='utf-8')
+        wrapper = (
+            REPOSITORY_ROOT / 'docker' /
+            'capture-nav-goal.sh').read_text(encoding='utf-8')
+        for forbidden in (
+                'create_publisher(', 'create_client(', 'ActionClient('):
+            self.assertNotIn(forbidden, capture)
+        self.assertIn("'--duration'", capture)
+        self.assertIn('arguments.duration <= 120.0', capture)
+        self.assertIn('timeout --signal=INT --kill-after=2', wrapper)
+        self.assertIn("grep -q '[r]os2 topic hz'", wrapper)
 
     def test_operator_pose_initialization_and_readiness_are_typed(self):
         manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')

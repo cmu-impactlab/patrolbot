@@ -1,9 +1,12 @@
 patrolbot_bridge:
   ros__parameters:
-    # Fail closed until controlled testing maps every physical bumper segment.
-    bumpers_mapped: false
-    front_bumper_mask: 0
-    rear_bumper_mask: 0
+    # Physically mapped 2026-07-23, charging and motor-disabled. The operator
+    # pressed all six front panels left-to-right, then all six rear panels
+    # left-to-right. Front uses SIP stall bits 9-14; rear uses bits 1-6.
+    # The dock normally holds the two center-front panels (0x1800) active.
+    bumpers_mapped: true
+    front_bumper_mask: 32256  # 0x7e00
+    rear_bumper_mask: 126     # 0x007e
     # Candidate commissioning topic only. It is never an active safety source
     # until physical self-occlusion testing explicitly approves it.
     publish_unfiltered_scan_candidate: false

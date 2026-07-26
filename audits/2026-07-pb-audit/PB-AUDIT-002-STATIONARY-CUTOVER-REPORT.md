@@ -370,6 +370,13 @@ readiness script returned `OVERALL=ready`; the hardware server was active with
 one TCP 7272 client, and `/cmd_vel` retained one publisher
 (`teleop_velocity_smoother`) and one subscriber (`patrolbot_bridge`).
 
+After physical acceptance, the implementation was committed as
+`67bbb361163ec6a0db8a4070089c6a5a594b5771`. The source-identical production
+image is now `patrolbot:git-67bbb361`, manifest
+`sha256:bad7002e3097d3291d9d51d9557756eba2ba48f14a07436c613b84ff5585afcf`.
+All image tests passed again and the final no-motion deployment returned
+`OVERALL=ready`.
+
 After the operator physically re-seated the robot, the pre-motion gate showed
 raw charge state `3`, motors disabled, E-stop clear, zero faults, fresh/clear
 rear sonar, valid bumpers, stationary odometry, and no active action. The

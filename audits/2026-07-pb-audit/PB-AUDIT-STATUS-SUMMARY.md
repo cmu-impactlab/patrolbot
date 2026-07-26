@@ -260,6 +260,12 @@ and image manifest
 `sha256:6f01f7a385760069a046c6968c52966a4a047365924c90cd241c5e66c7262622`.
 The deployed SBC executable is
 `97655f948a57c1b71d147272639ae5460feace7aa5b9a31b25c0c2f3f4472c7e`.
+After physical acceptance, the implementation was committed as
+`67bbb361163ec6a0db8a4070089c6a5a594b5771` and the source-identical image
+`patrolbot:git-67bbb361`, manifest
+`sha256:bad7002e3097d3291d9d51d9557756eba2ba48f14a07436c613b84ff5585afcf`,
+was tested and deployed to bridge/navigation. The final no-motion readiness
+gate returned `OVERALL=ready`.
 
 Goal `bb6701246df5443882920929dfd22b6b` passed the live preconditions with one
 TCP hardware client, one final `/cmd_vel` publisher, fresh and clear rear

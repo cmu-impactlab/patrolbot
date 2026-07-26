@@ -67,7 +67,7 @@ protocol commissioning and the 2026-07-22 commit-provenance cutover:
 
 | Item | Current result |
 |---|---|
-| Production image | Bridge and navigation use `patrolbot:undock-complete-20260726t1242z`; image manifest `sha256:6f01f7a385760069a046c6968c52966a4a047365924c90cd241c5e66c7262622`; revision `ca66321-undock-complete` |
+| Production image | Bridge and navigation use `patrolbot:git-67bbb361`; image manifest `sha256:bad7002e3097d3291d9d51d9557756eba2ba48f14a07436c613b84ff5585afcf`; revision `67bbb361163ec6a0db8a4070089c6a5a594b5771` |
 | Containers | bringup, bridge, and navigation healthy; zero restarts; bringup intentionally retains its previously accepted image because this cutover changed only bridge/navigation |
 | Source provenance | Final image label, embedded source, and deployed source all equal SHA-256 `9d32c4ed6a444c7fe9c9a4caa331bd1b895070a5d6ebe8b0e3f6fe309817a8ad` |
 | DDS exposure | All three host-network containers use Jazzy `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`; remote DDS/RViz discovery is intentionally unavailable, while SSH management remains available |
@@ -107,6 +107,15 @@ publisher, and the unchanged hardware session. Raw µARCS charge state later
 returned to float state `3` away from bumper contact; the result and audit keep
 that controller behavior visible. It no longer interrupts the tightly scoped
 reverse or turn authorization.
+
+After the physical acceptance, commit
+`67bbb361163ec6a0db8a4070089c6a5a594b5771` captured the implementation and
+audit evidence. The source-identical runtime was rebuilt as
+`patrolbot:git-67bbb361`, manifest
+`sha256:bad7002e3097d3291d9d51d9557756eba2ba48f14a07436c613b84ff5585afcf`.
+The 96 focused tests, forced C++ protocol test, and two isolated integrations
+passed again. Bridge/navigation were recreated without motion and the final
+readiness gate returned `OVERALL=ready`.
 
 ### Supervised SBC stationary cutover — 2026-07-21
 

@@ -97,6 +97,13 @@ hardware client, and one final `/cmd_vel` publisher. Raw charge state later
 re-latched to float state `3` away from dock contact; that firmware/controller
 behavior remains reported but no longer interrupts the scoped departure.
 
+The implementation and audit were committed as
+`67bbb361163ec6a0db8a4070089c6a5a594b5771`. The source-identical production
+image `patrolbot:git-67bbb361`, manifest
+`sha256:bad7002e3097d3291d9d51d9557756eba2ba48f14a07436c613b84ff5585afcf`,
+passed the same tests and is deployed to bridge/navigation. The final
+no-motion readiness gate returned `OVERALL=ready`.
+
 PB-AUDIT-002 is closed for its original inability-to-leave-the-dock finding.
 Automatic docking stays disabled; joystick/deadman motion, enabled-motor E-stop
 cutoff, and the remaining physical sensor/calibration work remain open.

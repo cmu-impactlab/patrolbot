@@ -1644,6 +1644,15 @@ not restarted. `docker/status.sh` ended `OVERALL=ready`, both replaced
 containers had zero restarts, and the SBC retained exactly one TCP 7272
 client.
 
+After the successful physical run, the complete change set was committed as
+`67bbb361163ec6a0db8a4070089c6a5a594b5771` and rebuilt from the same runtime
+source digest as `patrolbot:git-67bbb361`, manifest
+`sha256:bad7002e3097d3291d9d51d9557756eba2ba48f14a07436c613b84ff5585afcf`.
+The same 96 focused tests, forced C++ test, and two integrations passed in the
+commit-labelled image. It superseded the motion-test tag on bridge/navigation;
+the no-motion deployment again finished `OVERALL=ready` with zero restarts.
+The preceding motion-test image remains available for rollback and evidence.
+
 Immediately before motion, the operator was notified of the exact limits:
 0.50 m reverse at 0.08 m/s, followed by a counterclockwise 180-degree Spin
 capped at 0.70 rad/s. Live checks showed charge `3`, motors disabled, E-stop

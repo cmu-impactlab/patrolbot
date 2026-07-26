@@ -67,22 +67,46 @@ protocol commissioning and the 2026-07-22 commit-provenance cutover:
 
 | Item | Current result |
 |---|---|
-| Production image | `patrolbot:git-b98090a7796d`; image ID `sha256:8952b2094246f35845ef5070ba76897e6e936708aaeb6ded1ae378c148978b48`; revision `b98090a7796d9418cb9df92903ff56b439323114` |
-| Containers | bringup, bridge, and navigation healthy; zero restarts |
-| Source provenance | Image label, embedded digest, and deployed source all equal SHA-256 `a15131fc354c272c9ba4abdab2414157051943f9c2959e408e08aa84c1beffcd` |
+| Production image | Bridge and navigation use `patrolbot:undock-complete-20260726t1242z`; image manifest `sha256:6f01f7a385760069a046c6968c52966a4a047365924c90cd241c5e66c7262622`; revision `ca66321-undock-complete` |
+| Containers | bringup, bridge, and navigation healthy; zero restarts; bringup intentionally retains its previously accepted image because this cutover changed only bridge/navigation |
+| Source provenance | Final image label, embedded source, and deployed source all equal SHA-256 `9d32c4ed6a444c7fe9c9a4caa331bd1b895070a5d6ebe8b0e3f6fe309817a8ad` |
 | DDS exposure | All three host-network containers use Jazzy `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`; remote DDS/RViz discovery is intentionally unavailable, while SSH management remains available |
 | PB-AUDIT-001 containment | `docking_server` absent; generic docking actions absent |
 | Upstream arbitration | controller → `/input/nav_controller`; behavior server → `/input/nav_behavior`; reserved docking input `/input/docking` has zero publishers; `nav_command_mux` alone publishes `/cmd_vel_nav` |
 | Final command endpoint | `/cmd_vel` publisher `teleop_velocity_smoother`; subscriber `patrolbot_bridge` |
-| Guarded interfaces | Charge release commissioned with one UUID plus replay; motor enable correctly rejected while charging; dock-pose initialization and custom undock remained uncalled |
+| Guarded interfaces | Release, explicit enable, dock-pose initialization, 0.50 m guarded BackUp, capped 180-degree Spin, final release, and motor disable completed in one successful `/patrolbot/undock` action |
 | Final manual smoother | Live `max_velocity=[0.35, 0.0, 0.7]`; declared Jazzy parameters replace ignored legacy keys |
 | Priority-10 policy | Scan, odometry, battery freshness/23.0 V minimum, typed hardware state, E-stop, and FAULTFLAGS enforced; bumper enforcement installed but deliberately disabled until physical mapping |
 | Physical-value scaffolds | URG candidate launch, physical-calibration schema, footprint/main-laser/near-field gates installed but all remain uncommissioned and absent from the active launch |
-| Manual control | F710/joystick receiver still absent; `/joy` cannot be stationary-validated |
-| SBC-dependent readiness | Single hardware session active; scan, odom, sonar, battery, and base state fresh; the recreated bridge is on its first process-local session generation `1`; motors disabled; charge state `3`; faults zero; odometry zero |
+| Manual control | F710 receiver and centered `/joy` path are present; nonzero/deadman motion acceptance remains PB-AUDIT-015 work |
+| SBC-dependent readiness | Single hardware session active; scan, odom, sonar, battery, and base state fresh; bridge session generation `1`; motors disabled; faults zero; odometry zero; deployed SBC SHA-256 `97655f948a57c1b71d147272639ae5460feace7aa5b9a31b25c0c2f3f4472c7e` |
 | Dashboard bridge | Separate container restored after cutover; command mode is enabled and exposes goal/pose operations but no `/cmd_vel` path. No navigation status or queued command appeared during acceptance. |
 | Operational documentation | Reconciled on 2026-07-22 with the deployed protocol, motor policy, command path, loopback DDS boundary, fail-closed docking/localization gates, and verified rollback workflow; strict MkDocs build passed. |
-| Overall status | Stationary cutover ready; localization, bumpers, dock pose, joystick/E-stop, and physical-motion commissioning remain fail-closed, so autonomous operation remains prohibited |
+| Overall status | PB-AUDIT-002 production undock is commissioned. Automatic docking, joystick/deadman motion, enabled-motor E-stop cutoff, and the remaining physical sensor/calibration findings remain fail-closed. |
+
+### Successful production undock — 2026-07-26
+
+The final operator-authorized action, goal
+`bb6701246df5443882920929dfd22b6b`, started from verified charging state `3`,
+motors disabled, E-stop clear, zero faults, fresh/clear rear sonar, valid
+bumper state, stationary odometry, one TCP 7272 client, one final `/cmd_vel`
+publisher, and a freshly converged `main_charger` pose.
+
+It released charging, explicitly enabled motors, reversed
+`0.5031948089599609 m` at the requested `0.08 m/s`, completed the existing
+Nav2 Spin goal for 180 degrees with `max_rotational_vel=0.70 rad/s`, stopped,
+disabled the motors, and finalized the charger release. The first final-release
+request correctly refused residual ARIA rotation; after one second of stable
+zero odometry the manager retried exactly once and obtained stable state `0`.
+The action returned `success=true`, code `0`, state `COMPLETE`,
+`manual_recovery_required=false`, and ROS action status `SUCCEEDED`.
+
+Post-run telemetry proved zero odometry twist, motors disabled, no E-stop,
+zero faults, clear front/rear bumpers, no active action, one `/cmd_vel`
+publisher, and the unchanged hardware session. Raw µARCS charge state later
+returned to float state `3` away from bumper contact; the result and audit keep
+that controller behavior visible. It no longer interrupts the tightly scoped
+reverse or turn authorization.
 
 ### Supervised SBC stationary cutover — 2026-07-21
 
@@ -218,20 +242,20 @@ not substitute for SBC or physical commissioning.
 | ID | Current disposition | What changed or remains | Can be completed with the Raspberry Pi 5 only? |
 |---|---|---|---|
 | PB-AUDIT-001 | **Contained and live-verified on Pi** | Generic docking server removed from both launch variants and lifecycle management. An upstream mux reserves `/input/docking`; the final `/cmd_vel` has one controlled publisher. | **Yes for active-stack containment, completed.** Future automated docking still needs the physical campaign before its producer may be enabled. |
-| PB-AUDIT-002 | **Open; stationary cutover, release, and bumper mapping commissioned** | Typed services and corrected SBC protocol are deployed. Charging motor-enable rejection, stable-zero charge release, UUID replay, automatic recharge, all 12 bumper masks, disabled motors, and zero motion passed. | **No.** Closure still requires dock localization, successful motor enable, guarded reverse, full undock, and re-docking regressions. |
-| PB-AUDIT-003 | **Pi implementation complete; live motion regression pending** | Custom recovery BTs are selected; a 0.10 m, 0.05 m/s BackUp precedes Spin. RPP reversing remains disabled. | **Software yes, completed.** Activation and physical behavior cannot be closed without fresh hardware telemetry and controlled testing. |
-| PB-AUDIT-004 | **Pi integration complete; sensor validation pending** | Collision Monitor and the dock manager consume `/sonar`; rear stop uses `min_points: 1`, a 0.5 s timeout, and stale/missing data blocks reverse. Fresh empty clouds remain valid clear observations. | **Software yes, completed.** Actual geometry, dropout, obstacle stop, and bumper fallback require the SBC and robot. |
+| PB-AUDIT-002 | **Closed; production undock live-verified** | Typed release/enable services, all 12 bumper masks, measured charger pose, fresh AMCL/sonar gates, a 0.503 m guarded BackUp, capped 180-degree Spin, final charge release, and motor disable completed in one successful action. | **Completed with Pi, SBC, and supervised physical acceptance.** Automatic docking remains disabled and is a separate future campaign. |
+| PB-AUDIT-003 | **Pi implementation complete; shared BackUp live-verified** | Custom recovery BTs are selected; the same Nav2 BackUp path completed a live 0.100125 m, 0.05 m/s reverse. RPP reversing remains disabled. | **Software yes, completed.** The complete BackUp-before-Spin recovery scenario still needs a separate regression. |
+| PB-AUDIT-004 | **Pi integration complete; clear-path reverse verified** | Collision Monitor and the dock manager consume `/sonar`; rear sonar stayed fresh and clear throughout the live reverse. Rear stop uses `min_points: 1`, a 0.5 s timeout, and stale/missing data blocks reverse. | **Software yes, completed.** Obstacle, dropout, geometry, and bumper-fallback stop tests remain. |
 | PB-AUDIT-005 | **Pi scaffold complete; physical finding open** | Official Jazzy `urg_node` is in the image and an opt-in candidate launch exists, but it requires an identified stable device and measured transform. It is not in active bringup. Low forward obstacles remain physically invisible to the main scan; URG presence/cabling remains unknown. | **Pi preparation completed.** Presence, mounting, power, interface, transform, coverage, and stopping tests are physical prerequisites. |
 | PB-AUDIT-006 | **All 12 panels mapped; motion cutoff validation remains** | Physical presses established front mask `0x7e00` and rear mask `0x007e`; the bridge now publishes valid typed contact state. The dock-held center-front baseline is accepted only for straight guarded reverse, while rear contact remains an abort. General priority-10 bumper enforcement remains disabled. | **Partly.** Mapping and typed undock gating are complete; firmware BumpStall and enabled-motion cutoff behavior still require supervised physical validation. |
-| PB-AUDIT-007 | **Pi mechanism implemented; dock pose uncommissioned** | Forced origin reset removed. Operator-authorized `/patrolbot/initialize_dock_pose` waits for AMCL convergence. `dock_pose_configured=false` keeps undock blocked. | **Partly.** The service and tests are complete; a surveyed pose and live scan/odom convergence require the robot and SBC. |
+| PB-AUDIT-007 | **Main charger pose commissioned; broader regression pending** | Forced origin reset is removed. The measured `main_charger` pose is configured, and operator-authorized `/patrolbot/initialize_dock_pose` repeatedly produced healthy AMCL convergence. The manager forces standard AMCL no-motion updates while a guarded departure is active. | **Partly.** Dock recovery is live-verified; restart/relocation away from the charger and general navigation-goal localization gating still require regression work. |
 | PB-AUDIT-008 | **Open** | Footprint still reflects the ARIA body rather than a verified bumper/attachment envelope. | **Configuration can be changed on Pi, but must not be guessed.** Measure first, then update both costmaps and run doorway/near-wall tests. |
-| PB-AUDIT-009 | **Live defect corrected; successful-enable physical test pending** | The deployed server never enables motors at startup or from DRIVE. The explicit service rejected enable while charging and motors stayed disabled through release/recharge. | **Software and charging-rejection path completed.** Successful enable and any PWR ON interaction remain coupled to the later supervised motion phase. |
+| PB-AUDIT-009 | **Explicit enable commissioned; enabled E-stop cutoff pending** | The deployed server never enables motors at startup or from DRIVE. The typed service rejected ordinary enable while charging, then succeeded only after a UUID-correlated release inside an operator-authorized undock. Enabled feedback was observed before motion, and recharge/expiry returned motors to disabled. | **Core motor-enable defect completed.** Enabled-motor physical E-stop cutoff remains a separate supervised acceptance item. |
 | PB-AUDIT-010 | **Software clock fix reboot-verified; RTC hardware pending** | The system clock was stepped to current time and `makestep 1.0 -1` is active. A real power cycle again began from the bad 2008 RTC, after which Chrony automatically stepped to current 2026 time and synchronized. | **Partly.** RTC-battery replacement and a post-replacement cold-boot validation require physical maintenance. |
 | PB-AUDIT-011 | **Pi interface corrected; release/recharge transition verified** | The PatrolBot Jazzy plugin uses typed raw charge state plus fresh `/battery`; live release reached raw state `0` and contact charging resumed at state `3`. Generic docking stays disabled. | **Software and stationary transition completed.** Full docking-server enablement still requires the physical dock campaign. |
 | PB-AUDIT-012 | **Pi portion implemented; SBC shutdown path open** | Documented FAULTFLAGS are decoded into named bridge diagnostics. The priority-10 watchdog now blocks motion on stale battery, voltage below 23.0 V, faults, invalid hardware state, or E-stop; 24.0 V is reported as the recharge warning threshold. | **Pi portion completed.** The serial-RI/genpowerd graceful SBC shutdown path still requires SBC/hardware work. |
 | PB-AUDIT-013 | **Closed after live reboot acceptance** | The compatible journal-only unit auto-started after a real power cycle. The bounded persistent journal retained the prior clean shutdown and current boot, including laser/server startup and the sole Pi reconnection. | **Completed and live-verified.** |
 | PB-AUDIT-014 | **Closed on Pi** | Ignored Kobuki-era keys were replaced with declared Jazzy `nav2_velocity_smoother` parameters. Static contracts and live readback verify the final cap `[0.35, 0.0, 0.7]`, 0.5 s timeout, and explicit accel/decel limits. | **Completed and deployed.** Physical manual-control response remains part of PB-AUDIT-015, not this configuration defect. |
-| PB-AUDIT-015 | **Software corrected; receiver unavailable** | F710 defaults and a deadman takeover path are deployed. RB cancels active Nav2 goals, drives through `/input/joy`, and cannot resume the canceled goal on release. The receiver is absent, so `/joy` cannot be physically validated. | **Blocked on receiver availability.** Attach it and perform stationary deadman, timeout, priority, and zero-output checks before motion. |
+| PB-AUDIT-015 | **Receiver and neutral path verified; motion acceptance pending** | F710 defaults and a deadman takeover path are deployed. The XInput receiver is present, `joy_node` publishes centered axes/all-zero buttons, and `patrolbot_joy_teleop` is the sole `/joy` consumer. RB takeover, timeout, and nonzero command behavior remain physically untested. | **Partly.** The device/data path is proven; supervised deadman and motion acceptance remain. |
 | PB-AUDIT-016 | **Cause resolved; prevention remains under PB-AUDIT-012** | Operator confirmed the earlier outages were forced shutdowns before the main PC/SBC completed its shutdown sequence. | **Root cause closed by operator evidence.** Prevention requires the documented orderly shutdown procedure now and a real automatic shutdown signal path later. |
 | PB-AUDIT-017 | **External DDS exposure contained on Pi** | Jazzy discovery is now `LOCALHOST` in every container. The host-network containers still communicate via loopback, but LAN/Wi-Fi DDS participants cannot discover the command graph. SSH management was preserved; remote DDS/RViz is intentionally unavailable. | **Current exposure addressed.** Any future remote visualization must use a separately reviewed secure transport or coordinated SROS2 design, never by silently restoring `SUBNET` discovery. |
 | PB-AUDIT-018 | **Intentional filter retained; candidate scaffold uncommissioned** | `SCAN_RANGE_MIN=0.25` remains pinned. Direction-aware velocity polygons preserve front protection and add sonar protection for reverse. A separately named raw-scan candidate publisher exists but defaults false and is not an active topic or safety source. | **Safe Pi scaffold completed.** Self-occlusion and physical stop tests are mandatory before that candidate can be enabled or connected. |
@@ -879,9 +903,20 @@ Cited manual pages; bridge source; live diagnostics.
 
 ### PB-AUDIT-007: Localization resets to map origin on every restart; navigation not gated on localization validity
 
-**Severity:** High  **Confidence:** High  **Category:** localization  **Affected components:** AMCL, bt_navigator  **Current status:** Confirmed (observed live)
+**Severity:** High  **Confidence:** High  **Category:** localization  **Affected components:** AMCL, bt_navigator  **Current status:** Main charger recovery commissioned; general navigation gate/regression remains
 
 Expected: after restart, the robot should recover a valid pose (persisted pose, dock-pose initialization, or operator-forced re-localization) before any navigation. Observed: `set_initial_pose: true` + `always_reset_initial_pose: true` + `initial_pose [0,0,0]` (`nav2_params.yaml:39-41`); live map→base_link = identity while physically docked elsewhere; nothing refuses goals while unlocalized. Evidence: config + live `tf2_echo`/`/amcl_pose`. Impact: any goal now would plan from a false pose (collision monitor still guards forward laser-visible obstacles, but global paths and rotate-in-place would be wrong; docked departure planning impossible). Likely cause: the reset was chosen so restarts have *deterministic* rather than stale-restored state (defensible), but the deterministic state is wrong and unguarded. Approach/fix (unexecuted): set the initial pose to the **dock pose** (robot restarts overwhelmingly happen docked) or disable `always_reset_initial_pose` and use AMCL's saved-pose behavior; longer-term, gate mission start on a localization-health check (covariance + scan-match sanity) in the dock-exit sequence. Verify: restart stack docked → `/amcl_pose` ≈ dock pose, covariance sane; particle cloud converged after first motion. Mistakes to avoid: initializing to the dock pose while the robot is actually elsewhere (document the assumption; provide the operator re-localization runbook); confusing map frame origin with dock pose; editing repo copy but not restarting the container. Rollback: restore previous three parameter lines. Sources: params lines cited; live TF observation; AMCL docs (§22).
+
+2026-07-26 live update: automatic origin claims remain disabled. The operator
+measured the seated robot at `(99.28925458355519, 126.33778290362004,
+-1.578938606346 rad)`, commissioned that pose as `main_charger`, and repeatedly
+received healthy convergence from `/patrolbot/initialize_dock_pose`. A first
+guarded goal revealed that normal stationary AMCL silence made the 0.5 s age
+gate unreachable. The deployed manager now calls the existing
+`/request_nomotion_update` service during its safety phases; a post-fix goal
+kept localization fresh, passed precheck, and reached charge release. General
+navigation-goal gating and relocation/restart recovery away from the charger
+remain outside this dock-specific acceptance.
 
 ---
 

@@ -166,6 +166,54 @@ ParsedCommand parseCommand(const std::string& line) {
   return command;
 }
 
+DriveDisposition classifyDrive(
+    double linear, double angular, bool control_pending, int charge_state,
+    bool motors_enabled, bool estop_pressed, unsigned int fault_flags,
+    bool dock_departure_authorized, bool dock_turn_authorized) {
+  const bool zero =
+      std::fabs(linear) < 1e-9 && std::fabs(angular) < 1e-9;
+  if (zero) return DRIVE_ALLOWED_ZERO;
+
+  const bool bounded =
+      std::fabs(linear) <= 0.30 && std::fabs(angular) <= 1.20;
+  if (!bounded || control_pending || !motors_enabled || estop_pressed ||
+      fault_flags != 0) {
+    return DRIVE_REJECTED;
+  }
+  if (charge_state == 0) return DRIVE_ALLOWED_NORMAL;
+
+  // A recently released, explicitly motor-enabled robot may see charging
+  // reassert while its contacts are still physically on the dock. Admit only
+  // the straight, bounded reverse needed to clear those contacts. The caller
+  // owns the short authorization timer and revokes it on any unsafe transition.
+  if (dock_departure_authorized &&
+      linear < -1e-9 && linear >= -0.100001 &&
+      std::fabs(angular) < 1e-9) {
+    return DRIVE_ALLOWED_DOCK_DEPARTURE;
+  }
+
+  // After the robot has cleared all commissioned dock contacts, the manager
+  // performs a second explicit release-and-enable pair before its 180-degree
+  // Nav2 Spin. Some µARCS bases reassert charge state 3 even away from the
+  // contacts. Admit only a bounded in-place turn during that separately scoped
+  // authorization; translation and arcs remain rejected.
+  if (dock_turn_authorized &&
+      std::fabs(linear) < 1e-9 &&
+      std::fabs(angular) > 1e-9 &&
+      std::fabs(angular) <= 0.700001) {
+    return DRIVE_ALLOWED_DOCK_TURN;
+  }
+  return DRIVE_REJECTED;
+}
+
+bool motorEnableChargeAllowed(int charge_state, bool recent_release) {
+  if (charge_state == 0) return true;
+  // The PatrolBot can reassert charge state 3 immediately after a confirmed
+  // CHARGE 0 even without a front bumper bit. A same-session recent release is
+  // the authorization; the server reissues CHARGE 0 atomically with enable.
+  return charge_state > 0 && recent_release;
+}
+
 std::string commandName(CommandType command) {
   switch (command) {
     case COMMAND_DRIVE: return "DRIVE";

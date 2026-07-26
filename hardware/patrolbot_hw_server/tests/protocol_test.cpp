@@ -28,6 +28,57 @@ int main() {
   assert(patrolbot::parseCommand("MOTOR_ENABLE:not-a-uuid").type ==
          patrolbot::COMMAND_INVALID);
 
+  assert(patrolbot::classifyDrive(
+             0.0, 0.0, true, 3, false, true, 99, false, false) ==
+         patrolbot::DRIVE_ALLOWED_ZERO);
+  assert(patrolbot::classifyDrive(
+             -0.05, 0.0, false, 0, true, false, 0, false, false) ==
+         patrolbot::DRIVE_ALLOWED_NORMAL);
+  assert(patrolbot::classifyDrive(
+             -0.10, 0.0, false, 3, true, false, 0, true, false) ==
+         patrolbot::DRIVE_ALLOWED_DOCK_DEPARTURE);
+  assert(patrolbot::classifyDrive(
+             -0.100002, 0.0, false, 3, true, false, 0, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             0.01, 0.0, false, 3, true, false, 0, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             -0.01, 0.01, false, 3, true, false, 0, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             -0.01, 0.0, true, 3, true, false, 0, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             -0.01, 0.0, false, 3, true, true, 0, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             -0.01, 0.0, false, 3, true, false, 1, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             -0.01, 0.0, false, 3, true, false, 0, false, false) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             0.0, 0.70, false, 3, true, false, 0, true, true) ==
+         patrolbot::DRIVE_ALLOWED_DOCK_TURN);
+  assert(patrolbot::classifyDrive(
+             0.0, -0.70, false, 3, true, false, 0, true, true) ==
+         patrolbot::DRIVE_ALLOWED_DOCK_TURN);
+  assert(patrolbot::classifyDrive(
+             0.0, 0.700002, false, 3, true, false, 0, true, true) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             0.001, 0.20, false, 3, true, false, 0, true, true) ==
+         patrolbot::DRIVE_REJECTED);
+  assert(patrolbot::classifyDrive(
+             0.0, 0.20, false, 3, true, false, 0, true, false) ==
+         patrolbot::DRIVE_REJECTED);
+
+  assert(patrolbot::motorEnableChargeAllowed(0, false));
+  assert(patrolbot::motorEnableChargeAllowed(3, true));
+  assert(!patrolbot::motorEnableChargeAllowed(3, false));
+  assert(!patrolbot::motorEnableChargeAllowed(-1, true));
+
   patrolbot::LineBuffer buffer;
   std::vector<std::string> lines;
   assert(buffer.append("CHARGE_RE", 9, &lines));

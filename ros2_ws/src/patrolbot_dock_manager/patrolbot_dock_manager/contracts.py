@@ -19,11 +19,15 @@ HAPPY_PATH = (
     'REQUEST_DOCK_RELEASE',
     'WAIT_FOR_CHARGE_RELEASE',
     'VERIFY_ESTOP_AND_MOTOR',
-    'VERIFY_REAR_SONAR',
     'VERIFY_LOCALIZATION',
+    'VERIFY_REAR_SONAR',
     'VERIFY_COMMAND_PATH',
     'GUARDED_REVERSE',
+    'CLEAR_CHARGE_LATCH',
     'CLEAR_OF_DOCK',
+    'ENABLE_TURN',
+    'TURN_AWAY_FROM_DOCK',
+    'FINALIZE_CHARGE_LATCH',
     'STOPPED',
     'COMPLETE',
 )
@@ -122,7 +126,8 @@ def precheck_failures(
 
 def reverse_failures(
         state: SafetySnapshot, expected_session: int,
-        allow_front_bumper_while_reversing: bool = False) -> List[str]:
+        allow_front_bumper_while_reversing: bool = False,
+        allow_transient_dock_charge: bool = False) -> List[str]:
     """Validate every continuously monitored reverse-motion gate.
 
     A physically commissioned dock may hold a front panel while the robot
@@ -134,7 +139,8 @@ def reverse_failures(
         failures.append('hardware link/state invalid')
     if state.session_generation != expected_session:
         failures.append('hardware session changed')
-    if not state.charge_state_valid or state.charge_state != 0:
+    if (not state.charge_state_valid or
+            (state.charge_state != 0 and not allow_transient_dock_charge)):
         failures.append('charge release not confirmed')
     if state.estop_pressed:
         failures.append('E-stop asserted')

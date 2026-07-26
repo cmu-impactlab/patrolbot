@@ -1468,3 +1468,221 @@ The signal, telemetry, software hold, and physical reset sequence are now
 commissioned. Motor-power removal with enabled motors remains deliberately
 unclaimed and must be observed during the later supervised motor-enable test.
 No ROS or hardware control command was sent.
+
+## 22. Main-charger localization and guarded-undock commissioning — 2026-07-26
+
+The operator localized the seated robot and supplied the charger pose
+`x=99.28925458355519`, `y=126.33778290362004`,
+`yaw=-1.578938606346`. The value is now stored as `main_charger`, guarded by
+the existing charging, motor-disabled, stationary, hardware-health, and
+navigation-idle checks. `/patrolbot/initialize_dock_pose` confirmed AMCL
+convergence with position and yaw covariance below the configured limits.
+
+The first 0.10 m validation goal was accepted but remained in PRECHECK. AMCL
+had emitted a healthy pose after initialization and then correctly remained
+silent while stationary; the manager's 0.5 s freshness rule therefore
+invalidated the estimate. The action timed out before charge release and
+reported `distance_traveled=0.0`.
+
+The dock manager was corrected to use AMCL's existing
+`/request_nomotion_update` service at a bounded rate during precheck, the
+operator motor window, the final localization gate, and guarded reverse. This
+keeps the existing covariance and 0.5 s age checks effective without a new ROS
+node or velocity publisher. `std_srvs` is now an explicit package dependency.
+The navigation image
+`patrolbot:amcl-refresh-20260726t-lab` embeds source digest
+`f2722d806d8cf3a0fde89ad356379496e4640fef04e9d77cb861936cefde045b`;
+82 focused dock/navigation contract tests passed. The preceding
+`patrolbot:dock-pose-20260723t1550z`,
+`patrolbot:undock-bumper-20260723t1513z`, and earlier accepted images remain
+on the Pi as rollback targets.
+
+The post-fix validation goal proved the new path:
+
+- localization age repeatedly refreshed below 0.5 s and PRECHECK stabilized;
+- charge release completed successfully and raw state changed from `3` to `0`;
+- motors remained disabled and E-stop remained clear;
+- the 10-second motor window expired without an enable;
+- the manager aborted before sending the Nav2 BackUp goal;
+- result code was `MOTOR_STATE_FAILED`, `distance_traveled=0.0`, and
+  `manual_recovery_required=true`.
+
+The operator restored charging using the manufacturer's supervised procedure:
+hold the dock's yellow manual-charge button for three seconds and verify its
+indicator remains lit. Subsequent live state was charge `2`, motors disabled,
+E-stop clear, zero faults, front dock contact only, zero odometry twist, one
+final `/cmd_vel` publisher, and a fresh successful dock-pose initialization.
+The next physical gate is an explicitly authorized retry that invokes the
+existing UUID-correlated `/patrolbot/motor_enable` service only after release,
+with the same server-enforced 0.10 m and 0.05 m/s validation bounds.
+
+## 23. Release/enable race correction and physical guarded reverse — 2026-07-26
+
+Repeated zero-motion attempts isolated the charger race rather than bypassing
+it. `CHARGE_RELEASE` reached charge state `0`, but physical contact could
+reassert charging before a separately invoked motor-enable client completed.
+The deployed correction keeps authority within one hardware session and one
+operator-authorized action:
+
+- the SBC records a recent successful release and commissioned front contact;
+- a matching motor-enable request reissues `CHARGE 0`, enables motors, and
+  arms only a short, straight-reverse departure authorization;
+- the Pi bridge forwards that exception once, in the same session, and clears
+  it on reconnect or use; and
+- the dock manager calls release and motor enable directly before its existing
+  localization, sonar, command-path, and Nav2 BackUp gates.
+
+The exception cannot enable from DRIVE, cannot permit forward or angular
+motion, and fails closed for E-stop, faults, stale state, a session change, or
+authorization expiry. A source audit found no `CHARGE 1` sender in the
+hardware server or ROS stack; the observed recharge is consistent with the
+manufacturer's electromagnet/contact behavior while the plates remain close.
+
+Verified rollback locations include:
+
+- SBC `/home/ros/patrolbot-backups/20260726T103500Z-post-release-enable-race`;
+- SBC `/home/ros/patrolbot-backups/20260726T100942Z-dock-departure-grace`;
+- Pi `/home/ubuntu/patrolbot-backups/20260726T104100Z-bridge-post-release-gate`;
+- Pi `/home/ubuntu/patrolbot-backups/20260726T110723Z-pre-instant-undock3`;
+- workstation `backups/20260726T103500Z-post-release-enable-race`; and
+- workstation `backups/20260726T104100Z-bridge-post-release-gate`.
+
+The live SBC binary SHA-256 is
+`f157d16925bff5f5b1fc17cf8329957bdd668e8f0f71412313ca79de63721cb8`.
+Navigation image `patrolbot:instant-undock-20260726t-lab3` embeds source digest
+`1ecf1b115bef2dea77d2701baec7bed1aa8a9ae3fa053b6ae5b2e7dbddd76e32`;
+its manifest digest is
+`sha256:2d71e8b2ce23759d030efc0c6c0f8cd777ecdd2b91768d07256f4481872e95ab`.
+Inside that exact image, 95 focused Python tests, the forced C++ protocol test,
+and two isolated ROS undock integrations passed.
+
+Immediately before motion, live state showed one TCP 7272 client, one final
+`/cmd_vel` publisher, navigation idle, charge `3`, motors disabled, E-stop
+clear, faults zero, rear sonar fresh/clear, bumpers valid, stationary odometry,
+and successful AMCL dock-pose convergence. The operator was in the lab with
+physical E-stop access. The announced and authorized bounds were 0.10 m
+straight backward at 0.05 m/s with zero rotation.
+
+Goal `db6b5d9077a049d7a0e3a3cbde0a563f` began at
+`2026-07-26T11:09:34Z` (manager correlation
+`01078a60-a1dd-40bd-a38f-9b5e9012868b`). It passed precheck, release, explicit
+motor enable, fresh localization, rear sonar, and command-path checks.
+`GUARDED_REVERSE` began at `11:09:39.789Z`; feedback continuously showed
+charge `0`, motors enabled, E-stop clear, rear clear, and the unchanged
+hardware session. Nav2 BackUp completed
+`distance_traveled=0.10012492537498474` and transitioned to
+`CLEAR_OF_DOCK` at `11:09:42.339Z`.
+
+Charging briefly returned to state `3` after the robot stopped, so the
+two-second electrical-clear confirmation intentionally returned result code
+`12` (`SAFETY_FAULT`) rather than claiming success. The final action result
+reported motors disabled, E-stop clear, and zero ongoing motion. Later live
+samples showed charge `0` continuously for six seconds, both bumpers clear,
+motors disabled, faults zero, navigation idle, and zero odometry twist. The
+operator independently observed the same sequence.
+
+This proves successful explicit motor enable and bounded guarded reverse while
+preserving fail-closed reporting. It does not yet prove a complete production
+undock. The measured 0.10 m validation distance was only marginally sufficient
+to break electrical contact, so the next physical commissioning variable is a
+longer bounded clearance distance within the existing 0.10 m/s undock limit,
+not a 1.5 m/s departure. A complete action result and supervised re-dock remain
+open.
+
+## 24. Complete guarded undock and turn acceptance — 2026-07-26
+
+The remaining failure was not a forward obstacle. The SBC journal showed the
+partial-turn run refusing DRIVE when µARCS charge state re-latched to `3`.
+Legacy `rosaria2` and the manufacturer guide confirmed that the existing
+hardware operation is `CHARGE 0`, followed by explicit motor enable; no
+multi-second idle period is required. The production correction therefore
+keeps the whole transition inside one operator-authorized state machine and
+does not add a velocity publisher:
+
+- a same-session confirmed release is the only way the bridge and SBC may
+  tolerate a subsequent raw charge-state relatch;
+- the initial enable arms an eight-second reverse-only authorization capped at
+  `0.10 m/s` with zero angular velocity;
+- after the robot clears the dock, a second release and enable arm a
+  15-second turn-only authorization with zero linear velocity and angular
+  speed capped at `0.70 rad/s`;
+- E-stop, fault, stale state, a hardware-session change, command-shape
+  violation, or authorization expiry stops/refuses motion;
+- the manager requests 0.50 m at 0.08 m/s through the existing Nav2 BackUp,
+  then calls the existing Nav2 Spin for 180 degrees; and
+- final cleanup stops motion, disables motors, and sends `CHARGE 0`. Only the
+  exact `motion detected during release` response may be retried once, after
+  one second of stable zero odometry.
+
+The final SBC executable SHA-256 is
+`97655f948a57c1b71d147272639ae5460feace7aa5b9a31b25c0c2f3f4472c7e`.
+It is a 32-bit executable, all dependencies resolved, and `make -B test`
+passed. Relevant rollback sets are:
+
+- SBC
+  `/home/ros/patrolbot-backups/20260726T121248Z-final-undock-turn`;
+- SBC
+  `/home/ros/patrolbot-backups/20260726T123000Z-atomic-undock-enable`;
+- Pi
+  `/home/ubuntu/patrolbot-backups/20260726T121248Z-final-undock-turn`;
+- Pi
+  `/home/ubuntu/patrolbot-backups/20260726T123300Z-atomic-undock-bridge`;
+- Pi
+  `/home/ubuntu/patrolbot-backups/20260726T130000Z-undock-complete`; and
+- workstation `backups/20260726T121248Z-final-undock-turn`.
+
+The immutable Pi image is
+`patrolbot:undock-complete-20260726t1242z`, revision
+`ca66321-undock-complete`, source-tree digest
+`9d32c4ed6a444c7fe9c9a4caa331bd1b895070a5d6ebe8b0e3f6fe309817a8ad`,
+and manifest
+`sha256:6f01f7a385760069a046c6968c52966a4a047365924c90cd241c5e66c7262622`.
+Inside that exact image, 96 focused Python/static tests, the forced C++
+protocol test, and both isolated ROS fake-hardware undock integrations passed.
+Only bridge and navigation were recreated; bringup and the SBC laser path were
+not restarted. `docker/status.sh` ended `OVERALL=ready`, both replaced
+containers had zero restarts, and the SBC retained exactly one TCP 7272
+client.
+
+Immediately before motion, the operator was notified of the exact limits:
+0.50 m reverse at 0.08 m/s, followed by a counterclockwise 180-degree Spin
+capped at 0.70 rad/s. Live checks showed charge `3`, motors disabled, E-stop
+clear, faults zero, rear sonar fresh/clear, bumpers valid with dock contact
+only, stationary odometry, one `/cmd_vel` publisher, no action client, and a
+fresh successful dock-pose initialization.
+
+Goal `bb6701246df5443882920929dfd22b6b` returned:
+
+```text
+success: true
+code: 0
+message: guarded undock complete
+final_state: COMPLETE
+distance_traveled: 0.5031948089599609
+elapsed_seconds: 30.00484275817871
+initial_charge_state: 3
+final_charge_state: 0
+final_motors_enabled: false
+final_estop_pressed: false
+manual_recovery_required: false
+action_status: SUCCEEDED
+```
+
+The hardware journal independently recorded the first release, motor enable,
+reverse authorization at `-0.080 m/s` while charge state had re-latched to
+`3`, post-clear release, turn enable, turn authorization at `0.700 rad/s`, a
+correct residual-motion refusal during finalization, and the single successful
+cleanup retry. Session generation stayed `1`.
+
+Post-run inspection showed zero odometry twist, motors disabled, E-stop clear,
+faults zero, stall zero, both bumpers clear, no active action, and exactly one
+final `/cmd_vel` publisher/subscriber pair. Raw charge state later returned to
+float `3` and `/battery` reported 25.4 V even though the robot had physically
+cleared the bumper/contact position. This controller relatch is documented and
+not hidden; it no longer stops the narrowly authorized departure sequence.
+
+PB-AUDIT-002 is closed for its original defect: the robot can leave the
+charger safely through the commissioned action. The generic docking server
+remains disabled. Automated docking, joystick/deadman motion acceptance,
+enabled-motor E-stop cutoff, and the remaining physical sensor/calibration
+campaigns remain separate work. No dashboard source was edited.

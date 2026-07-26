@@ -1,6 +1,6 @@
 # PB-AUDIT Status Summary
 
-Status date: 2026-07-23.
+Status date: 2026-07-26.
 
 This file is the short completion index for the 24 findings in
 `PATROLBOT_RPI5_AUDIT.md`. Detailed evidence remains in the canonical audit and
@@ -14,11 +14,12 @@ Classification rules:
 - **Not touched:** no remediation has been performed beyond investigation and
   documentation.
 
-## Fully completed — 9
+## Fully completed — 10
 
 | ID | Short status |
 |---|---|
 | PB-AUDIT-001 | Unsafe active docking bypass contained and live-verified. |
+| PB-AUDIT-002 | The production undock action now releases charging, explicitly enables motors, reverses 0.50 m through the guarded Nav2 path, turns away 180 degrees, and ends stopped with motors disabled. |
 | PB-AUDIT-011 | Original charging-state interface defect corrected and stationary release/recharge transition verified. |
 | PB-AUDIT-013 | Compatible user unit and bounded persistent journal survived a real power cycle and retained both boot records. |
 | PB-AUDIT-014 | Final velocity-smoother configuration corrected, deployed, and live-verified. |
@@ -28,21 +29,20 @@ Classification rules:
 | PB-AUDIT-020 | Commit-SHA-labelled image/source provenance is deployed and live-verified with checksum-backed rollback. |
 | PB-AUDIT-024 | Informational protocol-design review accepted; no corrective action required. |
 
-## In progress — 14
+## In progress — 13
 
 | ID | Short status |
 |---|---|
-| PB-AUDIT-002 | Stationary cutover/release and all 12 bumper mappings complete; dock localization, guarded departure, and re-docking remain. |
-| PB-AUDIT-003 | Recovery-tree implementation complete; live motion regression remains. |
-| PB-AUDIT-004 | Rear-sonar integration complete; physical geometry, dropout, and stop validation remain. |
+| PB-AUDIT-003 | Recovery-tree implementation is complete and the shared Nav2 BackUp path moved 0.100125 m under live guarding; the full recovery-tree regression remains. |
+| PB-AUDIT-004 | Rear-sonar integration stayed fresh and clear during the live reverse; obstacle/dropout stop tests and geometry validation remain. |
 | PB-AUDIT-005 | Low-obstacle sensor scaffold exists; hardware presence, wiring, geometry, and commissioning remain. |
 | PB-AUDIT-006 | All 12 panels are physically mapped and the typed undock gate is commissioned; firmware BumpStall and enabled-motion cutoff validation remain. |
-| PB-AUDIT-007 | Safe dock-pose initialization mechanism exists; surveyed pose and localization commissioning remain. |
+| PB-AUDIT-007 | The measured main-charger pose and guarded initializer are commissioned; restart-away-from-dock recovery and general navigation gating remain. |
 | PB-AUDIT-008 | Measurement/calibration scaffold exists; real envelope measurement and footprint update remain. |
-| PB-AUDIT-009 | DRIVE-triggered auto-enable defect is fixed; successful explicit-enable/PWR ON validation remains. |
+| PB-AUDIT-009 | DRIVE-triggered auto-enable is fixed; explicit post-release motor enable, enabled feedback, and automatic disable after charge reassertion are live-verified. Enabled-motor E-stop cutoff remains. |
 | PB-AUDIT-010 | System clock and persistent Chrony policy are corrected and survived reboot; RTC-battery replacement plus a post-replacement cold boot remain. |
 | PB-AUDIT-012 | Pi fault/battery protections are deployed; real SBC power-fail signal and graceful shutdown path remain. |
-| PB-AUDIT-015 | F710 deadman/takeover software is deployed; the absent receiver still blocks physical control validation. |
+| PB-AUDIT-015 | The F710 receiver and centered `/joy` path are live-verified; deadman/nonzero takeover and timeout motion validation remain. |
 | PB-AUDIT-018 | Direction-aware mitigations and opt-in sensor scaffold exist; physical near-field validation remains. |
 | PB-AUDIT-021 | Measurement gate exists; main-LiDAR height measurement and TF correction remain. |
 | PB-AUDIT-022 | Key-only/no-root-login SSH hardening is live-verified; eventual SBC platform replacement remains. |
@@ -158,6 +158,137 @@ hardware signal/platform change:
   guarded reverse, and full undock/re-dock/charging regression; and
 - RTC-battery/cold-boot persistence, a demonstrated SBC power-fail shutdown
   input, and eventual EOL SBC replacement.
+
+## Latest guarded-undock commissioning — 2026-07-26
+
+The operator supplied a map-frame pose while the robot was seated on the main
+charger. The measured pose `(99.28925458355519, 126.33778290362004,
+-1.578938606346 rad)` is now the configured `main_charger` pose. The existing
+`/patrolbot/initialize_dock_pose` service published it only after confirming
+charging, motors disabled, stationary odometry, valid hardware state, and no
+competing action; AMCL returned a converged pose with covariance below the
+manager limits.
+
+The first guarded goal exposed a real stationary-localization defect: AMCL
+normally publishes once after initialization and then remains silent until
+motion, while the manager required pose age below 0.5 s throughout precheck.
+That goal aborted before release with `distance_traveled=0.0`. The manager now
+uses AMCL's existing `/request_nomotion_update` service during precheck, the
+operator motor window, the final localization gate, and guarded reverse. No
+new node or velocity path was added. Image
+`patrolbot:amcl-refresh-20260726t-lab`, source digest
+`f2722d806d8cf3a0fde89ad356379496e4640fef04e9d77cb861936cefde045b`,
+is deployed to the navigation container; 82 focused dock/navigation contract
+tests passed. Previous images remain present for rollback.
+
+The post-fix guarded goal proved stable precheck and no-motion AMCL refresh,
+then successfully changed charge state from `3` to `0`. The operator motor
+window expired with motors still disabled, so the manager aborted before
+BackUp with `distance_traveled=0.0` and `manual_recovery_required=true`.
+Following the manufacturer procedure, the operator held the dock's yellow
+manual-charge button and restored charging. Live state then showed charge
+state `2`, motors disabled, E-stop clear, faults zero, front dock contact only,
+zero odometry twist, one final `/cmd_vel` publisher, and another successful
+guarded dock-pose initialization.
+
+That operator-window-only result was superseded later the same day by the
+successful motor-enable and physical reverse evidence below.
+
+## Live motor-enable and guarded reverse — 2026-07-26
+
+The SBC and Pi release/enable race was corrected without adding another motion
+node or command publisher. The deployed SBC accepts motor enable after a
+same-session, recently confirmed `CHARGE_RELEASE` when the commissioned front
+dock contact proves the robot is still seated. It reissues `CHARGE 0`
+immediately before enable and permits only a short straight reverse while
+contact charging is transiently visible. The Pi bridge preserves the same
+UUID/session boundary, and the dock manager invokes both existing typed
+services inside the operator-authorized action before starting Nav2 BackUp.
+No deployed source path sends `CHARGE 1`; the observed recharge was the
+charger/controller physically re-latching while the plates remained close.
+
+The deployed navigation image is
+`patrolbot:instant-undock-20260726t-lab3`, revision
+`working-tree-20260726-instant-undock3`, with embedded source digest
+`1ecf1b115bef2dea77d2701baec7bed1aa8a9ae3fa053b6ae5b2e7dbddd76e32`
+and image manifest digest
+`sha256:2d71e8b2ce23759d030efc0c6c0f8cd777ecdd2b91768d07256f4481872e95ab`.
+The exact image passed 95 focused Python tests, the forced C++ protocol test,
+and both isolated ROS undock integrations. Only the navigation container was
+recreated; bridge and bringup remained healthy and the hardware link retained
+one TCP client.
+
+At `2026-07-26T11:09:34Z`, goal
+`db6b5d9077a049d7a0e3a3cbde0a563f` was accepted with the explicitly announced
+validation bounds: 0.10 m straight backward, 0.05 m/s, and zero rotation. The
+action:
+
+- refreshed and validated AMCL, rear sonar, bumpers, odometry, the command
+  path, E-stop, faults, and the single hardware session;
+- changed charge state from `3` to `0`;
+- explicitly enabled the motors and observed `motors_enabled=true`;
+- entered `GUARDED_REVERSE` approximately 0.42 s after the enable phase began;
+- held charge state `0`, E-stop clear, rear sonar clear, and localization valid
+  throughout the reverse; and
+- completed the Nav2 BackUp with `distance_traveled=0.10012492537498474`.
+
+The action intentionally returned `SAFETY_FAULT` during `CLEAR_OF_DOCK`
+because charge state briefly returned to `3` inside its two-second confirmation
+window, even though both bumper contacts were clear. The hardware subsequently
+reported charge state `0` continuously for a six-second sample, both bumpers
+clear, motors disabled, faults zero, navigation idle, and zero odometry twist.
+The operator confirmed the physical sequence: charging stopped, the robot
+moved slightly away, contact charging briefly re-latched, and then released.
+
+This commissions the explicit motor-enable path and the bounded guarded
+reverse without overstating the action result. PB-AUDIT-002 remains in
+progress because the production undock distance/clear-confirmation behavior
+must be tuned from this measured result, followed by one successful complete
+action and a supervised re-docking/charging regression. A proposed 1.5 m/s
+departure was rejected: the live undock contract is capped at 0.10 m/s, the
+commissioning run used 0.05 m/s, and the correct next variable is sufficient
+clearance distance rather than an unsafe speed increase.
+
+## Successful production undock — 2026-07-26
+
+PB-AUDIT-002 is now complete for its original finding: the robot can leave the
+charger through a bounded, guarded, operator-authorized action. The final
+immutable image is `patrolbot:undock-complete-20260726t1242z`, revision
+`ca66321-undock-complete`, source-tree digest
+`9d32c4ed6a444c7fe9c9a4caa331bd1b895070a5d6ebe8b0e3f6fe309817a8ad`,
+and image manifest
+`sha256:6f01f7a385760069a046c6968c52966a4a047365924c90cd241c5e66c7262622`.
+The deployed SBC executable is
+`97655f948a57c1b71d147272639ae5460feace7aa5b9a31b25c0c2f3f4472c7e`.
+
+Goal `bb6701246df5443882920929dfd22b6b` passed the live preconditions with one
+TCP hardware client, one final `/cmd_vel` publisher, fresh and clear rear
+sonar, valid bumper telemetry, charging state `3`, motors disabled, E-stop
+clear, zero faults, stationary odometry, and a freshly converged dock pose.
+It then:
+
+- released charging and observed raw state `0`;
+- explicitly enabled the motors;
+- reversed `0.5031948089599609 m` at the requested `0.08 m/s`;
+- completed the existing Nav2 Spin goal for a 180-degree turn, capped at
+  `0.70 rad/s`;
+- stopped and disabled the motors;
+- retried the final release exactly once after the first request correctly
+  detected residual ARIA rotation; and
+- returned `success=true`, code `0`, state `COMPLETE`,
+  `manual_recovery_required=false`, and action status `SUCCEEDED`.
+
+The action completed with raw charge state `0`; later telemetry returned to
+raw float state `3` even though both bumpers were clear and the robot had
+physically moved away. That known controller relatch is no longer allowed to
+interrupt the scoped reverse or turn. It remains visible rather than being
+masked: the post-run sample was 25.4 V, motors disabled, no faults, zero
+odometry twist, no active action, and one `/cmd_vel` publisher. Automatic
+docking, joystick/deadman motion, enabled-motor E-stop cutoff, and the other
+physical sensor campaigns remain separate open findings.
+
+Current finding counts are **10 fully completed, 13 in progress, and 1 not
+touched**.
 
 ## Detailed evidence
 

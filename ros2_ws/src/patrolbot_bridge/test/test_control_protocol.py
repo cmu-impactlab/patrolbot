@@ -4,6 +4,7 @@ from patrolbot_bridge.control_protocol import (
     COMMAND_CHARGE_RELEASE,
     COMMAND_MOTOR_ENABLE,
     format_request,
+    motor_enable_charge_allowed,
     parse_reply,
     valid_request_id,
 )
@@ -28,6 +29,13 @@ def test_duplicate_ack_and_terminal_result_are_parseable():
     assert result.success
     assert result.charge_state == 0
     assert not result.motors_enabled
+
+
+def test_motor_enable_charge_gate_is_scoped_to_recent_release():
+    assert motor_enable_charge_allowed(0, False)
+    assert motor_enable_charge_allowed(3, True)
+    assert not motor_enable_charge_allowed(3, False)
+    assert not motor_enable_charge_allowed(-1, True)
 
 
 @pytest.mark.parametrize(

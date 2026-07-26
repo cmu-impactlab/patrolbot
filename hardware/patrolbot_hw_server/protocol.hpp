@@ -23,6 +23,14 @@ enum RequestDisposition {
   REQUEST_COMPLETED
 };
 
+enum DriveDisposition {
+  DRIVE_REJECTED = 0,
+  DRIVE_ALLOWED_ZERO,
+  DRIVE_ALLOWED_NORMAL,
+  DRIVE_ALLOWED_DOCK_DEPARTURE,
+  DRIVE_ALLOWED_DOCK_TURN
+};
+
 struct ParsedCommand {
   ParsedCommand();
 
@@ -66,6 +74,11 @@ class RequestTracker {
 
 bool isCanonicalUuid(const std::string& value);
 ParsedCommand parseCommand(const std::string& line);
+DriveDisposition classifyDrive(
+    double linear, double angular, bool control_pending, int charge_state,
+    bool motors_enabled, bool estop_pressed, unsigned int fault_flags,
+    bool dock_departure_authorized, bool dock_turn_authorized);
+bool motorEnableChargeAllowed(int charge_state, bool recent_release);
 std::string commandName(CommandType command);
 std::string formatAck(CommandType command, const std::string& request_id,
                       bool replayed);

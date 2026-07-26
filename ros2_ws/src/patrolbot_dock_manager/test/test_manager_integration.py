@@ -5,12 +5,16 @@ import threading
 import time
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-from nav2_msgs.action import BackUp
+from nav2_msgs.action import BackUp, Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.dock_manager import DockManager
 from patrolbot_interfaces.action import Undock
 from patrolbot_interfaces.msg import BaseState
-from patrolbot_interfaces.srv import ChargeRelease, InitializeDockPose
+from patrolbot_interfaces.srv import (
+    ChargeRelease,
+    InitializeDockPose,
+    MotorEnable,
+)
 import pytest
 import rclpy
 from rclpy.action import (
@@ -45,6 +49,9 @@ class FakeWorld(Node):
         super().__init__('behavior_server')
         self.callbacks = ReentrantCallbackGroup()
         self.released = False
+        self.release_calls = 0
+        self.charge_latched = True
+        self.clear_of_dock = False
         self.motors_enabled = False
         self.sonar_enabled = True
         self.drop_sonar_on_backup = False
@@ -59,29 +66,61 @@ class FakeWorld(Node):
         self.release_service = self.create_service(
             ChargeRelease, '/patrolbot/charge_release', self._release,
             callback_group=self.callbacks)
+        self.enable_service = self.create_service(
+            MotorEnable, '/patrolbot/motor_enable', self._enable,
+            callback_group=self.callbacks)
         self.backup_server = ActionServer(
             self, BackUp, '/backup', execute_callback=self._backup,
+            cancel_callback=lambda _goal: CancelResponse.ACCEPT,
+            callback_group=self.callbacks)
+        self.spin_server = ActionServer(
+            self, Spin, '/spin', execute_callback=self._spin,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=self.callbacks)
         self.timer = self.create_timer(
             0.04, self._publish_state, callback_group=self.callbacks)
 
     def _release(self, request, response):
+        self.release_calls += 1
         self.released = True
-        # Model the real zero-motion sequence: release returns with motors off,
-        # followed by a separate operator enable during the shared window.
+        # Model the real zero-motion sequence: release returns with motors off.
         self.motors_enabled = False
-        operator_enable = threading.Timer(
-            0.10, lambda: setattr(self, 'motors_enabled', True))
-        operator_enable.daemon = True
-        operator_enable.start()
         response.request_id = request.request_id
         response.accepted = True
+        if self.release_calls == 3:
+            # The live base reported residual rotational motion on the first
+            # final CHARGE 0 even after Nav2 had completed Spin. The manager
+            # must settle and retry only this exact fail-closed response.
+            response.success = False
+            response.code = ChargeRelease.Response.HARDWARE_REJECTED
+            response.message = 'motion detected during release'
+            response.charge_state = 3
+            response.motors_enabled = False
+            response.estop_pressed = False
+            response.session_generation = 7
+            return response
+        self.charge_latched = False
         response.success = True
         response.code = ChargeRelease.Response.OK
         response.message = 'released by isolated fake'
         response.charge_state = 0
         response.motors_enabled = False
+        response.estop_pressed = False
+        response.session_generation = 7
+        return response
+
+    def _enable(self, request, response):
+        self.motors_enabled = True
+        # The measured base remains at charge 0 through the second enable
+        # confirmation, then re-latches after Spin starts.
+        self.charge_latched = False
+        response.request_id = request.request_id
+        response.accepted = True
+        response.success = True
+        response.code = MotorEnable.Response.OK
+        response.message = 'enabled by isolated fake'
+        response.charge_state = 0
+        response.motors_enabled = True
         response.estop_pressed = False
         response.session_generation = 7
         return response
@@ -99,6 +138,11 @@ class FakeWorld(Node):
                 return result
             feedback.distance_traveled = 0.01 * (step + 1)
             goal_handle.publish_feedback(feedback)
+            # Keep charge physically reasserted beyond 0.05 m. The scoped
+            # departure authorization must remain valid until the contacts
+            # actually clear, rather than ending at an arbitrary distance.
+            if step == 7:
+                self.clear_of_dock = True
             time.sleep(0.05)
         result = BackUp.Result()
         result.error_code = BackUp.Result.NONE
@@ -107,6 +151,14 @@ class FakeWorld(Node):
             result.error_msg = 'test should have canceled before completion'
         else:
             goal_handle.succeed()
+        return result
+
+    def _spin(self, goal_handle):
+        self.charge_latched = True
+        time.sleep(0.10)
+        result = Spin.Result()
+        result.error_code = Spin.Result.NONE
+        goal_handle.succeed()
         return result
 
     def _publish_state(self):
@@ -118,12 +170,16 @@ class FakeWorld(Node):
         state.link_connected = True
         state.telemetry_age = 0.0
         state.hardware_state_valid = True
-        state.charge_state = 0 if self.released else 2
+        state.charge_state = 2
+        if self.released:
+            state.charge_state = 3 if self.charge_latched else 0
         state.charge_state_valid = True
         state.motors_enabled = self.motors_enabled
         state.estop_pressed = not self.released
         state.fault_flags = 0
         state.bumpers_valid = True
+        state.front_bumper_pressed = not self.clear_of_dock
+        state.rear_bumper_pressed = False
         self.base_pub.publish(state)
 
         if self.sonar_enabled:
@@ -182,6 +238,7 @@ def harness():
         Parameter('dock_pose_x', value=0.0),
         Parameter('dock_pose_y', value=0.0),
         Parameter('dock_pose_yaw', value=0.0),
+        Parameter('allow_front_bumper_at_dock', value=True),
         Parameter('sensor_timeout', value=0.25),
         Parameter('precheck_timeout', value=3.0),
         Parameter('operator_motor_window', value=1.0),
@@ -264,6 +321,9 @@ def test_operator_dock_pose_initialization_and_guarded_undock(harness):
     assert wrapped.result.success
     assert wrapped.result.code == Undock.Result.OK
     assert world.released
+    assert world.release_calls == 4
+    assert not world.charge_latched
+    assert not world.motors_enabled
 
 
 def test_stale_rear_sonar_cancels_reverse(harness):

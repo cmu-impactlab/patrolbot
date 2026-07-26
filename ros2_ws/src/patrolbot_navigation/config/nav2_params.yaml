@@ -50,6 +50,9 @@ behavior_server:
     costmap_topic: "local_costmap/costmap_raw"
     footprint_topic: "local_costmap/published_footprint"
     cycle_frequency: 10.0
+    # Match the SBC's explicitly scoped post-undock turn authorization. A
+    # re-latched charge state may never admit a faster angular command.
+    max_rotational_vel: 0.7
     behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
@@ -374,6 +377,14 @@ patrolbot_dock_manager:
     # confirmation share this one post-release operator window.
     operator_motor_window: 10.0
     backup_timeout: 10.0
+    # The dock can reassert charge while the wheels are still on its plates.
+    # Only the explicit release+enable sequence may use this short straight
+    # reverse grace; the SBC independently enforces the same 8 s/0.10 m/s cap.
+    dock_departure_charge_grace: 8.0
+    # After the base is physically clear and any charge latch is released,
+    # turn away from the charger through Nav2's collision-checked Spin behavior.
+    undock_turn_yaw: 3.141592653589793
+    spin_timeout: 20.0
     dock_pose_initialization_timeout: 5.0
     initial_pose_xy_variance: 0.04
     initial_pose_yaw_variance: 0.0685

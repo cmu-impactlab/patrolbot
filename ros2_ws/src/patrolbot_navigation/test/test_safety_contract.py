@@ -1,5 +1,6 @@
 """Static safety-contract tests for PatrolBot navigation configuration."""
 
+import math
 from pathlib import Path
 import subprocess
 import unittest
@@ -38,6 +39,7 @@ SERVER_CANDIDATES = (
     'patrolbot_server.cpp',
 )
 SERVER_FILE = next(path for path in SERVER_CANDIDATES if path.exists())
+PROTOCOL_FILE = SERVER_FILE.with_name('protocol.cpp')
 SERVER_SYSTEMD_ROOT = (
     REPOSITORY_ROOT / 'hardware' / 'patrolbot_hw_server' / 'systemd'
 )
@@ -90,6 +92,10 @@ class SafetyContractTest(unittest.TestCase):
         collision = self.params['collision_monitor']['ros__parameters']
         self.assertIs(collision['base_shift_correction'], False)
 
+    def test_undock_spin_matches_hardware_turn_cap(self):
+        behavior = self.params['behavior_server']['ros__parameters']
+        self.assertEqual(behavior['max_rotational_vel'], 0.7)
+
     def test_rpp_internal_collision_check_stays_disabled(self):
         follow_path = self.params['controller_server']['ros__parameters']['FollowPath']
         self.assertIs(follow_path['use_collision_detection'], False)
@@ -127,12 +133,19 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIs(amcl['set_initial_pose'], False)
         self.assertIs(amcl['always_reset_initial_pose'], False)
 
-    def test_guarded_undock_defaults_remain_fail_closed(self):
+    def test_guarded_undock_uses_the_commissioned_main_charger_pose(self):
         manager = self.params['patrolbot_dock_manager']['ros__parameters']
-        self.assertIs(manager['dock_pose_configured'], False)
+        self.assertIs(manager['dock_pose_configured'], True)
+        self.assertEqual(manager['dock_id'], 'main_charger')
+        self.assertAlmostEqual(manager['dock_pose_x'], 99.28925458355519)
+        self.assertAlmostEqual(manager['dock_pose_y'], 126.33778290362004)
+        self.assertAlmostEqual(manager['dock_pose_yaw'], -1.578938606346)
         self.assertIs(manager['allow_front_bumper_at_dock'], True)
         self.assertEqual(manager['sensor_timeout'], 0.5)
         self.assertEqual(manager['operator_motor_window'], 10.0)
+        self.assertEqual(manager['dock_departure_charge_grace'], 8.0)
+        self.assertAlmostEqual(manager['undock_turn_yaw'], math.pi)
+        self.assertEqual(manager['spin_timeout'], 20.0)
         self.assertEqual(manager['dock_pose_initialization_timeout'], 5.0)
 
     def test_measured_bumper_masks_are_loaded_by_compose(self):
@@ -334,6 +347,7 @@ class SafetyContractTest(unittest.TestCase):
 
     def test_hardware_controls_cannot_enable_or_move_as_a_drive_side_effect(self):
         server_text = SERVER_FILE.read_text(encoding='utf-8')
+        protocol_text = PROTOCOL_FILE.read_text(encoding='utf-8')
         self.assertEqual(server_text.count('robot->enableMotors();'), 1)
         self.assertIn('COMMAND_MOTOR_ENABLE', server_text)
         release_branch = server_text.split(
@@ -350,7 +364,9 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('enableMotors()', release_branch)
         self.assertNotIn('motors_must_be_disabled_for_release', server_text)
         self.assertIn('state.fault_flags != 0', server_text)
-        self.assertIn('state.fault_flags == 0', server_text)
+        self.assertIn('patrolbot::classifyDrive(', server_text)
+        self.assertIn('fault_flags != 0', protocol_text)
+        self.assertIn('DRIVE_ALLOWED_DOCK_DEPARTURE', protocol_text)
 
     def test_sbc_service_logging_is_compatible_with_systemd_229(self):
         unit_text = SERVER_UNIT_FILE.read_text(encoding='utf-8')

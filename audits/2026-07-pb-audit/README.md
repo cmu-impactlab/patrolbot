@@ -53,6 +53,54 @@ one final `/cmd_vel` publisher. Dock localization, motor enable, guarded
 reverse, and re-docking remain pending; no motion or hardware-control request
 was sent during this mapping phase.
 
+## 2026-07-26 guarded-undock continuation
+
+The main charger pose is commissioned and the existing guarded initializer
+repeatedly produced healthy AMCL convergence. A stationary-pose freshness bug
+was found when the first goal failed before release; the dock manager now uses
+AMCL's existing no-motion update service rather than adding a new node or
+command path. The deployed image is
+`patrolbot:amcl-refresh-20260726t-lab` with exact source digest
+`f2722d806d8cf3a0fde89ad356379496e4640fef04e9d77cb861936cefde045b`;
+82 focused tests passed and older images remain available for rollback.
+
+A later release/enable race correction kept the existing typed services inside
+one operator-authorized action. The final image passed 95 focused tests, the
+forced C++ protocol test, and both isolated ROS integrations. Live explicit
+motor enable succeeded and the shared Nav2 BackUp path moved
+`0.10012492537498474 m` straight backward at `0.05 m/s`, with fresh rear
+sonar, charge `0`, E-stop clear, and zero rotation throughout motion.
+
+The action still failed closed during electrical-clear confirmation because
+charging briefly re-latched after the robot stopped. Hardware later stabilized
+at charge `0` for a six-second sample, both bumpers clear, motors disabled,
+faults zero, and zero odometry twist. Thus the bounded reverse is physically
+commissioned, while sufficient clearance distance, a complete successful
+undock action, joystick acceptance, and supervised re-docking remain pending.
+
+## 2026-07-26 production-undock completion
+
+The final immutable bridge/navigation image,
+`patrolbot:undock-complete-20260726t1242z`, and SBC executable
+`97655f948a57c1b71d147272639ae5460feace7aa5b9a31b25c0c2f3f4472c7e`
+completed goal `bb6701246df5443882920929dfd22b6b`. The guarded action released
+charging, explicitly enabled the motors, reversed
+`0.5031948089599609 m` at `0.08 m/s`, completed the requested 180-degree
+turn at a 0.70 rad/s cap, stopped, disabled motors, and finalized charge
+release. It returned code `0`, state `COMPLETE`, and action status `SUCCEEDED`
+without manual recovery.
+
+The exact image passed 96 focused tests, the forced C++ protocol test, and two
+isolated ROS integrations. Post-run checks showed zero odometry, motors
+disabled, E-stop clear, no faults or bumper contacts, no active action, one
+hardware client, and one final `/cmd_vel` publisher. Raw charge state later
+re-latched to float state `3` away from dock contact; that firmware/controller
+behavior remains reported but no longer interrupts the scoped departure.
+
+PB-AUDIT-002 is closed for its original inability-to-leave-the-dock finding.
+Automatic docking stays disabled; joystick/deadman motion, enabled-motor E-stop
+cutoff, and the remaining physical sensor/calibration work remain open.
+
 ## Retained rollback sets
 
 All retained off-host checksum manifests were reverified immediately before

@@ -43,6 +43,14 @@ def format_request(command: str, request_id: str) -> bytes:
     return f'{command}:{request_id}\n'.encode('ascii')
 
 
+def motor_enable_charge_allowed(
+        charge_state: int, recent_release: bool) -> bool:
+    """Allow a re-latched charge state only after a scoped confirmed release."""
+    if charge_state == 0:
+        return True
+    return charge_state > 0 and recent_release
+
+
 def parse_reply(line: str) -> Optional[ControlReply]:
     """Parse an SBC ACK/RESULT, returning None for non-control telemetry."""
     fields = line.strip().split(':')

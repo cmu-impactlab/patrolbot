@@ -351,3 +351,60 @@ This verifies button detection, typed reporting, fail-closed software response,
 and the required PWR ON recovery. It does not yet prove physical power removal
 from enabled motors; that observation remains with the supervised motor-enable
 phase. No ROS or hardware control command was sent.
+
+## Physical completion addendum — 2026-07-26
+
+The later supervised lab session completed the work that this stationary
+cutover deliberately deferred. The deployed SBC executable SHA-256 is
+`97655f948a57c1b71d147272639ae5460feace7aa5b9a31b25c0c2f3f4472c7e`.
+The bridge and navigation containers use
+`patrolbot:undock-complete-20260726t1242z`, revision
+`ca66321-undock-complete`, source-tree digest
+`9d32c4ed6a444c7fe9c9a4caa331bd1b895070a5d6ebe8b0e3f6fe309817a8ad`,
+and image manifest
+`sha256:6f01f7a385760069a046c6968c52966a4a047365924c90cd241c5e66c7262622`.
+
+The exact image passed 96 focused Python/static tests, the forced C++ protocol
+test, and two isolated ROS fake-hardware undock integrations. The live
+readiness script returned `OVERALL=ready`; the hardware server was active with
+one TCP 7272 client, and `/cmd_vel` retained one publisher
+(`teleop_velocity_smoother`) and one subscriber (`patrolbot_bridge`).
+
+After the operator physically re-seated the robot, the pre-motion gate showed
+raw charge state `3`, motors disabled, E-stop clear, zero faults, fresh/clear
+rear sonar, valid bumpers, stationary odometry, and no active action. The
+operator was notified immediately before the command that the complete
+sequence would reverse 0.50 m at 0.08 m/s and then turn counterclockwise 180
+degrees with a 0.70 rad/s cap.
+
+Goal `bb6701246df5443882920929dfd22b6b` succeeded:
+
+- charge release confirmed raw state `0`;
+- explicit motor enable succeeded;
+- guarded BackUp traveled `0.5031948089599609 m`;
+- the existing Nav2 Spin completed the 180-degree turn request;
+- motion stopped and motors were disabled;
+- the first final release correctly detected residual ARIA rotation;
+- the manager waited for one second of stable zero odometry and retried once;
+- the second final release confirmed state `0`; and
+- the result was code `0`, state `COMPLETE`, action status `SUCCEEDED`, with
+  `manual_recovery_required=false`.
+
+Post-run state was stationary with motors disabled, E-stop clear, faults zero,
+stall zero, both bumpers clear, no action client, and the same hardware
+session. Raw charge state later returned to float `3` away from bumper contact;
+this known µARCS/controller relatch is recorded rather than masked and no
+longer interrupts the scoped reverse/turn sequence.
+
+Final rollback locations include:
+
+- `/home/ros/patrolbot-backups/20260726T121248Z-final-undock-turn`;
+- `/home/ros/patrolbot-backups/20260726T123000Z-atomic-undock-enable`;
+- `/home/ubuntu/patrolbot-backups/20260726T121248Z-final-undock-turn`;
+- `/home/ubuntu/patrolbot-backups/20260726T123300Z-atomic-undock-bridge`;
+- `/home/ubuntu/patrolbot-backups/20260726T130000Z-undock-complete`; and
+- workstation `backups/20260726T121248Z-final-undock-turn`.
+
+This addendum closes PB-AUDIT-002's original inability-to-leave-the-dock
+finding. Automated docking remains disabled and is not claimed by this
+acceptance.

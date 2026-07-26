@@ -33,6 +33,10 @@ const int kOperationTimeout = 5;
 const int kSessionChanged = 6;
 const int kStableCyclesRequired = 3;
 const long kOperationTimeoutMs = 5000;
+const long kReleaseToEnableWindowMs = 15000;
+const long kDockDepartureWindowMs = 8000;
+const long kDockTurnWindowMs = 15000;
+const unsigned int kCommissionedFrontBumperMask = 0x7e00;
 // PatrolBot third-generation user guide: µARCS CHARGE is command 68,
 // argument 0 releases the autocharge mechanism. This legacy ARIA install does
 // not define ArCommands::CHARGE (its generic enum gives 68 a simulator alias),
@@ -53,12 +57,14 @@ struct HardwareSnapshot {
   bool motors_enabled;
   bool estop_pressed;
   unsigned int fault_flags;
+  unsigned int stall_value;
 };
 
 struct PendingOperation {
   PendingOperation()
       : active(false), type(patrolbot::COMMAND_INVALID),
-        phase(CONTROL_PHASE_NONE), stable_cycles(0) {}
+        phase(CONTROL_PHASE_NONE), stable_cycles(0),
+        departure_scoped_enable(false) {}
 
   bool active;
   patrolbot::CommandType type;
@@ -66,7 +72,33 @@ struct PendingOperation {
   std::string request_id;
   ArTime started;
   int stable_cycles;
+  bool departure_scoped_enable;
 };
+
+struct DepartureAuthorization {
+  DepartureAuthorization()
+      : release_confirmed(false), active(false), turn_allowed(false),
+        used(false) {}
+
+  void clear() {
+    release_confirmed = false;
+    active = false;
+    turn_allowed = false;
+    used = false;
+  }
+
+  bool release_confirmed;
+  ArTime release_confirmed_at;
+  bool active;
+  bool turn_allowed;
+  ArTime activated_at;
+  bool used;
+};
+
+long authorizationWindowMs(const DepartureAuthorization& departure) {
+  return departure.turn_allowed ? kDockTurnWindowMs
+                                : kDockDepartureWindowMs;
+}
 
 HardwareSnapshot readSnapshot(ArRobot* robot) {
   HardwareSnapshot state;
@@ -77,6 +109,7 @@ HardwareSnapshot readSnapshot(ArRobot* robot) {
   state.motors_enabled = robot->areMotorsEnabled();
   state.estop_pressed = robot->isEStopPressed();
   state.fault_flags = robot->getFaultFlags();
+  state.stall_value = robot->getStallValue();
   robot->unlock();
   return state;
 }
@@ -127,7 +160,8 @@ void rejectControl(const patrolbot::ParsedCommand& command, int code,
 void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
                   PendingOperation* pending,
                   std::deque<std::string>* responses,
-                  patrolbot::RequestTracker* tracker) {
+                  patrolbot::RequestTracker* tracker,
+                  DepartureAuthorization* departure) {
   std::string completed_result;
   const patrolbot::RequestDisposition disposition = tracker->inspect(
       command.type, command.request_id, &completed_result);
@@ -147,6 +181,10 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
                   readSnapshot(robot), responses, tracker);
     return;
   }
+  if (command.type == patrolbot::COMMAND_CHARGE_RELEASE) {
+    departure->clear();
+  }
+  pending->departure_scoped_enable = false;
 
   const HardwareSnapshot state = readSnapshot(robot);
   if (!isStationary(state)) {
@@ -198,7 +236,16 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
       pending->phase = RELEASE_WAIT_CHARGE_STATE;
     }
   } else if (command.type == patrolbot::COMMAND_MOTOR_ENABLE) {
-    if (state.charge_state != 0) {
+    const bool recent_release =
+        departure->release_confirmed &&
+        departure->release_confirmed_at.mSecSince() <=
+            kReleaseToEnableWindowMs;
+    const bool departure_scoped_enable =
+        state.charge_state != 0 &&
+        patrolbot::motorEnableChargeAllowed(
+            state.charge_state, recent_release);
+    if (!patrolbot::motorEnableChargeAllowed(
+            state.charge_state, recent_release)) {
       rejectControl(command, kPreconditionFailed, "charging", state, responses,
                     tracker);
       return;
@@ -220,9 +267,17 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
       return;
     }
     robot->lock();
+    if (departure_scoped_enable) {
+      // Contact charging can reassert after a confirmed release before a ROS
+      // service client reaches MOTOR_ENABLE. Reissue the existing µARCS
+      // release immediately before enabling; authorization still requires the
+      // same-session recent release.
+      robot->comInt(kUarcsChargeCommand, 0);
+    }
     // Deliberate command only. DRIVE and startup never call enableMotors().
     robot->enableMotors();
     robot->unlock();
+    pending->departure_scoped_enable = departure_scoped_enable;
     pending->phase = MOTOR_ENABLE_WAIT_ENABLED;
   } else {
     rejectControl(command, kInvalidRequest, "unsupported_control", state,
@@ -243,7 +298,8 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
 
 void updateControl(ArRobot* robot, PendingOperation* pending,
                    std::deque<std::string>* responses,
-                   patrolbot::RequestTracker* tracker) {
+                   patrolbot::RequestTracker* tracker,
+                   DepartureAuthorization* departure) {
   if (!pending->active) return;
   HardwareSnapshot state = readSnapshot(robot);
   bool confirmed = false;
@@ -287,7 +343,14 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
       confirmed = state.charge_state == 0;
     }
   } else if (pending->type == patrolbot::COMMAND_MOTOR_ENABLE) {
-    if (state.charge_state != 0 || state.estop_pressed) {
+    const bool recent_release =
+        departure->release_confirmed &&
+        departure->release_confirmed_at.mSecSince() <=
+            kReleaseToEnableWindowMs;
+    if (!patrolbot::motorEnableChargeAllowed(
+            state.charge_state, recent_release) ||
+        state.estop_pressed || state.fault_flags != 0 ||
+        !isStationary(state)) {
       robot->lock();
       robot->setVel(0);
       robot->setRotVel(0);
@@ -304,6 +367,43 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
 
   pending->stable_cycles = confirmed ? pending->stable_cycles + 1 : 0;
   if (pending->stable_cycles >= kStableCyclesRequired) {
+    if (pending->type == patrolbot::COMMAND_CHARGE_RELEASE) {
+      departure->clear();
+      departure->release_confirmed = true;
+      departure->release_confirmed_at.setToNow();
+    } else if (pending->type == patrolbot::COMMAND_MOTOR_ENABLE) {
+      const bool recent_release =
+          departure->release_confirmed &&
+          departure->release_confirmed_at.mSecSince() <=
+              kReleaseToEnableWindowMs;
+      const bool dock_contact =
+          (state.stall_value & kCommissionedFrontBumperMask) != 0;
+      departure->active = recent_release;
+      // A motor enable that had to cancel reasserted charging is the initial
+      // reverse phase. A charge-zero enable after the post-clear release is
+      // the separate in-place turn phase. This remains deterministic even
+      // when the mechanical dock does not assert a front bumper bit.
+      departure->turn_allowed =
+          recent_release && !pending->departure_scoped_enable;
+      departure->used = false;
+      if (departure->active) {
+        departure->activated_at.setToNow();
+        if (departure->turn_allowed) {
+          ArLog::log(
+              ArLog::Normal,
+              "Dock-turn authorization armed for %ld ms after explicit "
+              "post-clear release and motor enable.",
+              kDockTurnWindowMs);
+        } else {
+          ArLog::log(
+              ArLog::Normal,
+              "Dock-departure authorization armed for %ld ms after explicit "
+              "release and motor enable (front_contact=%d).",
+              kDockDepartureWindowMs, dock_contact ? 1 : 0);
+        }
+      }
+      departure->release_confirmed = false;
+    }
     finishOperation(
         pending, true, kControlOk,
         pending->type == patrolbot::COMMAND_CHARGE_RELEASE
@@ -413,6 +513,7 @@ int main(int argc, char** argv) {
     int auxCounter = 0;
     const int auxInterval = 5;
     bool client_connected = true;
+    DepartureAuthorization departure;
 
     while (robot.isRunning() && client_connected) {
       // Drain all complete command lines. Fragmented and coalesced TCP reads are
@@ -435,15 +536,34 @@ int main(int argc, char** argv) {
              it != lines.end(); ++it) {
           const patrolbot::ParsedCommand command = patrolbot::parseCommand(*it);
           if (command.type == patrolbot::COMMAND_DRIVE) {
-            const bool zero = std::fabs(command.linear) < 1e-9 &&
-                              std::fabs(command.angular) < 1e-9;
             HardwareSnapshot state = readSnapshot(&robot);
-            const bool bounded = std::fabs(command.linear) <= 0.30 &&
-                                 std::fabs(command.angular) <= 1.20;
-            const bool permitted = zero ||
-                (bounded && !pending.active && state.charge_state == 0 &&
-                 !state.estop_pressed && state.motors_enabled &&
-                 state.fault_flags == 0);
+            if (departure.active &&
+                departure.activated_at.mSecSince() >
+                    authorizationWindowMs(departure)) {
+              departure.active = false;
+              if (state.charge_state != 0 && state.motors_enabled) {
+                robot.lock();
+                robot.setVel(0);
+                robot.setRotVel(0);
+                robot.disableMotors();
+                robot.unlock();
+                state = readSnapshot(&robot);
+                watchdogStopped = true;
+                ArLog::log(
+                    ArLog::Terse,
+                    "Dock-departure authorization expired before DRIVE; "
+                    "base stopped and motors disabled.");
+              }
+            }
+            const patrolbot::DriveDisposition drive =
+                patrolbot::classifyDrive(
+                    command.linear, command.angular, pending.active,
+                    state.charge_state, state.motors_enabled,
+                    state.estop_pressed, state.fault_flags,
+                    departure.active,
+                    departure.active && departure.turn_allowed);
+            const bool permitted = drive != patrolbot::DRIVE_REJECTED;
+            const bool zero = drive == patrolbot::DRIVE_ALLOWED_ZERO;
             robot.lock();
             if (permitted) {
               robot.setVel(command.linear * 1000.0);
@@ -455,17 +575,47 @@ int main(int argc, char** argv) {
             robot.unlock();
             lastCmdTime.setToNow();
             watchdogStopped = !permitted || zero;
+            if (drive == patrolbot::DRIVE_ALLOWED_DOCK_DEPARTURE &&
+                !departure.used) {
+              departure.used = true;
+              ArLog::log(
+                  ArLog::Normal,
+                  "Dock-departure authorization in use: reverse=%.3f m/s, "
+                  "angular=%.3f rad/s, charge=%d.",
+                  command.linear, command.angular, state.charge_state);
+            }
+            if (drive == patrolbot::DRIVE_ALLOWED_DOCK_TURN &&
+                !departure.used) {
+              departure.used = true;
+              ArLog::log(
+                  ArLog::Normal,
+                  "Dock-turn authorization in use: linear=%.3f m/s, "
+                  "angular=%.3f rad/s, charge=%d.",
+                  command.linear, command.angular, state.charge_state);
+            }
+            if (!zero && drive == patrolbot::DRIVE_REJECTED &&
+                departure.active) {
+              departure.active = false;
+              if (state.charge_state != 0 && state.motors_enabled) {
+                robot.lock();
+                robot.disableMotors();
+                robot.unlock();
+              }
+            }
             if (!permitted) {
               ArLog::log(ArLog::Terse,
-                         "DRIVE refused: bounded=%d pending=%d charge=%d motors=%d estop=%d",
-                         bounded ? 1 : 0, pending.active ? 1 : 0,
+                         "DRIVE refused: pending=%d charge=%d motors=%d "
+                         "estop=%d departure=%d turn=%d",
+                         pending.active ? 1 : 0,
                          state.charge_state, state.motors_enabled ? 1 : 0,
-                         state.estop_pressed ? 1 : 0);
+                         state.estop_pressed ? 1 : 0,
+                         departure.active ? 1 : 0,
+                         departure.turn_allowed ? 1 : 0);
             }
           } else if (command.type == patrolbot::COMMAND_CHARGE_RELEASE ||
                      command.type == patrolbot::COMMAND_MOTOR_ENABLE) {
             startControl(command, &robot, &pending, &responses,
-                         &request_tracker);
+                         &request_tracker, &departure);
           } else {
             ArLog::log(ArLog::Terse, "Rejected command: %s",
                        command.error.c_str());
@@ -475,7 +625,27 @@ int main(int argc, char** argv) {
         client_connected = false;
       }
 
-      updateControl(&robot, &pending, &responses, &request_tracker);
+      updateControl(
+          &robot, &pending, &responses, &request_tracker, &departure);
+
+      if (departure.active &&
+          departure.activated_at.mSecSince() >
+              authorizationWindowMs(departure)) {
+        const HardwareSnapshot state = readSnapshot(&robot);
+        departure.active = false;
+        if (state.charge_state != 0 && state.motors_enabled) {
+          robot.lock();
+          robot.setVel(0);
+          robot.setRotVel(0);
+          robot.disableMotors();
+          robot.unlock();
+          watchdogStopped = true;
+          ArLog::log(
+              ArLog::Terse,
+              "Dock-departure authorization expired while still charging; "
+              "base stopped and motors disabled.");
+        }
+      }
 
       if (!watchdogStopped && lastCmdTime.mSecSince() > 750) {
         robot.lock();
@@ -580,7 +750,7 @@ int main(int argc, char** argv) {
     robot.setVel(0);
     robot.setRotVel(0);
     robot.stop();
-    if (pending.active) {
+    if (pending.active || departure.active) {
       robot.disableMotors();
     }
     robot.unlock();

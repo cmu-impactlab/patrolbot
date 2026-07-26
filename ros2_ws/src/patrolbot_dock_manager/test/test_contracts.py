@@ -106,6 +106,20 @@ def test_commissioned_front_dock_contact_allows_only_straight_reverse_away():
         allow_front_bumper_while_reversing=True)
 
 
+def test_transient_charge_is_allowed_only_for_the_scoped_departure_grace():
+    reasserted = replace(
+        SAFE_REVERSE, charge_state=3, front_bumper_pressed=True)
+    assert reverse_failures(reasserted, 7)
+    assert reverse_failures(
+        reasserted, 7,
+        allow_front_bumper_while_reversing=True,
+        allow_transient_dock_charge=True) == []
+    assert reverse_failures(
+        replace(reasserted, rear_bumper_pressed=True), 7,
+        allow_front_bumper_while_reversing=True,
+        allow_transient_dock_charge=True)
+
+
 def test_hardware_reconnect_aborts_reverse():
     assert reverse_failures(replace(SAFE_REVERSE, session_generation=8), 7)
 

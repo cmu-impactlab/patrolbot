@@ -13,6 +13,7 @@ from patrolbot_bridge.control_protocol import (
     COMMAND_MOTOR_ENABLE,
     ControlReply,
     format_request,
+    motor_enable_charge_allowed,
     parse_reply,
     valid_request_id,
 )
@@ -151,6 +152,8 @@ class PatrolBotBridge(Node):
         self._flags = 0
         self._fault_flags = 0
         self._stall_value = 0
+        self._release_confirmed_at = 0.0
+        self._release_confirmed_generation = -1
 
         # The stall word's physical bumper mapping is unresolved on this robot.
         # Keep it invalid until controlled testing supplies explicit masks.
@@ -258,6 +261,8 @@ class PatrolBotBridge(Node):
                     self._link_connected = True
                     self._charge_state_at = 0.0
                     self._flags_at = 0.0
+                    self._release_confirmed_at = 0.0
+                    self._release_confirmed_generation = -1
                     session = self._session_generation
                 self.get_logger().info('Connected to SBC server.')
                 self._receive_loop(sock)
@@ -763,6 +768,11 @@ class PatrolBotBridge(Node):
             motors = self._motors_enabled
             estop = self._estop_pressed
             fault_flags = self._fault_flags
+            stall_value = self._stall_value
+            release_age = (
+                started - self._release_confirmed_at
+                if self._release_confirmed_at else math.inf)
+            release_generation = self._release_confirmed_generation
         with self._pose_lock:
             linear = self._vx
             angular = self._vth
@@ -784,6 +794,9 @@ class PatrolBotBridge(Node):
             return self._fill_control_response(
                 response, None, 3, 'hardware fault flags are nonzero', started)
         if command == COMMAND_CHARGE_RELEASE:
+            with self._state_lock:
+                self._release_confirmed_at = 0.0
+                self._release_confirmed_generation = -1
             if charge_state < 0:
                 return self._fill_control_response(
                     response, None, 3, 'charge state is invalid', started)
@@ -796,7 +809,10 @@ class PatrolBotBridge(Node):
                     response, None, 3,
                     'motors enabled while charge is already released', started)
         if command == COMMAND_MOTOR_ENABLE:
-            if charge_state != 0:
+            recent_release = (
+                release_generation == generation and release_age <= 15.0)
+            if not motor_enable_charge_allowed(
+                    charge_state, recent_release):
                 return self._fill_control_response(
                     response, None, 3, 'motor enable refused while charging',
                     started)
@@ -804,6 +820,12 @@ class PatrolBotBridge(Node):
                 return self._fill_control_response(
                     response, None, 3, 'motor enable refused while E-stop asserted',
                     started)
+            # The post-release exception is single-use at the bridge. The SBC
+            # independently revalidates the same session, time, stationary,
+            # E-stop, and fault conditions before touching hardware.
+            with self._state_lock:
+                self._release_confirmed_at = 0.0
+                self._release_confirmed_generation = -1
 
         key = (command, request_id)
         pending = PendingControl(command, request_id, generation)
@@ -845,6 +867,11 @@ class PatrolBotBridge(Node):
             return self._fill_control_response(
                 response, reply, 6, reply.message, started,
                 accepted=reply.accepted)
+        if command == COMMAND_CHARGE_RELEASE and reply.success:
+            with self._state_lock:
+                if self._session_generation == generation:
+                    self._release_confirmed_at = time.monotonic()
+                    self._release_confirmed_generation = generation
         self.get_logger().info(
             f'{command} request {request_id} completed: '
             f'success={reply.success}, code={reply.code}, message={reply.message}.')

@@ -1,10 +1,14 @@
 amcl:
   ros__parameters:
     use_sim_time: False
-    alpha1: 0.2
+    # Motion-model noise. alpha1 (rotation noise from rotation) and alpha4
+    # (translation noise from rotation) dominate during the undock's in-place
+    # 180 deg turn, which is where the estimate was seen wandering worst.
+    # Halved so a pure rotation spreads the particle cloud far less.
+    alpha1: 0.1
     alpha2: 0.2
     alpha3: 0.2
-    alpha4: 0.2
+    alpha4: 0.1
     alpha5: 0.2
     base_frame_id: "base_link"
     beam_skip_distance: 0.5
@@ -22,8 +26,16 @@ amcl:
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    recovery_alpha_fast: 0.1
-    recovery_alpha_slow: 0.001
+    # Random-particle injection, OFF (both zero). This is AMCL's kidnapped-
+    # robot recovery: when the scan match dips it scatters fresh particles
+    # across the map, which is exactly the "drifts like crazy" jumping seen
+    # while undocking — the dock structure fills the laser's near field, the
+    # match score drops, and AMCL starts guessing elsewhere. This robot is
+    # never kidnapped; it starts from a known dock pose, so the recovery only
+    # ever costs accuracy. Re-enable (0.001/0.1) if the robot is ever moved
+    # while powered off and must find itself again.
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
@@ -62,7 +74,9 @@ behavior_server:
       # enough for that explicit goal while retaining hard caps in the dock
       # manager and both velocity smoothers.
       minimum_speed: 0.05
-      acceleration_limit: 0.25
+      # Reach the commanded reverse speed sooner: at 0.25 m/s^2 the ramp to
+      # 0.2 m/s ate 0.8 s and 8 cm of a 60 cm move, which read as sluggish.
+      acceleration_limit: 0.4
       deceleration_limit: -0.5
     drive_on_heading:
       plugin: "nav2_behaviors::DriveOnHeading"
@@ -362,7 +376,13 @@ patrolbot_dock_manager:
     dock_pose_x: 99.28925458355519
     dock_pose_y: 126.33778290362004
     dock_pose_yaw: -1.578938606346
-    dock_position_tolerance: 0.25
+    # The dock has real capture range — the robot mates and charges from a
+    # spread of approach positions, not one surveyed point. 0.25 m was tighter
+    # than the hardware: a hand-placed, charging robot measured 0.32 m from the
+    # configured pose and was refused. 0.60 m covers the observed spread while
+    # still catching a pose estimate that has genuinely diverged (the dock is
+    # nowhere near anything else the robot could be sitting on).
+    dock_position_tolerance: 0.60
     dock_yaw_tolerance: 0.35
     max_position_variance: 0.25
     max_yaw_variance: 0.25

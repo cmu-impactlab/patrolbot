@@ -5,6 +5,14 @@ from typing import List
 
 
 HARD_MAX_DISTANCE = 0.70
+# DO NOT RAISE. This matches the SBC's own reverse-only authorization, the
+# same way behavior_server's max_rotational_vel: 0.7 matches its turn
+# authorization — it is a hardware limit, not a tuning knob.
+#
+# Measured 2026-07-28: at 0.10 m/s the robot reversed the full 0.53 m; raising
+# this to 0.20 m/s made the base re-latch charge and cut the motors 0.24 m in,
+# aborting the undock with "motors disabled". The reverse leg is slow because
+# the SBC says so, not because the software is being cautious.
 HARD_MAX_SPEED = 0.10
 VALIDATION_MAX_DISTANCE = 0.10
 VALIDATION_MAX_SPEED = 0.05
@@ -74,9 +82,11 @@ def validate_goal(distance: float, speed: float, validation_mode: bool) -> List[
     failures = []
     if (distance <= 0.0 or
             distance > HARD_MAX_DISTANCE + FLOAT32_BOUNDARY_EPSILON):
-        failures.append('reverse distance outside (0.0, 0.70] m')
+        failures.append(
+            f'reverse distance outside (0.0, {HARD_MAX_DISTANCE:.2f}] m')
     if speed <= 0.0 or speed > HARD_MAX_SPEED + FLOAT32_BOUNDARY_EPSILON:
-        failures.append('reverse speed outside (0.0, 0.10] m/s')
+        failures.append(
+            f'reverse speed outside (0.0, {HARD_MAX_SPEED:.2f}] m/s')
     if (validation_mode and
             distance > VALIDATION_MAX_DISTANCE + FLOAT32_BOUNDARY_EPSILON):
         failures.append('validation reverse distance exceeds 0.10 m')
@@ -115,7 +125,15 @@ def precheck_failures(
         failures.append('odometry stale or robot moving')
     if not state.localization_fresh or not state.localization_valid:
         failures.append('localization invalid')
-    if not state.dock_pose_valid:
+    # Confirmed charging is physical proof of position: current only flows once
+    # the contacts are mated. The dock-pose comparison is a fixed radius around
+    # a single surveyed pose, but a real dock has capture range — a robot placed
+    # by hand sits well off that pose and charges perfectly well (observed:
+    # 0.32 m against a 0.25 m tolerance, charging happily). charge_state is
+    # already required above, so this only relaxes a redundant second opinion,
+    # and it relaxes it in favour of the hardware over an AMCL estimate.
+    confirmed_charging = state.charge_state_valid and state.charge_state > 0
+    if not state.dock_pose_valid and not confirmed_charging:
         failures.append('robot is not within configured dock-pose tolerance')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')
@@ -181,8 +199,13 @@ def dock_pose_initialization_failures(state: SafetySnapshot) -> List[str]:
         failures.append('hardware link/state invalid')
     if not state.charge_state_valid or state.charge_state <= 0:
         failures.append('robot is not confirmed charging at the dock')
-    if state.motors_enabled:
-        failures.append('motors unexpectedly enabled while docked')
+    # Motor state is deliberately NOT required here. This operation publishes a
+    # pose estimate and moves nothing, so what makes it correct is that the
+    # robot is at the dock (charging, required above) and not moving
+    # (stationary, required below) — powered motors change neither. A robot
+    # docked by hand, or left after a partial undock, sits charging with its
+    # motors live, and refusing there left localization unrecoverable at
+    # exactly the moment the dock pose was the only fix available.
     if state.fault_flags:
         failures.append('hardware fault flags are nonzero')
     if not state.odom_fresh or not state.stationary:

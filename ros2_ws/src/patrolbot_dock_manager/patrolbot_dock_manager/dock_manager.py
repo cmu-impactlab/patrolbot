@@ -449,13 +449,27 @@ class DockManager(Node):
             # may already have reasserted, so accept that state only while the
             # commissioned front dock contact remains present. The SBC owns the
             # independent short reverse-only authorization and expiry.
-            if not self._wait_for_operator_motor_state(
-                    goal_handle, expected_session, 1.0, correlation_id,
-                    allow_transient_dock_charge=True):
+            # The declared operator_motor_window (10 s) exists for exactly this
+            # wait and was never wired up — the hardcoded 1.0 s was shorter than
+            # the base takes to report motors live after a PWR-ON, so undock
+            # aborted with MOTOR_STATE_FAILED on a robot that was powering up
+            # perfectly normally.
+            motor_ok, observed_session = self._wait_for_operator_motor_state(
+                goal_handle, expected_session,
+                float(self.get_parameter('operator_motor_window').value),
+                correlation_id, allow_transient_dock_charge=True,
+                allow_session_advance=True)
+            if not motor_ok:
                 return self._abort(
                     goal_handle, Undock.Result.MOTOR_STATE_FAILED,
                     'motor state did not confirm after explicit enable',
                     initial_charge, manual_recovery=True)
+            if observed_session != expected_session:
+                self.get_logger().info(
+                    f'undock={correlation_id} base session advanced '
+                    f'{expected_session} -> {observed_session} across the '
+                    f'commanded PWR-ON; adopting it as the new baseline')
+                expected_session = observed_session
 
             # Release confirmation takes several seconds while the robot is
             # stationary, so the precheck AMCL sample can age out. Refresh it
@@ -610,26 +624,42 @@ class DockManager(Node):
 
     def _wait_for_operator_motor_state(
             self, goal_handle, expected_session, timeout, correlation_id,
-            allow_transient_dock_charge=False):
+            allow_transient_dock_charge=False, allow_session_advance=False):
+        """Wait for the base to report motors live.
+
+        Returns (ok, observed_session). `allow_session_advance` tolerates the
+        session generation moving FORWARD while waiting: powering the motors
+        after a charge release is itself a PWR-ON cycle on this hardware, and
+        the SBC bumps its session for it. Treating that as a mid-operation
+        restart aborted every undock ~0.4 s into VERIFY_ESTOP_AND_MOTOR — long
+        before the motors, which did come on, could be observed. The caller
+        adopts the returned session so a LATER change is still caught.
+        """
         deadline = time.monotonic() + timeout
+        observed_session = expected_session
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
-                return False
+                return False, observed_session
             self._request_localization_update()
             state = self._snapshot()
-            if (state.session_generation != expected_session or
+            session_ok = (
+                state.session_generation == expected_session or
+                (allow_session_advance and
+                 state.session_generation > expected_session))
+            if (not session_ok or
                     not state.link_connected or not state.hardware_state_valid):
-                return False
+                return False, observed_session
+            observed_session = state.session_generation
             charge_allowed = (
                 state.charge_state == 0 or
                 (allow_transient_dock_charge and
                  state.front_bumper_pressed))
             if (state.charge_state_valid and charge_allowed and
                     not state.estop_pressed and state.motors_enabled):
-                return True
+                return True, observed_session
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
-        return False
+        return False, observed_session
 
     def _wait_for_localization(
             self, goal_handle, timeout, correlation_id):
@@ -747,6 +777,18 @@ class DockManager(Node):
         if (not state.bumpers_valid or state.front_bumper_pressed or
                 state.rear_bumper_pressed):
             return False, 'dock contacts are not clear for charge release'
+        # Nothing to clear. This step exists to drop a charge state the base
+        # RE-latched while backing away; when the base already reports 0 the
+        # release issued before the reverse is still in force. Asking for
+        # CHARGE 0 again is rejected by the SBC ("motors enabled while charge
+        # is already released") precisely because the motors are live for this
+        # manoeuvre — a rejection that means "already done", not "failed", and
+        # which aborted the undock one step from finishing.
+        if state.charge_state_valid and state.charge_state == 0:
+            self.get_logger().info(
+                f'undock={correlation_id} charge already released after '
+                f'reverse; no latch to clear')
+            return True, ''
         if not self._release_client.wait_for_service(timeout_sec=1.0):
             return False, 'post-motion charge-release service unavailable'
         for attempt in range(2):
@@ -803,8 +845,11 @@ class DockManager(Node):
             return False, message
         if response.session_generation != expected_session:
             return False, 'hardware session changed during turn motor enable'
-        if not self._wait_for_operator_motor_state(
-                goal_handle, expected_session, 1.0, correlation_id):
+        motor_ok, _observed = self._wait_for_operator_motor_state(
+                goal_handle, expected_session,
+                float(self.get_parameter('operator_motor_window').value),
+                correlation_id, allow_session_advance=True)
+        if not motor_ok:
             return False, 'motor state did not confirm before turn'
         return True, ''
 
@@ -837,7 +882,14 @@ class DockManager(Node):
             self._request_localization_update()
             failures = reverse_failures(
                 self._snapshot(), expected_session,
-                allow_front_bumper_while_reversing=False,
+                # Same allowance as the reverse leg, and for the same reason:
+                # on a commissioned dock the front bumper is held by the dock
+                # itself and can stay latched after the robot has physically
+                # backed clear. Hardcoding False here aborted the turn on an
+                # expected mechanical state. Rear bumper and rear sonar still
+                # block unconditionally.
+                allow_front_bumper_while_reversing=bool(
+                    self.get_parameter('allow_front_bumper_at_dock').value),
                 # The base can relatch charge state 3 after the robot is
                 # physically clear. The preceding stationary release+enable
                 # pair arms the SBC's independent turn-only authorization.
@@ -977,7 +1029,15 @@ class DockManager(Node):
             covariance[0], covariance[7], covariance[35])
         if not all(math.isfinite(value) for value in values):
             return False, False
-        valid = (
+        # bool() here is load-bearing, not decoration. `covariance` is
+        # numpy-backed, so each comparison yields numpy.bool_ and `and` returns
+        # the last operand — leaving `valid` a numpy.bool_. Assigning that to a
+        # ROS bool field aborts the whole process: rosidl's C converter asserts
+        # PyBool_Check, numpy.bool_ fails it (it is not a subclass of bool),
+        # and a failed assertion is SIGABRT. That killed this node on every
+        # DockReadiness publish and mid-undock on the first feedback — but only
+        # once AMCL had a pose, since this returns early on `pose is None`.
+        valid = bool(
             covariance[0] <= self.get_parameter('max_position_variance').value and
             covariance[7] <= self.get_parameter('max_position_variance').value and
             covariance[35] <= self.get_parameter('max_yaw_variance').value)
@@ -991,12 +1051,12 @@ class DockManager(Node):
         target_yaw = float(self.get_parameter('dock_pose_yaw').value)
         yaw_error = math.atan2(
             math.sin(yaw - target_yaw), math.cos(yaw - target_yaw))
-        at_dock = (
+        at_dock = bool(
             math.hypot(dx, dy) <=
             float(self.get_parameter('dock_position_tolerance').value) and
             abs(yaw_error) <=
             float(self.get_parameter('dock_yaw_tolerance').value))
-        return valid, valid and at_dock
+        return valid, bool(valid and at_dock)
 
     @staticmethod
     def _yaw(quaternion):

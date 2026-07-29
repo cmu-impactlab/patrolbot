@@ -1,0 +1,32 @@
+# Clear the SBC dock observer's FAULT_STOPPED state.
+#
+# A failed or cancelled undock leaves the robot stopped with its motors
+# disabled and the dock observer latched in FAULT_STOPPED, which refuses all
+# motion. Only this operation clears it, and only once the underlying condition
+# has actually gone: a charger release never clears a fault, because it does
+# not resolve an encoder failure, a bumper fault, an E-stop or a sonar failure.
+#
+# Zero motion. This never moves the robot, enables motors or touches charging.
+
+# Caller-generated UUID. Reusing the UUID replays the original result.
+string request_id
+---
+uint16 OK=0
+uint16 INVALID_REQUEST=1
+uint16 LINK_UNAVAILABLE=2
+uint16 PRECONDITION_FAILED=3
+uint16 HARDWARE_REJECTED=4
+uint16 TIMEOUT=5
+uint16 SESSION_CHANGED=6
+uint16 PROTOCOL_ERROR=7
+
+bool accepted
+bool success
+uint16 code
+string message
+string request_id
+int16 charge_state
+bool motors_enabled
+bool estop_pressed
+uint64 session_generation
+float32 elapsed_seconds

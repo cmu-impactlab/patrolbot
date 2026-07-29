@@ -281,6 +281,8 @@ patrolbot::UndockHardwareProfile loadProfile(const char* path) {
       profile.max_lateral_drift_m = std::atof(value.c_str());
     } else if (key == "max_departure_yaw_rad") {
       profile.max_departure_yaw_rad = std::atof(value.c_str());
+    } else if (key == "pose_guard_start_m") {
+      profile.pose_guard_start_m = std::atof(value.c_str());
     } else if (key == "braking_margin_m") {
       profile.braking_margin_m = std::atof(value.c_str());
     } else if (key == "sonar_uncertainty_m") {

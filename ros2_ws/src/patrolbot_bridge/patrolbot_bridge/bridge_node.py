@@ -11,6 +11,7 @@ from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
 from patrolbot_bridge.control_protocol import (
     COMMAND_CHARGE_RELEASE,
+    COMMAND_DOCK_RESET,
     COMMAND_MOTOR_ENABLE,
     ControlReply,
     format_request,
@@ -38,7 +39,7 @@ from patrolbot_bridge.safety_telemetry import (
 )
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.msg import BaseState
-from patrolbot_interfaces.srv import ChargeRelease, MotorEnable
+from patrolbot_interfaces.srv import ChargeRelease, DockReset, MotorEnable
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -112,6 +113,11 @@ class PatrolBotBridge(Node):
         self.motor_enable_srv = self.create_service(
             MotorEnable, '/patrolbot/motor_enable',
             self._motor_enable_callback)
+        # The only way out of the SBC's FAULT_STOPPED dock state. Without it a
+        # failed undock leaves the robot unable to move with no recovery path.
+        self.dock_reset_srv = self.create_service(
+            DockReset, '/patrolbot/dock_reset',
+            self._dock_reset_callback)
 
         self.declare_parameter('server_ip', '10.0.0.1')
         self.declare_parameter('server_port', 7272)
@@ -874,6 +880,10 @@ class PatrolBotBridge(Node):
         return self._control_service(
             COMMAND_MOTOR_ENABLE, request.request_id, response)
 
+    def _dock_reset_callback(self, request, response):
+        return self._control_service(
+            COMMAND_DOCK_RESET, request.request_id, response)
+
     def _control_service(self, command, request_id, response):
         started = time.monotonic()
         response.request_id = request_id
@@ -923,6 +933,10 @@ class PatrolBotBridge(Node):
         if undock_active:
             return self._fill_control_response(
                 response, None, 3, 'the undock state machine owns motion',
+                started)
+        if command == COMMAND_DOCK_RESET and estop:
+            return self._fill_control_response(
+                response, None, 3, 'dock reset refused while E-stop asserted',
                 started)
         if command == COMMAND_CHARGE_RELEASE:
             if charge_state < 0:

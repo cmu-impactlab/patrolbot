@@ -184,6 +184,11 @@ struct UndockHardwareProfile {
   double max_timeout_s;
   double max_lateral_drift_m;
   double max_departure_yaw_rad;
+  // Reverse progress at which the pose guard engages if the contacts have not
+  // already been observed to release. Heading and lateral deviation are not
+  // policed before that point: while the dock still holds the robot its
+  // heading is imposed by the fixture, not chosen by the controller.
+  double pose_guard_start_m;
   double braking_margin_m;
   double sonar_uncertainty_m;
   long charge_resend_min_ms;
@@ -407,6 +412,9 @@ class UndockController {
   void queueEffect(UndockOutputs* out, HardwareEffect effect);
   void resetMotionReference(const UndockInputs& inputs);
   void captureDeparturePose(const UndockInputs& inputs);
+  // Second reference, taken when the robot comes free of the dock. Distance is
+  // always measured from the departure pose; deviation is measured from here.
+  void captureGuardPose(const UndockInputs& inputs);
   void computeProgress(const UndockInputs& inputs, UndockOutputs* out) const;
   bool safetyTripped(const UndockInputs& inputs, UndockOutputs* out);
   void runPhase(const UndockInputs& inputs, UndockOutputs* out);
@@ -442,6 +450,10 @@ class UndockController {
   double start_x_mm_;
   double start_y_mm_;
   double start_yaw_rad_;
+  bool guard_captured_;
+  double guard_x_mm_;
+  double guard_y_mm_;
+  double guard_yaw_rad_;
   double effective_clearance_m_;
 
   double motion_reference_odometer_m_;

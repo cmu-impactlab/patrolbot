@@ -575,7 +575,10 @@ void test_progress_is_projected_not_euclidean() {
   bool offset_applied = false;
   for (int i = 0; i < 2000; ++i) {
     const UndockOutputs out = base.tick();
-    if (!offset_applied && out.phase == UNDOCK_PHASE_BACKING_OUT) {
+    // Applied after the pose guard engages (contact_break_m is 0.05), so the
+    // offset is measured rather than absorbed into the free-running baseline.
+    if (!offset_applied && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.08) {
       base.inputs.enc_y_mm += 50.0;  // 0.05 m, inside the 0.06 m limit
       offset_applied = true;
     }
@@ -591,18 +594,63 @@ void test_progress_is_projected_not_euclidean() {
   CHECK(false);
 }
 
-void test_heading_error_beyond_limit_stops() {
+// The dock physically twists this robot about 12 degrees while the charger is
+// still engaged (measured 2026-07-29, confirmed by AMCL). Policing that against
+// the docked pose aborted a departure that was behaving exactly as the fixture
+// forces it to.
+void test_dock_imposed_yaw_during_capture_does_not_abort() {
   FakeBase base;
+  base.contact_break_m = 0.20;
+  base.charge_reassert_after_ms = 200;
   settleDocked(&base);
   CHECK(base.startDefault());
+
+  bool twisted = false;
   for (int i = 0; i < 2000; ++i) {
     const UndockOutputs out = base.tick();
-    if (out.phase == UNDOCK_PHASE_BACKING_OUT && out.reverse_progress_m > 0.05) {
-      base.inputs.enc_yaw_deg = 25.0;  // 0.44 rad
+    // Twist it well past the 0.12 rad limit while the dock still holds it.
+    if (!twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.03) {
+      base.inputs.enc_yaw_deg = 15.0;  // 0.26 rad, more than double the cap
+      twisted = true;
+    }
+    if (twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m < 0.15) {
+      // While captured, the reported deviation is the fixture's, not the
+      // controller's, so it must read as zero rather than as a fault.
+      CHECK(out.heading_error_rad < 0.01);
     }
     if (out.finished) {
+      CHECK(twisted);
+      CHECK(out.success);
+      CHECK(base.inputs.motors_enabled);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
+void test_yaw_after_the_robot_is_free_still_aborts() {
+  // The guard must still do its job once the robot is actually driving itself.
+  FakeBase base;
+  base.contact_break_m = 0.10;
+  base.charge_reassert_after_ms = 200;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+
+  bool twisted = false;
+  for (int i = 0; i < 2000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.30) {
+      base.inputs.enc_yaw_deg += 15.0;
+      twisted = true;
+    }
+    if (out.finished) {
+      CHECK(twisted);
       CHECK(!out.success);
       CHECK_EQ_INT(out.code, UNDOCK_MOTION_FAILED);
+      CHECK(!base.inputs.motors_enabled);
       return;
     }
   }
@@ -1215,7 +1263,8 @@ int main() {
   RUN(test_lateral_drift_beyond_limit_stops);
   RUN(test_forward_motion_is_never_counted_as_progress);
   RUN(test_progress_is_projected_not_euclidean);
-  RUN(test_heading_error_beyond_limit_stops);
+  RUN(test_dock_imposed_yaw_during_capture_does_not_abort);
+  RUN(test_yaw_after_the_robot_is_free_still_aborts);
   RUN(test_rear_obstacle_during_reverse_stops_immediately);
   RUN(test_insufficient_rear_room_is_refused_before_any_motion);
   RUN(test_stale_rear_sensor_is_never_clear);

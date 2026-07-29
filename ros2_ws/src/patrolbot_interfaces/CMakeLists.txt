@@ -14,6 +14,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/GimbalCommand.msg"
   "msg/GimbalState.msg"
   "srv/ChargeRelease.srv"
+  "srv/DockReset.srv"
   "srv/InitializeDockPose.srv"
   "srv/MotorEnable.srv"
   "action/HardwareUndock.action"

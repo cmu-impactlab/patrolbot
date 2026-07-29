@@ -71,6 +71,7 @@ UndockHardwareProfile::UndockHardwareProfile()
       max_timeout_s(60.0),
       max_lateral_drift_m(0.06),
       max_departure_yaw_rad(0.12),
+      pose_guard_start_m(0.25),
       braking_margin_m(0.10),
       sonar_uncertainty_m(0.05),
       charge_resend_min_ms(400),
@@ -416,6 +417,7 @@ bool UndockController::request(const std::string& request_id,
   handoff_enable_issued_ = false;
   stop_disable_issued_ = false;
   departure_captured_ = false;
+  guard_captured_ = false;
   effective_clearance_m_ = config_.clearance_m;
   stationary_cycles_ = 0;
   observer_->beginDeparture(inputs);
@@ -503,6 +505,13 @@ void UndockController::captureDeparturePose(const UndockInputs& inputs) {
   departure_captured_ = true;
 }
 
+void UndockController::captureGuardPose(const UndockInputs& inputs) {
+  guard_x_mm_ = inputs.enc_x_mm;
+  guard_y_mm_ = inputs.enc_y_mm;
+  guard_yaw_rad_ = inputs.enc_yaw_deg * M_PI / 180.0;
+  guard_captured_ = true;
+}
+
 void UndockController::computeProgress(const UndockInputs& inputs,
                                        UndockOutputs* out) const {
   if (!departure_captured_) {
@@ -518,10 +527,29 @@ void UndockController::computeProgress(const UndockInputs& inputs,
   const double sin_yaw = std::sin(start_yaw_rad_);
   // Signed progress along the reverse of the departure heading. Euclidean
   // distance would count movement in any direction, including sideways slip.
+  // This is always measured from the dock, because that is what clearance
+  // means.
   out->reverse_progress_m = -(dx * cos_yaw + dy * sin_yaw);
-  out->lateral_error_m = std::fabs(-dx * sin_yaw + dy * cos_yaw);
+
+  if (!guard_captured_) {
+    // Still mechanically captured. Measured on this dock 2026-07-29: the robot
+    // is twisted about 12 degrees, confirmed independently by AMCL, while the
+    // charger is still engaged at 0.147 m. That rotation is imposed by the
+    // fixture, so reporting it as controller deviation aborted a departure that
+    // was behaving exactly as the hardware forces it to.
+    out->lateral_error_m = 0.0;
+    out->heading_error_rad = 0.0;
+    return;
+  }
+  // Free-running reference: deviation is what the robot has done since it came
+  // off the dock, which is the only part the controller is responsible for.
+  const double gx = (inputs.enc_x_mm - guard_x_mm_) / 1000.0;
+  const double gy = (inputs.enc_y_mm - guard_y_mm_) / 1000.0;
+  const double guard_cos = std::cos(guard_yaw_rad_);
+  const double guard_sin = std::sin(guard_yaw_rad_);
+  out->lateral_error_m = std::fabs(-gx * guard_sin + gy * guard_cos);
   out->heading_error_rad = std::fabs(
-      wrapToPi(inputs.enc_yaw_deg * M_PI / 180.0 - start_yaw_rad_));
+      wrapToPi(inputs.enc_yaw_deg * M_PI / 180.0 - guard_yaw_rad_));
 }
 
 bool UndockController::safetyTripped(const UndockInputs& inputs,
@@ -646,13 +674,28 @@ void UndockController::runPhase(const UndockInputs& inputs,
         beginStopping(UNDOCK_SENSOR_BLOCKED, "rear_path_blocked", now);
         break;
       }
-      if (out->lateral_error_m > profile_.max_lateral_drift_m) {
-        beginStopping(UNDOCK_MOTION_FAILED, "lateral_drift_exceeded", now);
-        break;
+      // The pose guard engages once the robot is demonstrably free of the
+      // dock, or once it has come far enough back that it must be. Before that
+      // the fixture dictates the heading and policing it aborts a healthy
+      // departure.
+      if (!guard_captured_) {
+        const bool released =
+            inputs.charge_state == 0 && !frontContactPressed(inputs, profile_);
+        if (released ||
+            out->reverse_progress_m >= profile_.pose_guard_start_m) {
+          captureGuardPose(inputs);
+          computeProgress(inputs, out);
+        }
       }
-      if (out->heading_error_rad > profile_.max_departure_yaw_rad) {
-        beginStopping(UNDOCK_MOTION_FAILED, "heading_error_exceeded", now);
-        break;
+      if (guard_captured_) {
+        if (out->lateral_error_m > profile_.max_lateral_drift_m) {
+          beginStopping(UNDOCK_MOTION_FAILED, "lateral_drift_exceeded", now);
+          break;
+        }
+        if (out->heading_error_rad > profile_.max_departure_yaw_rad) {
+          beginStopping(UNDOCK_MOTION_FAILED, "heading_error_exceeded", now);
+          break;
+        }
       }
       if (out->reverse_progress_m < -kForwardMotionToleranceM) {
         beginStopping(UNDOCK_MOTION_FAILED, "forward_motion_detected", now);
@@ -709,8 +752,11 @@ void UndockController::runPhase(const UndockInputs& inputs,
         enterPhase(UNDOCK_PHASE_BACKING_OUT, now);
         break;
       }
-      if (out->lateral_error_m > profile_.max_lateral_drift_m ||
-          out->heading_error_rad > profile_.max_departure_yaw_rad) {
+      // Only meaningful once the free-running reference exists; before that
+      // the reported deviation is the dock's doing, not the controller's.
+      if (guard_captured_ &&
+          (out->lateral_error_m > profile_.max_lateral_drift_m ||
+           out->heading_error_rad > profile_.max_departure_yaw_rad)) {
         beginStopping(UNDOCK_MOTION_FAILED, "departure_pose_out_of_limits",
                       now);
         break;

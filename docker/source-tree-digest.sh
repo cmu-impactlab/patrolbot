@@ -49,6 +49,8 @@ LC_ALL=C find "${paths[@]}" -type f \
   ! -path '*/log/*' \
   ! -name '*.pyc' \
   ! -name '*.bak' \
+  ! -name '*.bak-*' \
+  ! -name '*.precontroller.bak' \
   ! -name '*~' \
   ! -name 'patrolbot_server' \
   ! -name 'patrolbot_commission_probe' \

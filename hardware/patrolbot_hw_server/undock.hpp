@@ -184,10 +184,9 @@ struct UndockHardwareProfile {
   double max_timeout_s;
   double max_lateral_drift_m;
   double max_departure_yaw_rad;
-  // Reverse progress at which the pose guard engages if the contacts have not
-  // already been observed to release. Heading and lateral deviation are not
-  // policed before that point: while the dock still holds the robot its
-  // heading is imposed by the fixture, not chosen by the controller.
+  // Reverse progress at which the pose guard engages. Charge state and front
+  // bumper release cannot engage it early: both can change while the fixture
+  // is still imposing the robot's departure heading.
   double pose_guard_start_m;
   double braking_margin_m;
   double sonar_uncertainty_m;

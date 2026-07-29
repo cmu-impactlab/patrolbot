@@ -521,7 +521,7 @@ void test_lateral_drift_beyond_limit_stops() {
   CHECK(base.startDefault());
   for (int i = 0; i < 2000; ++i) {
     const UndockOutputs out = base.tick();
-    if (out.phase == UNDOCK_PHASE_BACKING_OUT && out.reverse_progress_m > 0.05) {
+    if (out.phase == UNDOCK_PHASE_BACKING_OUT && out.reverse_progress_m > 0.30) {
       base.inputs.enc_y_mm += 200.0;  // 0.2 m sideways, well past the limit
     }
     if (out.finished) {
@@ -566,19 +566,18 @@ void test_progress_is_projected_not_euclidean() {
   // A lateral offset inside the drift limit must not inflate the reported
   // distance: a Euclidean measure would, a projection does not.
   FakeBase base;
-  base.contact_break_m = 0.05;
   settleDocked(&base);
   int code = 0;
   std::string message;
-  CHECK(base.start(0.20, 0.10, 30.0, false, &code, &message));
+  CHECK(base.start(0.40, 0.10, 30.0, false, &code, &message));
 
   bool offset_applied = false;
   for (int i = 0; i < 2000; ++i) {
     const UndockOutputs out = base.tick();
-    // Applied after the pose guard engages (contact_break_m is 0.05), so the
-    // offset is measured rather than absorbed into the free-running baseline.
+    // Applied after the 0.25 m pose guard, so the offset is measured rather
+    // than absorbed into the free-running baseline.
     if (!offset_applied && out.phase == UNDOCK_PHASE_BACKING_OUT &&
-        out.reverse_progress_m > 0.08) {
+        out.reverse_progress_m > 0.30) {
       base.inputs.enc_y_mm += 50.0;  // 0.05 m, inside the 0.06 m limit
       offset_applied = true;
     }
@@ -608,7 +607,7 @@ void test_dock_imposed_yaw_during_capture_does_not_abort() {
   bool twisted = false;
   for (int i = 0; i < 2000; ++i) {
     const UndockOutputs out = base.tick();
-    // Twist it well past the 0.12 rad limit while the dock still holds it.
+    // Twist it past the 0.20 rad limit while the dock still holds it.
     if (!twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
         out.reverse_progress_m > 0.03) {
       base.inputs.enc_yaw_deg = 15.0;  // 0.26 rad, more than double the cap
@@ -624,6 +623,98 @@ void test_dock_imposed_yaw_during_capture_does_not_abort() {
       CHECK(twisted);
       CHECK(out.success);
       CHECK(base.inputs.motors_enabled);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
+void test_early_charge_zero_and_front_release_do_not_arm_pose_guard() {
+  // Reproduces the physical failure: both logical release signals changed
+  // before the fixture had finished rotating the robot.
+  FakeBase base;
+  base.contact_break_m = 0.05;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+
+  bool twisted = false;
+  for (int i = 0; i < 2000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.10) {
+      CHECK_EQ_INT(base.inputs.charge_state, 0);
+      CHECK(!frontContactPressed(base.inputs, base.profile));
+      base.inputs.enc_yaw_deg = 15.0;
+      twisted = true;
+    }
+    if (twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m < base.profile.pose_guard_start_m) {
+      CHECK(out.heading_error_rad < 0.01);
+    }
+    if (out.finished) {
+      CHECK(twisted);
+      CHECK(out.success);
+      CHECK(base.inputs.motors_enabled);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
+void test_stale_charge_does_not_change_pose_guard_start() {
+  // The guard boundary must be identical when the controller sees the base's
+  // known stale charge=3 report after release.
+  FakeBase base;
+  base.contact_break_m = 0.05;
+  base.charge_reassert_after_ms = 200;
+  base.charge_reasserts_when_clear = true;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+
+  bool twisted = false;
+  bool saw_stale_charge = false;
+  for (int i = 0; i < 2000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.10) {
+      base.inputs.enc_yaw_deg = 15.0;
+      twisted = true;
+    }
+    if (twisted && base.inputs.charge_state == 3) {
+      saw_stale_charge = true;
+    }
+    if (twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m < base.profile.pose_guard_start_m) {
+      CHECK(out.heading_error_rad < 0.01);
+    }
+    if (out.finished) {
+      CHECK(twisted);
+      CHECK(saw_stale_charge);
+      CHECK(out.success);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
+void test_moderate_yaw_after_the_robot_is_free_is_allowed() {
+  FakeBase base;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+
+  bool twisted = false;
+  for (int i = 0; i < 2000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!twisted && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.30) {
+      base.inputs.enc_yaw_deg += 10.0;  // 0.17 rad, below the 0.20 rad limit
+      twisted = true;
+    }
+    if (out.finished) {
+      CHECK(twisted);
+      CHECK(out.success);
+      CHECK(out.heading_error_rad > 0.15);
+      CHECK(out.heading_error_rad < base.profile.max_departure_yaw_rad);
       return;
     }
   }
@@ -1264,6 +1355,9 @@ int main() {
   RUN(test_forward_motion_is_never_counted_as_progress);
   RUN(test_progress_is_projected_not_euclidean);
   RUN(test_dock_imposed_yaw_during_capture_does_not_abort);
+  RUN(test_early_charge_zero_and_front_release_do_not_arm_pose_guard);
+  RUN(test_stale_charge_does_not_change_pose_guard_start);
+  RUN(test_moderate_yaw_after_the_robot_is_free_is_allowed);
   RUN(test_yaw_after_the_robot_is_free_still_aborts);
   RUN(test_rear_obstacle_during_reverse_stops_immediately);
   RUN(test_insufficient_rear_room_is_refused_before_any_motion);

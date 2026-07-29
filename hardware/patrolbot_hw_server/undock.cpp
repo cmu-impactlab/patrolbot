@@ -70,7 +70,7 @@ UndockHardwareProfile::UndockHardwareProfile()
       max_speed_mps(0.10),
       max_timeout_s(60.0),
       max_lateral_drift_m(0.06),
-      max_departure_yaw_rad(0.12),
+      max_departure_yaw_rad(0.20),
       pose_guard_start_m(0.25),
       braking_margin_m(0.10),
       sonar_uncertainty_m(0.05),
@@ -674,18 +674,15 @@ void UndockController::runPhase(const UndockInputs& inputs,
         beginStopping(UNDOCK_SENSOR_BLOCKED, "rear_path_blocked", now);
         break;
       }
-      // The pose guard engages once the robot is demonstrably free of the
-      // dock, or once it has come far enough back that it must be. Before that
-      // the fixture dictates the heading and policing it aborts a healthy
-      // departure.
-      if (!guard_captured_) {
-        const bool released =
-            inputs.charge_state == 0 && !frontContactPressed(inputs, profile_);
-        if (released ||
-            out->reverse_progress_m >= profile_.pose_guard_start_m) {
-          captureGuardPose(inputs);
-          computeProgress(inputs, out);
-        }
+      // The pose guard engages only after measured reverse progress proves the
+      // robot is beyond the dock fixture. Charge=0 and a cleared front bumper
+      // are not sufficient: on the real dock both happened before the fixture
+      // finished imposing its roughly 12 degree rotation, which captured a
+      // false free-running reference and aborted at 0.141 m.
+      if (!guard_captured_ &&
+          out->reverse_progress_m >= profile_.pose_guard_start_m) {
+        captureGuardPose(inputs);
+        computeProgress(inputs, out);
       }
       if (guard_captured_) {
         if (out->lateral_error_m > profile_.max_lateral_drift_m) {

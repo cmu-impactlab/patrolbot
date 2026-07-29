@@ -1,20 +1,23 @@
-"""Isolated ROS integration tests for the guarded-undock manager."""
+"""Isolated ROS integration tests for the undock orchestrator.
+
+The fake world provides a HardwareUndock server standing in for the SBC. The
+manager under test never commands motion for contact separation, so what these
+tests exercise is the orchestration: preconditions, delegation, handoff
+validation, the collision-aware turn, and fail-closed behaviour when the
+hardware operation fails or the goal is cancelled.
+"""
 
 import os
 import threading
 import time
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-from nav2_msgs.action import BackUp, Spin
+from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.dock_manager import DockManager
-from patrolbot_interfaces.action import Undock
+from patrolbot_interfaces.action import HardwareUndock, Undock
 from patrolbot_interfaces.msg import BaseState
-from patrolbot_interfaces.srv import (
-    ChargeRelease,
-    InitializeDockPose,
-    MotorEnable,
-)
+from patrolbot_interfaces.srv import InitializeDockPose
 import pytest
 import rclpy
 from rclpy.action import (
@@ -45,16 +48,29 @@ class PathNode(Node):
 
 
 class FakeWorld(Node):
+    """Stands in for the SBC-backed bridge and for Nav2's behavior server."""
+
     def __init__(self):
         super().__init__('behavior_server')
         self.callbacks = ReentrantCallbackGroup()
-        self.released = False
-        self.release_calls = 0
-        self.charge_latched = True
-        self.clear_of_dock = False
+        # Dock observer, exactly as the SBC would publish it.
+        self.dock_state = 'DOCKED_CONFIRMED'
+        self.undock_active = False
         self.motors_enabled = False
+        self.charge_state = 2
+        self.redock_inhibited = False
+        self.profile_commissioned = True
         self.sonar_enabled = True
-        self.drop_sonar_on_backup = False
+        # Scripted hardware behaviour.
+        self.undock_calls = 0
+        self.undock_should_succeed = True
+        self.undock_failure_code = HardwareUndock.Result.SENSOR_BLOCKED
+        self.undock_failure_message = 'rear path blocked'
+        self.undock_steps = 6
+        self.undock_reports_clear = True
+        self.undock_leaves_motors_enabled = True
+        self.spin_calls = 0
+
         self.behavior_pub = self.create_publisher(
             Twist, '/input/nav_behavior', 10)
         self.base_pub = self.create_publisher(
@@ -63,14 +79,9 @@ class FakeWorld(Node):
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/amcl_pose', 10)
-        self.release_service = self.create_service(
-            ChargeRelease, '/patrolbot/charge_release', self._release,
-            callback_group=self.callbacks)
-        self.enable_service = self.create_service(
-            MotorEnable, '/patrolbot/motor_enable', self._enable,
-            callback_group=self.callbacks)
-        self.backup_server = ActionServer(
-            self, BackUp, '/backup', execute_callback=self._backup,
+        self.undock_server = ActionServer(
+            self, HardwareUndock, '/patrolbot/hardware_undock',
+            execute_callback=self._hardware_undock,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=self.callbacks)
         self.spin_server = ActionServer(
@@ -80,81 +91,72 @@ class FakeWorld(Node):
         self.timer = self.create_timer(
             0.04, self._publish_state, callback_group=self.callbacks)
 
-    def _release(self, request, response):
-        self.release_calls += 1
-        self.released = True
-        # Model the real zero-motion sequence: release returns with motors off.
-        self.motors_enabled = False
-        response.request_id = request.request_id
-        response.accepted = True
-        if self.release_calls == 3:
-            # The live base reported residual rotational motion on the first
-            # final CHARGE 0 even after Nav2 had completed Spin. The manager
-            # must settle and retry only this exact fail-closed response.
-            response.success = False
-            response.code = ChargeRelease.Response.HARDWARE_REJECTED
-            response.message = 'motion detected during release'
-            response.charge_state = 3
-            response.motors_enabled = False
-            response.estop_pressed = False
-            response.session_generation = 7
-            return response
-        self.charge_latched = False
-        response.success = True
-        response.code = ChargeRelease.Response.OK
-        response.message = 'released by isolated fake'
-        response.charge_state = 0
-        response.motors_enabled = False
-        response.estop_pressed = False
-        response.session_generation = 7
-        return response
-
-    def _enable(self, request, response):
+    def _hardware_undock(self, goal_handle):
+        self.undock_calls += 1
+        self.dock_state = 'DEPARTING'
+        self.undock_active = True
         self.motors_enabled = True
-        # The measured base remains at charge 0 through the second enable
-        # confirmation, then re-latches after Spin starts.
-        self.charge_latched = False
-        response.request_id = request.request_id
-        response.accepted = True
-        response.success = True
-        response.code = MotorEnable.Response.OK
-        response.message = 'enabled by isolated fake'
-        response.charge_state = 0
-        response.motors_enabled = True
-        response.estop_pressed = False
-        response.session_generation = 7
-        return response
-
-    def _backup(self, goal_handle):
-        if self.drop_sonar_on_backup:
-            self.sonar_enabled = False
-        feedback = BackUp.Feedback()
-        for step in range(10):
+        result = HardwareUndock.Result()
+        feedback = HardwareUndock.Feedback()
+        for step in range(self.undock_steps):
             if goal_handle.is_cancel_requested:
+                self._settle(success=False)
+                result.success = False
+                result.code = HardwareUndock.Result.CANCELED
+                result.message = 'canceled'
+                result.distance_traveled = 0.01 * (step + 1)
+                result.motors_enabled = False
+                result.physically_clear = False
+                result.final_dock_state = 'FAULT_STOPPED'
                 goal_handle.canceled()
-                result = BackUp.Result()
-                result.error_code = BackUp.Result.UNKNOWN
-                result.error_msg = 'canceled by manager safety gate'
                 return result
+            feedback.phase = 4
+            feedback.phase_name = 'BACKING_OUT'
             feedback.distance_traveled = 0.01 * (step + 1)
+            feedback.charge_state = 3
+            feedback.motors_enabled = True
+            feedback.minimum_rear_range = 99.0
+            feedback.release_attempts = 0
+            feedback.dock_state = 'DEPARTING'
             goal_handle.publish_feedback(feedback)
-            # Keep charge physically reasserted beyond 0.05 m. The scoped
-            # departure authorization must remain valid until the contacts
-            # actually clear, rather than ending at an arbitrary distance.
-            if step == 7:
-                self.clear_of_dock = True
             time.sleep(0.05)
-        result = BackUp.Result()
-        result.error_code = BackUp.Result.NONE
-        if self.drop_sonar_on_backup:
-            goal_handle.abort()
-            result.error_msg = 'test should have canceled before completion'
-        else:
+
+        success = self.undock_should_succeed
+        self._settle(success=success)
+        result.success = success
+        result.code = (
+            HardwareUndock.Result.OK if success else self.undock_failure_code)
+        result.message = 'undocked' if success else self.undock_failure_message
+        result.distance_traveled = 0.53 if success else 0.12
+        result.release_attempts = 1
+        result.final_charge_state = 3
+        # Success hands off with the motors live; failure leaves them down.
+        result.motors_enabled = bool(
+            success and self.undock_leaves_motors_enabled)
+        result.physically_clear = bool(success and self.undock_reports_clear)
+        result.final_dock_state = (
+            'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED')
+        if success:
             goal_handle.succeed()
+        else:
+            goal_handle.abort()
         return result
 
+    def _settle(self, success):
+        self.undock_active = False
+        if success:
+            self.dock_state = 'CLEAR_CONFIRMED'
+            self.motors_enabled = bool(self.undock_leaves_motors_enabled)
+            self.redock_inhibited = True
+            # The base re-latches a stale charge state after the robot is
+            # physically clear. It must not block anything any more.
+            self.charge_state = 3
+        else:
+            self.dock_state = 'FAULT_STOPPED'
+            self.motors_enabled = False
+
     def _spin(self, goal_handle):
-        self.charge_latched = True
+        self.spin_calls += 1
         time.sleep(0.10)
         result = Spin.Result()
         result.error_code = Spin.Result.NONE
@@ -170,16 +172,22 @@ class FakeWorld(Node):
         state.link_connected = True
         state.telemetry_age = 0.0
         state.hardware_state_valid = True
-        state.charge_state = 2
-        if self.released:
-            state.charge_state = 3 if self.charge_latched else 0
+        state.charge_state = self.charge_state
         state.charge_state_valid = True
         state.motors_enabled = self.motors_enabled
-        state.estop_pressed = not self.released
+        state.estop_pressed = False
         state.fault_flags = 0
         state.bumpers_valid = True
-        state.front_bumper_pressed = not self.clear_of_dock
+        state.front_bumper_pressed = self.dock_state == 'DOCKED_CONFIRMED'
         state.rear_bumper_pressed = False
+        state.dock_state = self.dock_state
+        state.dock_state_valid = True
+        state.undock_active = self.undock_active
+        state.redock_inhibited = self.redock_inhibited
+        state.redock_inhibit_remaining = 60.0 if self.redock_inhibited else 0.0
+        state.undock_profile_commissioned = self.profile_commissioned
+        state.minimum_rear_range = 99.0
+        state.rear_sonar_usable = True
         self.base_pub.publish(state)
 
         if self.sonar_enabled:
@@ -217,7 +225,8 @@ class FakeWorld(Node):
         self.pose_pub.publish(pose)
 
     def destroy_node(self):
-        self.backup_server.destroy()
+        self.undock_server.destroy()
+        self.spin_server.destroy()
         return super().destroy_node()
 
 
@@ -238,11 +247,12 @@ def harness():
         Parameter('dock_pose_x', value=0.0),
         Parameter('dock_pose_y', value=0.0),
         Parameter('dock_pose_yaw', value=0.0),
-        Parameter('allow_front_bumper_at_dock', value=True),
         Parameter('sensor_timeout', value=0.25),
         Parameter('precheck_timeout', value=3.0),
-        Parameter('operator_motor_window', value=1.0),
-        Parameter('backup_timeout', value=2.0),
+        Parameter('undock_clearance_distance', value=0.53),
+        Parameter('undock_reverse_speed', value=0.10),
+        Parameter('undock_max_duration', value=10.0),
+        Parameter('spin_timeout', value=5.0),
         Parameter('dock_pose_initialization_timeout', value=1.0),
     ])
     world = FakeWorld()
@@ -292,7 +302,19 @@ def wait_future(future, timeout=6.0):
     return future.result()
 
 
-def test_operator_dock_pose_initialization_and_guarded_undock(harness):
+def send_undock(client_node, validation_mode=True):
+    client = ActionClient(client_node, Undock, '/patrolbot/undock')
+    assert client.wait_for_server(timeout_sec=1.0)
+    goal = Undock.Goal()
+    goal.dock_id = 'main_charger'
+    goal.reverse_distance = 0.10
+    goal.reverse_speed = 0.05
+    goal.validation_mode = validation_mode
+    goal.operator_authorized = True
+    return wait_future(client.send_goal_async(goal))
+
+
+def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     _manager, world, client_node = harness
     initialize = client_node.create_client(
         InitializeDockPose, '/patrolbot/initialize_dock_pose')
@@ -304,43 +326,112 @@ def test_operator_dock_pose_initialization_and_guarded_undock(harness):
     assert response.success
     assert response.code == InitializeDockPose.Response.OK
 
-    # Reproduce the live manual-charge entry state after pose initialization.
-    world.motors_enabled = True
-
-    client = ActionClient(client_node, Undock, '/patrolbot/undock')
-    assert client.wait_for_server(timeout_sec=1.0)
-    goal = Undock.Goal()
-    goal.dock_id = 'main_charger'
-    goal.reverse_distance = 0.10
-    goal.reverse_speed = 0.05
-    goal.validation_mode = True
-    goal.operator_authorized = True
-    goal_handle = wait_future(client.send_goal_async(goal))
+    goal_handle = send_undock(client_node)
     assert goal_handle.accepted
-    wrapped = wait_future(goal_handle.get_result_async(), timeout=8.0)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
     assert wrapped.result.success
     assert wrapped.result.code == Undock.Result.OK
-    assert world.released
-    assert world.release_calls == 4
-    assert not world.charge_latched
-    assert not world.motors_enabled
+    # One hardware operation, not a chain of release/enable/backup calls.
+    assert world.undock_calls == 1
+    assert wrapped.result.distance_traveled == pytest.approx(0.53)
+    assert wrapped.result.physically_clear
+    assert wrapped.result.final_dock_state == 'CLEAR_CONFIRMED'
+    # The turn stays in Nav2 so it keeps costmap awareness.
+    assert world.spin_calls == 1
+    # A stale charge state after clearance must not have blocked anything.
+    assert world.charge_state == 3
 
 
-def test_stale_rear_sonar_cancels_reverse(harness):
+def test_hardware_failure_is_reported_without_a_nav2_turn(harness):
     _manager, world, client_node = harness
-    world.motors_enabled = True
-    world.drop_sonar_on_backup = True
-    client = ActionClient(client_node, Undock, '/patrolbot/undock')
-    assert client.wait_for_server(timeout_sec=1.0)
-    goal = Undock.Goal()
-    goal.dock_id = 'main_charger'
-    goal.reverse_distance = 0.10
-    goal.reverse_speed = 0.05
-    goal.validation_mode = True
-    goal.operator_authorized = True
-    goal_handle = wait_future(client.send_goal_async(goal))
+    world.undock_should_succeed = False
+    goal_handle = send_undock(client_node)
     assert goal_handle.accepted
-    wrapped = wait_future(goal_handle.get_result_async(), timeout=8.0)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
     assert not wrapped.result.success
-    assert wrapped.result.code == Undock.Result.MOTION_FAILED
-    assert 'sonar' in wrapped.result.message
+    assert wrapped.result.code == Undock.Result.SENSOR_FAILED
+    assert 'rear' in wrapped.result.message
+    # Nothing may move after a failed separation.
+    assert world.spin_calls == 0
+    assert wrapped.result.manual_recovery_required
+
+
+def test_success_without_physical_clearance_is_refused(harness):
+    """A success flag alone is not proof; displacement evidence is required."""
+    _manager, world, client_node = harness
+    world.undock_reports_clear = False
+    goal_handle = send_undock(client_node)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert not wrapped.result.success
+    assert world.spin_calls == 0
+
+
+def test_handoff_with_disabled_motors_is_refused(harness):
+    """Nav2 cannot drive a robot whose motors the handoff left down."""
+    _manager, world, client_node = harness
+    world.undock_leaves_motors_enabled = False
+    goal_handle = send_undock(client_node)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.SAFETY_FAULT
+    assert 'motors' in wrapped.result.message
+    assert world.spin_calls == 0
+
+
+def test_uncommissioned_profile_blocks_a_production_undock(harness):
+    _manager, world, client_node = harness
+    world.profile_commissioned = False
+    goal_handle = send_undock(client_node, validation_mode=False)
+    assert goal_handle.accepted
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.PRECHECK_FAILED
+    assert 'commissioned' in wrapped.result.message
+    # Refused before the hardware was ever asked.
+    assert world.undock_calls == 0
+
+
+def test_undock_is_refused_unless_the_sbc_reports_the_robot_docked(harness):
+    _manager, world, client_node = harness
+    world.dock_state = 'CLEAR_CONFIRMED'
+    goal_handle = send_undock(client_node)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.PRECHECK_FAILED
+    assert world.undock_calls == 0
+
+
+def test_cancel_is_forwarded_to_the_hardware_operation(harness):
+    _manager, world, client_node = harness
+    world.undock_steps = 60
+    goal_handle = send_undock(client_node)
+    assert goal_handle.accepted
+    assert wait_until(lambda: world.undock_calls == 1, timeout=5.0)
+    time.sleep(0.2)
+    goal_handle.cancel_goal_async()
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.CANCELED
+    assert world.spin_calls == 0
+
+
+def test_readiness_separates_undock_readiness_from_docking_inhibition(harness):
+    manager, world, _client_node = harness
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    snapshot = manager._snapshot()
+    assert precheck_ready(manager)
+    assert not snapshot.redock_inhibited
+
+    world.dock_state = 'CLEAR_CONFIRMED'
+    world.redock_inhibited = True
+    assert wait_until(lambda: manager._snapshot().redock_inhibited)
+    # Not ready to undock (already clear) and not allowed to dock (inhibited):
+    # two different reasons, two different fields.
+    assert not precheck_ready(manager)
+    assert manager._snapshot().redock_inhibited
+
+
+def precheck_ready(manager):
+    from patrolbot_dock_manager.contracts import precheck_failures
+    return precheck_failures(manager._snapshot()) == []

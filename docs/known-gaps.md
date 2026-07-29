@@ -27,11 +27,25 @@ finding-by-finding index is
 
 ## Docking and motion
 
-- Survey and configure the real dock pose, then commission the guarded
-  `/patrolbot/initialize_dock_pose` convergence path.
-- Validate successful explicit motor enable and any physical PWR ON sequence.
-- After exact bounds and explicit operator approval, run the very short guarded
-  reverse test, then the complete undock/re-dock/charging regression.
+Contact separation is now an exclusive SBC operation (see
+[State machines](internals/state-machines.md)). What remains is measurement, not design.
+
+- Commission the undock hardware profile
+  (`hardware/patrolbot_hw_server/undock_profile.conf`). Until then a production
+  undock is refused with `HARDWARE_PROFILE_UNCOMMISSIONED` by design. Unmeasured:
+  `CHARGE 0` release/re-assert timing, E-stop signal semantics, rear-sonar
+  indices and near-field floor, and the idle fault/stall flags behind
+  `critical_fault_mask`. `patrolbot_commission_probe` collects all four.
+- Encoder fidelity on the charging plates: compare SBC encoder progress, Pi
+  `/odom`, a tape measure and LiDAR range to the dock during the first
+  supervised run. Completion rests on that displacement.
+- Establish which signal changes first when motion stops during a charge
+  re-latch — SBC gate, µARCS directly, mechanical latch → stall, or watchdog.
+- Validate the redock inhibition policy (60 s / 0.50 m) against the dock's real
+  capture area and the battery policy.
+- Bumper mapping is **established** (front `0x7e00`, rear `0x007e`, pressed
+  segment by segment on 2026-07-23); what remains is a functional regression
+  check that each segment sets only its own bit and that none stays asserted.
 - Keep generic Nav2 docking disabled and `/input/docking` publisher-free until
   those tests pass.
 

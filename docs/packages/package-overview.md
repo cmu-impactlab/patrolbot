@@ -31,7 +31,7 @@ flowchart TB
 |---|---|---|---|---|
 | `patrolbot_bridge` | ament_python | Pi | **Active** — the SBC's only ROS-side presence | [→](patrolbot_bridge.md) |
 | `patrolbot_interfaces` | ament_cmake | Pi | **Active** — typed base/dock/control contracts | [ROS interfaces](../ros2/services.md) |
-| `patrolbot_dock_manager` | ament_python | Pi | **Active, fail-closed** — dock pose and guarded undock | [Actions](../ros2/actions.md#patrolbot-guarded-undock) |
+| `patrolbot_dock_manager` | ament_python | Pi | **Active, fail-closed** — dock pose and guarded undock | [Actions](../ros2/actions.md#patrolbot-undock) |
 | `patrolbot_docking_plugins` | ament_cmake | Pi | **Built, dormant** — typed charging plugin for future generic docking review | [Parameters](../ros2/parameters.md#docking-and-hardware-readiness-gates) |
 | `patrolbot_navigation` | ament_cmake | Pi | **Active** — Nav2 bringup, maps, params, joystick teleop, laser TF | [→](patrolbot_navigation.md) |
 | `patrolbot-launch` | ament_python | Pi | **Active** — mobile base: twist_mux + velocity smoother | [→](patrolbot-launch.md) |

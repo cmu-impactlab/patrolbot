@@ -4,6 +4,7 @@ import socket
 import struct
 import threading
 import time
+from uuid import uuid4
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TransformStamped, Twist
@@ -13,9 +14,21 @@ from patrolbot_bridge.control_protocol import (
     COMMAND_MOTOR_ENABLE,
     ControlReply,
     format_request,
-    motor_enable_charge_allowed,
+    motor_enable_allowed,
     parse_reply,
     valid_request_id,
+)
+from patrolbot_bridge.undock_protocol import (
+    CANCELED,
+    format_undock_cancel,
+    format_undock_request,
+    LINK_UNAVAILABLE,
+    parse_hello,
+    parse_undock_event,
+    parse_undock_result,
+    SESSION_CHANGED,
+    TIMEOUT,
+    UndockResult,
 )
 from patrolbot_bridge.safety_telemetry import (
     battery_diagnostic,
@@ -23,9 +36,12 @@ from patrolbot_bridge.safety_telemetry import (
     BATTERY_RECHARGE_VOLTS,
     decode_fault_flags,
 )
+from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.msg import BaseState
 from patrolbot_interfaces.srv import ChargeRelease, MotorEnable
 import rclpy
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -152,8 +168,22 @@ class PatrolBotBridge(Node):
         self._flags = 0
         self._fault_flags = 0
         self._stall_value = 0
-        self._release_confirmed_at = 0.0
-        self._release_confirmed_generation = -1
+        # Dock ownership, published by the SBC in the AUX DOCK= section. The
+        # bridge holds no dock policy of its own; it mirrors the SBC's observer.
+        self._dock_state = ''
+        self._dock_state_at = 0.0
+        self._dock_phase = 0
+        self._dock_phase_name = 'IDLE'
+        self._undock_active = False
+        self._undock_release_attempts = 0
+        self._minimum_rear_range = 0.0
+        self._rear_sonar_usable = False
+        self._redock_inhibited = False
+        self._redock_inhibit_remaining = 0.0
+        self._undock_profile_commissioned = False
+        # Capability banner. Undock goals are refused until an SBC advertises
+        # FEATURES=UNDOCK, so an older server fails closed instead of hanging.
+        self._server_hello = None
 
         # The stall word's physical bumper mapping is unresolved on this robot.
         # Keep it invalid until controlled testing supplies explicit masks.
@@ -165,6 +195,25 @@ class PatrolBotBridge(Node):
         self._pending_controls = {}
         self.CONTROL_TIMEOUT = float(
             self.get_parameter('control_timeout').value)
+
+        # One hardware undock at a time, tracked separately from the zero-motion
+        # controls because it is long-running and streams progress events.
+        self._undock_lock = threading.Lock()
+        self._undock_request_id = None
+        self._undock_event = threading.Event()
+        self._undock_result = None
+        self._undock_feedback = None
+        self._undock_accepted = False
+        self._undock_session = 0
+        self._undock_goal_lock = threading.Lock()
+        self._undock_goal_reserved = False
+        self._callbacks = ReentrantCallbackGroup()
+        self._undock_server = ActionServer(
+            self, HardwareUndock, '/patrolbot/hardware_undock',
+            goal_callback=self._undock_goal_callback,
+            cancel_callback=self._undock_cancel_callback,
+            execute_callback=self._undock_execute_callback,
+            callback_group=self._callbacks)
 
         # Never publish ROS messages from the socket reader. DDS publish() can
         # wait behind a stalled reader; when that happened here, the Pi
@@ -261,8 +310,12 @@ class PatrolBotBridge(Node):
                     self._link_connected = True
                     self._charge_state_at = 0.0
                     self._flags_at = 0.0
-                    self._release_confirmed_at = 0.0
-                    self._release_confirmed_generation = -1
+                    self._dock_state = ''
+                    self._dock_state_at = 0.0
+                    self._undock_active = False
+                    # A new session proves nothing about the dock, and the SBC
+                    # re-announces its capabilities on every accept.
+                    self._server_hello = None
                     session = self._session_generation
                 self.get_logger().info('Connected to SBC server.')
                 self._receive_loop(sock)
@@ -280,6 +333,7 @@ class PatrolBotBridge(Node):
                     session = self._session_generation
                 self._fail_pending_controls(
                     session, 'hardware session disconnected')
+                self._fail_pending_undock(session)
                 try:
                     sock.close()
                 except Exception:
@@ -313,6 +367,12 @@ class PatrolBotBridge(Node):
                         self._aux_queue, (line, received_at), 'auxiliary')
                 elif line.startswith('ACK:') or line.startswith('RESULT:'):
                     self._handle_control_reply(line)
+                elif line.startswith('UNDOCK_EVENT:'):
+                    self._handle_undock_event(line)
+                elif line.startswith('UNDOCK_RESULT:'):
+                    self._handle_undock_result(line)
+                elif line.startswith('HELLO:'):
+                    self._handle_hello(line)
                 else:
                     self._queue_latest(
                         self._nav_queue, (line, received_at), 'navigation')
@@ -513,6 +573,10 @@ class PatrolBotBridge(Node):
 
     def _parse_aux(self, line):
         # AUX:SONAR=x,y;x,y;...|BATT=v,soc,cs,temp|FLAGS=flags,fault,stall,motors,estop
+        #     |DOCK=state,phase,phase_name,active,attempts,rear_m,rear_usable,
+        #           inhibited,inhibit_remaining_ms,profile_ok
+        # DOCK is emitted only by protocol 2 servers. Unknown sections are
+        # skipped, so this stays compatible in both directions.
         # Each section is parsed and published in isolation: a malformed or missing
         # section only skips its own topic and never affects the others or nav data.
         sections = {}
@@ -537,6 +601,39 @@ class PatrolBotBridge(Node):
                 self._publish_flags(sections['FLAGS'], stamp)
             except Exception:
                 pass
+        if 'DOCK' in sections:
+            try:
+                self._record_dock_section(sections['DOCK'])
+            except Exception:
+                pass
+
+    def _record_dock_section(self, data):
+        """Mirror the SBC's dock observer; the bridge holds no dock policy."""
+        f = data.split(',')
+        if len(f) < 10:
+            raise ValueError('short DOCK section')
+        state = f[0]
+        phase = int(f[1])
+        phase_name = f[2]
+        active = bool(int(f[3]))
+        attempts = int(f[4])
+        rear_range = float(f[5])
+        rear_usable = bool(int(f[6]))
+        inhibited = bool(int(f[7]))
+        inhibit_remaining = float(f[8]) / 1000.0
+        commissioned = bool(int(f[9]))
+        with self._state_lock:
+            self._dock_state = state
+            self._dock_state_at = time.monotonic()
+            self._dock_phase = phase
+            self._dock_phase_name = phase_name
+            self._undock_active = active
+            self._undock_release_attempts = attempts
+            self._minimum_rear_range = rear_range
+            self._rear_sonar_usable = rear_usable
+            self._redock_inhibited = inhibited
+            self._redock_inhibit_remaining = inhibit_remaining
+            self._undock_profile_commissioned = commissioned
 
     def _publish_sonar(self, data, stamp):
         points = []
@@ -703,6 +800,18 @@ class PatrolBotBridge(Node):
             flags = self._flags
             fault_flags = self._fault_flags
             stall_value = self._stall_value
+            dock_state = self._dock_state
+            dock_age = (
+                now - self._dock_state_at if self._dock_state_at else math.inf)
+            dock_phase = self._dock_phase
+            dock_phase_name = self._dock_phase_name
+            undock_active = self._undock_active
+            release_attempts = self._undock_release_attempts
+            minimum_rear_range = self._minimum_rear_range
+            rear_sonar_usable = self._rear_sonar_usable
+            redock_inhibited = self._redock_inhibited
+            redock_remaining = self._redock_inhibit_remaining
+            profile_commissioned = self._undock_profile_commissioned
 
         telemetry_age = max(charge_age, flags_age)
         state_valid = connected and telemetry_age <= 0.5
@@ -733,6 +842,23 @@ class PatrolBotBridge(Node):
             bool(stall_value & front_mask) if bumpers_valid else False)
         msg.rear_bumper_pressed = (
             bool(stall_value & rear_mask) if bumpers_valid else False)
+        # A stale or absent DOCK section is never reported as a dock state: an
+        # older SBC does not emit one, and its absence must not read as CLEAR.
+        dock_valid = bool(connected and dock_state and dock_age <= 1.0)
+        msg.dock_state = dock_state if dock_valid else 'UNKNOWN'
+        msg.dock_state_valid = dock_valid
+        msg.dock_phase = dock_phase if dock_valid else 0
+        msg.dock_phase_name = dock_phase_name if dock_valid else 'IDLE'
+        msg.undock_active = undock_active if dock_valid else False
+        msg.undock_release_attempts = int(release_attempts)
+        msg.minimum_rear_range = float(minimum_rear_range)
+        msg.rear_sonar_usable = bool(rear_sonar_usable and dock_valid)
+        # Fail closed: without a fresh DOCK section, treat docking as inhibited
+        # and the profile as uncommissioned.
+        msg.redock_inhibited = bool(redock_inhibited) if dock_valid else True
+        msg.redock_inhibit_remaining = float(redock_remaining)
+        msg.undock_profile_commissioned = (
+            bool(profile_commissioned) if dock_valid else False)
         self._publish_with_timing(
             self.base_state_pub, msg, '/patrolbot/base_state')
 
@@ -769,10 +895,11 @@ class PatrolBotBridge(Node):
             estop = self._estop_pressed
             fault_flags = self._fault_flags
             stall_value = self._stall_value
-            release_age = (
-                started - self._release_confirmed_at
-                if self._release_confirmed_at else math.inf)
-            release_generation = self._release_confirmed_generation
+            dock_state = self._dock_state
+            dock_age = (
+                started - self._dock_state_at
+                if self._dock_state_at else math.inf)
+            undock_active = self._undock_active
         with self._pose_lock:
             linear = self._vx
             angular = self._vth
@@ -793,10 +920,11 @@ class PatrolBotBridge(Node):
         if fault_flags:
             return self._fill_control_response(
                 response, None, 3, 'hardware fault flags are nonzero', started)
+        if undock_active:
+            return self._fill_control_response(
+                response, None, 3, 'the undock state machine owns motion',
+                started)
         if command == COMMAND_CHARGE_RELEASE:
-            with self._state_lock:
-                self._release_confirmed_at = 0.0
-                self._release_confirmed_generation = -1
             if charge_state < 0:
                 return self._fill_control_response(
                     response, None, 3, 'charge state is invalid', started)
@@ -809,23 +937,23 @@ class PatrolBotBridge(Node):
                     response, None, 3,
                     'motors enabled while charge is already released', started)
         if command == COMMAND_MOTOR_ENABLE:
-            recent_release = (
-                release_generation == generation and release_age <= 15.0)
-            if not motor_enable_charge_allowed(
-                    charge_state, recent_release):
-                return self._fill_control_response(
-                    response, None, 3, 'motor enable refused while charging',
-                    started)
             if estop:
                 return self._fill_control_response(
                     response, None, 3, 'motor enable refused while E-stop asserted',
                     started)
-            # The post-release exception is single-use at the bridge. The SBC
-            # independently revalidates the same session, time, stationary,
-            # E-stop, and fault conditions before touching hardware.
-            with self._state_lock:
-                self._release_confirmed_at = 0.0
-                self._release_confirmed_generation = -1
+            # No post-release window and no charge-state exception. Enabling the
+            # motors in order to leave the dock is the UNDOCK operation's job,
+            # and the SBC independently enforces the same rule against its own
+            # dock observer. A stale or absent dock state fails closed.
+            if dock_age > 1.0 or not dock_state:
+                return self._fill_control_response(
+                    response, None, 3, 'dock state is stale or unavailable',
+                    started)
+            if not motor_enable_allowed(dock_state, estop):
+                return self._fill_control_response(
+                    response, None, 3,
+                    f'motor enable refused in dock state {dock_state}',
+                    started)
 
         key = (command, request_id)
         pending = PendingControl(command, request_id, generation)
@@ -867,11 +995,6 @@ class PatrolBotBridge(Node):
             return self._fill_control_response(
                 response, reply, 6, reply.message, started,
                 accepted=reply.accepted)
-        if command == COMMAND_CHARGE_RELEASE and reply.success:
-            with self._state_lock:
-                if self._session_generation == generation:
-                    self._release_confirmed_at = time.monotonic()
-                    self._release_confirmed_generation = generation
         self.get_logger().info(
             f'{command} request {request_id} completed: '
             f'success={reply.success}, code={reply.code}, message={reply.message}.')
@@ -908,10 +1031,253 @@ class PatrolBotBridge(Node):
         return response
 
     # ------------------------------------------------------------------
+    # Hardware undock action
+    # ------------------------------------------------------------------
+
+    def _handle_hello(self, line):
+        """Record the SBC capability banner for this session."""
+        try:
+            hello = parse_hello(line)
+        except ValueError as exc:
+            self.get_logger().error(f'Invalid SBC HELLO: {exc}')
+            return
+        if hello is None:
+            return
+        with self._state_lock:
+            self._server_hello = hello
+        self.get_logger().info(
+            f'SBC protocol {hello.protocol}, features '
+            f'{sorted(hello.features) or ["none"]}.')
+
+    def _handle_undock_event(self, line):
+        """Record an undock progress frame for the executing goal."""
+        try:
+            event = parse_undock_event(line)
+        except ValueError as exc:
+            self.get_logger().error(f'Invalid UNDOCK_EVENT: {exc}')
+            return
+        if event is None:
+            return
+        with self._undock_lock:
+            if event.request_id != self._undock_request_id:
+                return
+            self._undock_accepted = True
+            self._undock_feedback = event
+
+    def _handle_undock_result(self, line):
+        """Deliver the terminal undock frame and wake the executing goal."""
+        try:
+            result = parse_undock_result(line)
+        except ValueError as exc:
+            self.get_logger().error(f'Invalid UNDOCK_RESULT: {exc}')
+            return
+        if result is None:
+            return
+        with self._undock_lock:
+            if result.request_id != self._undock_request_id:
+                self.get_logger().warn(
+                    f'Ignoring unmatched UNDOCK_RESULT for {result.request_id}')
+                return
+            self._undock_result = result
+        self._undock_event.set()
+
+    def _fail_pending_undock(self, session_generation):
+        """Wake an executing undock immediately when its session disappears."""
+        with self._undock_lock:
+            if self._undock_request_id is None:
+                return
+            if self._undock_session != session_generation:
+                return
+            if self._undock_result is not None:
+                return
+            self._undock_result = UndockResult(
+                request_id=self._undock_request_id, success=False,
+                code=SESSION_CHANGED, message='hardware session disconnected',
+                phase=0, phase_name='IDLE', distance_traveled=0.0,
+                lateral_error=0.0, heading_error=0.0, charge_state=-1,
+                motors_enabled=False, estop_pressed=True,
+                minimum_rear_range=0.0, release_attempts=0,
+                dock_state='UNKNOWN', physically_clear=False)
+        self._undock_event.set()
+
+    def _undock_goal_callback(self, request):
+        """Admit one undock goal at a time, against an SBC that supports it."""
+        for name, value in (
+                ('clearance_distance', request.clearance_distance),
+                ('reverse_speed', request.reverse_speed),
+                ('maximum_duration', request.maximum_duration)):
+            if not math.isfinite(value) or value <= 0.0:
+                self.get_logger().error(
+                    f'Hardware undock rejected: {name} must be finite and '
+                    f'positive.')
+                return GoalResponse.REJECT
+        with self._state_lock:
+            connected = self._link_connected
+            hello = self._server_hello
+        if not connected:
+            self.get_logger().error(
+                'Hardware undock rejected: no SBC link.')
+            return GoalResponse.REJECT
+        if hello is None or not hello.supports_undock():
+            # Fail closed rather than sending a command this server will never
+            # answer and then waiting out the whole timeout.
+            self.get_logger().error(
+                'Hardware undock rejected: this SBC does not advertise '
+                'FEATURES=UNDOCK.')
+            return GoalResponse.REJECT
+        with self._undock_goal_lock:
+            if self._undock_goal_reserved:
+                self.get_logger().error(
+                    'Hardware undock rejected: another goal is active.')
+                return GoalResponse.REJECT
+            self._undock_goal_reserved = True
+        return GoalResponse.ACCEPT
+
+    @staticmethod
+    def _undock_cancel_callback(_goal_handle):
+        return CancelResponse.ACCEPT
+
+    def _undock_execute_callback(self, goal_handle):
+        started = time.monotonic()
+        request_id = str(uuid4())
+        with self._state_lock:
+            session = self._session_generation
+        with self._undock_lock:
+            self._undock_request_id = request_id
+            self._undock_result = None
+            self._undock_feedback = None
+            self._undock_accepted = False
+            self._undock_session = session
+        self._undock_event.clear()
+        try:
+            payload = format_undock_request(
+                request_id, float(goal_handle.request.clearance_distance),
+                float(goal_handle.request.reverse_speed),
+                float(goal_handle.request.maximum_duration),
+                bool(goal_handle.request.validation_mode))
+            with self.sock_lock:
+                if self.sock is None:
+                    return self._undock_abort(
+                        goal_handle, LINK_UNAVAILABLE,
+                        'hardware link unavailable', started, session)
+                self.sock.sendall(payload)
+            self.get_logger().info(
+                f'Sent UNDOCK {request_id} on hardware session {session}.')
+
+            # The SBC owns the operation timeout; this is only a backstop so a
+            # lost terminal frame cannot block the goal forever.
+            deadline = started + float(
+                goal_handle.request.maximum_duration) + 15.0
+            cancel_sent = False
+            while time.monotonic() < deadline:
+                if self._undock_event.wait(0.05):
+                    break
+                if goal_handle.is_cancel_requested and not cancel_sent:
+                    cancel_sent = self._send_undock_cancel(request_id)
+                with self._state_lock:
+                    current_session = self._session_generation
+                if current_session != session:
+                    self._fail_pending_undock(session)
+                    break
+                self._publish_undock_feedback(goal_handle)
+
+            with self._undock_lock:
+                result = self._undock_result
+            if result is None:
+                return self._undock_abort(
+                    goal_handle, TIMEOUT,
+                    'no terminal result from the SBC', started, session)
+            return self._undock_finish(goal_handle, result, started, session)
+        finally:
+            with self._undock_lock:
+                self._undock_request_id = None
+                self._undock_feedback = None
+            with self._undock_goal_lock:
+                self._undock_goal_reserved = False
+
+    def _send_undock_cancel(self, request_id):
+        """Ask the SBC to cancel; it reports CANCELED only once it has stopped."""
+        try:
+            with self.sock_lock:
+                if self.sock is None:
+                    return False
+                self.sock.sendall(format_undock_cancel(request_id))
+        except Exception as exc:
+            self.get_logger().warn(f'UNDOCK_CANCEL send failed: {exc}')
+            return False
+        self.get_logger().info(f'Sent UNDOCK_CANCEL for {request_id}.')
+        return True
+
+    def _publish_undock_feedback(self, goal_handle):
+        with self._undock_lock:
+            event = self._undock_feedback
+        if event is None:
+            return
+        feedback = HardwareUndock.Feedback()
+        feedback.phase = int(event.phase)
+        feedback.phase_name = event.phase_name
+        feedback.distance_traveled = float(event.distance_traveled)
+        feedback.lateral_error = float(event.lateral_error)
+        feedback.heading_error = float(event.heading_error)
+        feedback.charge_state = int(event.charge_state)
+        feedback.motors_enabled = bool(event.motors_enabled)
+        feedback.minimum_rear_range = float(event.minimum_rear_range)
+        feedback.release_attempts = int(event.release_attempts)
+        feedback.dock_state = event.dock_state
+        goal_handle.publish_feedback(feedback)
+
+    def _undock_finish(self, goal_handle, reply, started, session):
+        result = HardwareUndock.Result()
+        result.success = bool(reply.success)
+        result.code = int(reply.code)
+        result.message = reply.message
+        result.distance_traveled = float(reply.distance_traveled)
+        result.lateral_error = float(reply.lateral_error)
+        result.heading_error = float(reply.heading_error)
+        result.release_attempts = int(reply.release_attempts)
+        result.final_charge_state = int(reply.charge_state)
+        result.motors_enabled = bool(reply.motors_enabled)
+        result.final_dock_state = reply.dock_state
+        result.physically_clear = bool(reply.physically_clear)
+        result.elapsed_seconds = float(time.monotonic() - started)
+        result.session_generation = session
+        if reply.success:
+            goal_handle.succeed()
+        elif reply.code == CANCELED:
+            goal_handle.canceled()
+        else:
+            goal_handle.abort()
+        self.get_logger().info(
+            f'Hardware undock finished: success={reply.success} '
+            f'code={reply.code} message={reply.message} '
+            f'distance={reply.distance_traveled:.3f} '
+            f'attempts={reply.release_attempts} '
+            f'dock_state={reply.dock_state} motors={reply.motors_enabled}')
+        return result
+
+    def _undock_abort(self, goal_handle, code, message, started, session):
+        result = HardwareUndock.Result()
+        result.success = False
+        result.code = int(code)
+        result.message = message
+        result.final_dock_state = 'UNKNOWN'
+        result.elapsed_seconds = float(time.monotonic() - started)
+        result.session_generation = session
+        goal_handle.abort()
+        self.get_logger().error(f'Hardware undock aborted: {message}')
+        return result
+
+    # ------------------------------------------------------------------
     # Velocity forwarding
     # ------------------------------------------------------------------
 
     def cmd_vel_callback(self, msg):
+        # Defence in depth. The SBC refuses every nonzero DRIVE while its undock
+        # state machine owns motion; not sending them at all keeps the log clean
+        # and removes any chance of a race on the socket.
+        with self._state_lock:
+            if self._undock_active:
+                return
         try:
             # Serialize all writes so DRIVE bytes can never interleave with an
             # idempotent hardware-control request on the TCP stream.
@@ -930,6 +1296,10 @@ class PatrolBotBridge(Node):
     def destroy_node(self):
         if self._workers_stopped:
             return
+        try:
+            self._undock_server.destroy()
+        except Exception:
+            pass
         self.running = False
         self._stop_event.set()
         with self.sock_lock:

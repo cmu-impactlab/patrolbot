@@ -1,0 +1,74 @@
+# Hardware-level dock departure, executed entirely by the SBC.
+#
+# The SBC owns charger release, motor enable, reverse velocity, encoder
+# displacement, charge-state recovery, stall detection and rear sonar/bumper
+# safety. This action requests that operation and reports its progress; it does
+# not itself command any motion.
+#
+# There is deliberately no operator_authorized field. A boolean any ROS client
+# can set to true is not authorization. Authorization lives in the
+# manager-facing Undock action, dashboard authentication and ROS access policy.
+#
+# There is deliberately no turn field either. Angular velocity stays exactly
+# zero for the whole operation; the collision-aware turn away from the dock is a
+# Nav2 Spin performed after this action reports success.
+
+# Goal. Values are additionally bounded by SBC-side hard caps and are rejected,
+# never silently clamped, when out of range.
+float32 clearance_distance
+float32 reverse_speed
+float32 maximum_duration
+# Bounded, operator-supervised mode. The only way to run against an
+# uncommissioned hardware profile, so the commissioning session can exercise
+# the real operation.
+bool validation_mode
+---
+# Result codes mirror the SBC's UndockCode 1:1.
+uint16 OK=0
+uint16 INVALID_REQUEST=1
+uint16 LINK_UNAVAILABLE=2
+uint16 PRECONDITION_FAILED=3
+uint16 BUSY=4
+uint16 TIMEOUT=5
+uint16 SESSION_CHANGED=6
+uint16 PROTOCOL_ERROR=7
+uint16 RELEASE_FAILED=8
+uint16 MOTOR_STATE_FAILED=9
+uint16 MOTION_FAILED=10
+uint16 SENSOR_BLOCKED=11
+uint16 SAFETY_FAULT=12
+uint16 CANCELED=13
+uint16 HARDWARE_PROFILE_UNCOMMISSIONED=14
+
+bool success
+uint16 code
+string message
+# Signed progress along the reverse of the departure heading, not a Euclidean
+# displacement: forward or sideways motion never counts as progress.
+float32 distance_traveled
+float32 lateral_error
+float32 heading_error
+uint16 release_attempts
+int16 final_charge_state
+# True on success: the SBC hands off with the motors live at zero velocity so
+# Nav2 can take control. False after any failure or cancellation, both of which
+# stop the robot and disable the motors.
+bool motors_enabled
+# UNKNOWN | DOCKED_CONFIRMED | DEPARTING | CLEAR_CONFIRMED | FAULT_STOPPED
+string final_dock_state
+bool physically_clear
+float32 elapsed_seconds
+uint64 session_generation
+---
+uint8 phase
+# IDLE | PREPARING_UNDOCK | RELEASING | ENABLING_MOTORS | BACKING_OUT |
+# VERIFYING_CLEARANCE | HANDOFF_READY | STOPPING
+string phase_name
+float32 distance_traveled
+float32 lateral_error
+float32 heading_error
+int16 charge_state
+bool motors_enabled
+float32 minimum_rear_range
+uint16 release_attempts
+string dock_state

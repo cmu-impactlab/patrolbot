@@ -62,20 +62,21 @@ behavior_server:
     costmap_topic: "local_costmap/costmap_raw"
     footprint_topic: "local_costmap/published_footprint"
     cycle_frequency: 10.0
-    # Match the SBC's explicitly scoped post-undock turn authorization. A
-    # re-latched charge state may never admit a faster angular command.
+    # Bound for the post-undock turn away from the dock. The SBC no longer
+    # grants a scoped turn authorization at all: by the time this Spin runs it
+    # has handed motion authority back with its dock observer in
+    # CLEAR_CONFIRMED, so this is an ordinary Nav2 behavior on the full safety
+    # chain. Kept at the previously commissioned value.
     max_rotational_vel: 0.7
     behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
     spin:
       plugin: "nav2_behaviors::Spin"
     backup:
       plugin: "nav2_behaviors::BackUp"
-      # Dock validation starts at 0.05 m/s. Keep the behavior's deadband low
-      # enough for that explicit goal while retaining hard caps in the dock
-      # manager and both velocity smoothers.
+      # BackUp remains available as a Nav2 recovery behavior. It is NOT used
+      # to separate the robot from the charging contacts any more: that is the
+      # SBC's exclusive UNDOCK operation, which owns the wheels directly.
       minimum_speed: 0.05
-      # Reach the commanded reverse speed sooner: at 0.25 m/s^2 the ramp to
-      # 0.2 m/s ate 0.8 s and 8 cm of a 60 cm move, which read as sluggish.
       acceleration_limit: 0.4
       deceleration_limit: -0.5
     drive_on_heading:
@@ -386,23 +387,25 @@ patrolbot_dock_manager:
     dock_yaw_tolerance: 0.35
     max_position_variance: 0.25
     max_yaw_variance: 0.25
-    # The PatrolBot manual specifies docking until a front bumper triggers.
-    # Physical mapping on 2026-07-23 confirmed the dock holds the two center
-    # front panels active. Straight reverse may move away from that contact;
-    # rear contact still aborts, and completion requires every panel clear.
-    allow_front_bumper_at_dock: true
     sensor_timeout: 0.5
     precheck_timeout: 5.0
-    # Binding amendment A-1: physical PWR ON and explicit software-enable
-    # confirmation share this one post-release operator window.
-    operator_motor_window: 10.0
-    backup_timeout: 10.0
-    # The dock can reassert charge while the wheels are still on its plates.
-    # Only the explicit release+enable sequence may use this short straight
-    # reverse grace; the SBC independently enforces the same 8 s/0.10 m/s cap.
-    dock_departure_charge_grace: 8.0
-    # After the base is physically clear and any charge latch is released,
-    # turn away from the charger through Nav2's collision-checked Spin behavior.
+    # Requested of the SBC's exclusive UNDOCK operation. The SBC rejects
+    # anything outside its own hard caps rather than clamping it, so these are
+    # a request, not a guarantee.
+    #
+    # undock_reverse_speed is a HARDWARE CEILING, not a tuning knob. Measured
+    # 2026-07-28: at 0.20 m/s the base re-latched charge and cut the motors
+    # 0.24 m into the reverse.
+    undock_clearance_distance: 0.53
+    undock_reverse_speed: 0.10
+    # Backstop only. The SBC owns the real operation timeout, its release
+    # retries and its no-motion detection.
+    undock_max_duration: 45.0
+    # After the SBC confirms physical clearance and hands motion authority
+    # back, turn away from the charger through Nav2's collision-checked Spin.
+    # This deliberately stays on the Pi: the SBC is blind to the costmap, the
+    # laser and the collision monitor, and a 180 degree in-place turn is a
+    # navigation concern rather than a hardware-contact one.
     undock_turn_yaw: 3.141592653589793
     spin_timeout: 20.0
     dock_pose_initialization_timeout: 5.0

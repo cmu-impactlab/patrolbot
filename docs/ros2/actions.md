@@ -52,18 +52,40 @@ The generic Nav2 `docking_server`, `dock_robot`, and generic `undock_robot` acti
 launched**. They were removed from the active lifecycle graph because their velocity output bypassed
 the safety chain.
 
-## PatrolBot guarded undock
+## PatrolBot undock
 
-| Action | Type | Server | Current availability |
+| Action | Type | Server | Role |
 |---|---|---|---|
-| `/patrolbot/undock` | `patrolbot_interfaces/action/Undock` | `patrolbot_dock_manager` | advertised but fail-closed while physical commissioning values remain unset |
+| `/patrolbot/undock` | `patrolbot_interfaces/action/Undock` | `patrolbot_dock_manager` | operator-facing orchestration |
+| `/patrolbot/hardware_undock` | `patrolbot_interfaces/action/HardwareUndock` | `patrolbot_bridge` | the SBC-owned physical separation |
 
-The manager publishes no `Twist`. After checking the sole command path, fresh base/odom/sonar,
-mapped bumpers, dock pose, localization, idle actions, charging state, and operator authorization,
-it requests charge release and then invokes Nav2 `BackUp`. It never enables motors itself; a
-separate operator action must satisfy the motor/E-stop window. The active configuration keeps
-`dock_pose_configured=false` and bumper enforcement uncommissioned, so a production undock goal is
-rejected before motion.
+Contact separation is **not** performed on the Pi. The SBC owns charger release, motor enable,
+reverse velocity, encoder displacement, charge-state recovery, stall detection and rear
+sonar/bumper safety as one exclusive, stateful operation. Nav2 `BackUp` is no longer used to
+escape the charging contacts.
+
+`patrolbot_dock_manager` publishes no `Twist`. It validates the Pi-side gates it alone can see —
+localization, the velocity command path, whether another navigation action is running, plus the
+SBC's own verdict on whether the robot is docked and commissioned — then sends one
+`HardwareUndock` goal and relays its progress. Once the SBC reports physical clearance and hands
+motion authority back **with the motors still live**, the manager refreshes AMCL and performs the
+turn away from the dock as a Nav2 `Spin`, so that leg keeps full costmap and collision-monitor
+awareness.
+
+Manager states: `IDLE → PRECHECK → VERIFY_LOCALIZATION → VERIFY_COMMAND_PATH → HARDWARE_UNDOCK →
+RESTORE_LOCALIZATION → TURN_AWAY_FROM_DOCK → STOPPED → COMPLETE`, with `ABORTED`/`FAULT` reachable
+from every step.
+
+`HardwareUndock` deliberately has no `operator_authorized` field: a boolean any ROS client can set
+is not authorization. That belongs to the manager-facing action, dashboard authentication and ROS
+access policy. It also has no turn field — angular velocity is exactly zero for the whole SBC
+operation.
+
+**Current availability.** A production goal is refused with
+`HARDWARE_PROFILE_UNCOMMISSIONED` until the SBC's rear-sonar indices, E-stop semantics and fault
+masks have been physically validated (see `hardware/patrolbot_hw_server/undock_profile.conf`). A
+bounded `validation_mode` goal (≤ 0.10 m, ≤ 0.05 m/s) is the only exception, so the commissioning
+session can exercise the real operation under supervision.
 
 ## Sending a goal
 

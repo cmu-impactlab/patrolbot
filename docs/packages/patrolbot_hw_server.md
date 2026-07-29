@@ -38,10 +38,60 @@ protocol](../architecture/communication-architecture.md), not ROS:
 | Direction | Line | Rate |
 |---|---|---|
 | SBC → Pi | `ODOM:x,y,th,vx,vth|LASER:r1,...,rN` | ~20 Hz |
-| SBC → Pi | `AUX:SONAR=..|BATT=..|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed` | ~4–5 Hz (every 5th nav frame) |
+| SBC → Pi | `AUX:SONAR=..|BATT=..|FLAGS=..|DOCK=..` | ~4–5 Hz (every 5th nav frame) |
+| SBC → Pi | `HELLO:PROTOCOL=2:FEATURES=UNDOCK` | once, on accept |
 | Pi → SBC | `DRIVE:linear:angular` | on demand |
-| Pi → SBC | `CHARGE_RELEASE:request_uuid` / `MOTOR_ENABLE:request_uuid` | deliberate request only |
+| Pi → SBC | `CHARGE_RELEASE` / `MOTOR_ENABLE` / `DOCK_RESET` `:request_uuid` | deliberate zero-motion request only |
+| Pi → SBC | `UNDOCK:uuid:clearance:speed:timeout:validation` | the exclusive dock-departure operation |
+| Pi → SBC | `UNDOCK_CANCEL:target_uuid` | names the operation being cancelled |
 | SBC → Pi | `ACK:...` / `RESULT:...` | correlated control response |
+| SBC → Pi | `UNDOCK_EVENT:...` / `UNDOCK_RESULT:...` | undock progress and terminal frame |
+
+## Dock departure
+
+The SBC owns physical separation from the charger outright: charger release, motor enable,
+reverse velocity, encoder displacement, charge-state recovery, stall detection, rear sonar and
+bumper safety, and the completion decision. While an `UNDOCK` runs, ordinary `DRIVE` is refused
+and the maintenance commands are refused; only cancellation and E-stop are accepted.
+
+The machine lives in `undock.cpp`/`undock.hpp`, which include **no ARIA headers and perform no
+I/O** — every decision is a pure function of an explicit hardware snapshot, so the whole thing is
+unit-testable off the robot. `patrolbot_server.cpp` is the only translation unit that maps
+`ArRobot` onto those structures and applies the resulting effects.
+
+Configuration lives in `undock_profile.conf`, deployed alongside the binary. A production undock
+is refused with `HARDWARE_PROFILE_UNCOMMISSIONED` until the rear-sonar indices, E-stop semantics
+and fault masks in that file have been physically measured. See
+[State machines](../internals/state-machines.md) for both diagrams.
+
+## Commissioning probe
+
+`patrolbot_commission_probe` (built with `make probe`) fills in those unmeasured facts.
+
+**Its default mode is strictly passive**: it reads ARIA telemetry at 20–50 Hz and writes CSV,
+including each sonar's geometry, range and age, so the rear transducer indices can be identified.
+It never sends a velocity command, never enables or disables motors, and never sends a charging
+command.
+
+`--allow-single-charge-release` is an **active** mode, not a read-only one. It issues exactly one
+µARCS `CHARGE 0` after a logged baseline, and only when reported motion is stably zero, the motors
+are already disabled, the confirmation token is supplied, and no production server is running.
+There is no motor-enable and no motion path in any mode, and `CHARGE 1` is never sent.
+
+!!! danger "Single-owner hardware connection"
+    `socat` runs without `fork` and only one process may hold the base connection, so the probe
+    **cannot** run while `patrolbot_server` is active — it refuses to start if it detects one. To
+    use it, stop the service with the robot stationary and motors disabled, run the probe, then
+    restart the service:
+
+    ```bash
+    ssh robot-sbc 'systemctl --user stop patrolbot-server.service'
+    ssh robot-sbc 'cd /home/ros/patrolbot_hw_server && ./patrolbot_commission_probe \
+      --seconds=120 --out=/tmp/commission.csv -rh 127.0.0.1 -rrtp 7000'
+    ssh robot-sbc 'systemctl --user start patrolbot-server.service'
+    ```
+
+    The Pi bridge drops and reconnects automatically. Do not restart `socat-boot.service`.
 
 Units are converted from ARIA's mm/deg to m/rad **before** sending.
 

@@ -191,7 +191,7 @@ launch restart-loops, so executable permissions are safety-relevant.
 topics. **Publisher:** `/patrolbot/dock_readiness`; `/initialpose` only during an authorized dock
 pose request. **Service:** `/patrolbot/initialize_dock_pose`. **Action:** `/patrolbot/undock`.
 The active `dock_pose_configured=false` and uncommissioned bumper mapping keep physical undock
-unavailable. See [Actions](actions.md#patrolbot-guarded-undock).
+unavailable. See [Actions](actions.md#patrolbot-undock).
 
 ---
 

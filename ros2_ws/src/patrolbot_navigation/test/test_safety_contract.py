@@ -1,6 +1,7 @@
 """Static safety-contract tests for PatrolBot navigation configuration."""
 
 import math
+import re
 from pathlib import Path
 import subprocess
 import unittest
@@ -40,6 +41,8 @@ SERVER_CANDIDATES = (
 )
 SERVER_FILE = next(path for path in SERVER_CANDIDATES if path.exists())
 PROTOCOL_FILE = SERVER_FILE.with_name('protocol.cpp')
+UNDOCK_FILE = SERVER_FILE.with_name('undock.cpp')
+UNDOCK_PROFILE_FILE = SERVER_FILE.with_name('undock_profile.conf')
 SERVER_SYSTEMD_ROOT = (
     REPOSITORY_ROOT / 'hardware' / 'patrolbot_hw_server' / 'systemd'
 )
@@ -140,13 +143,21 @@ class SafetyContractTest(unittest.TestCase):
         self.assertAlmostEqual(manager['dock_pose_x'], 99.28925458355519)
         self.assertAlmostEqual(manager['dock_pose_y'], 126.33778290362004)
         self.assertAlmostEqual(manager['dock_pose_yaw'], -1.578938606346)
-        self.assertIs(manager['allow_front_bumper_at_dock'], True)
         self.assertEqual(manager['sensor_timeout'], 0.5)
-        self.assertEqual(manager['operator_motor_window'], 10.0)
-        self.assertEqual(manager['dock_departure_charge_grace'], 8.0)
         self.assertAlmostEqual(manager['undock_turn_yaw'], math.pi)
         self.assertEqual(manager['spin_timeout'], 20.0)
         self.assertEqual(manager['dock_pose_initialization_timeout'], 5.0)
+        # Requested of the SBC. undock_reverse_speed is a measured hardware
+        # ceiling: at 0.20 m/s the base re-latched charge and cut the motors
+        # 0.24 m into the reverse.
+        self.assertEqual(manager['undock_clearance_distance'], 0.53)
+        self.assertEqual(manager['undock_reverse_speed'], 0.10)
+        self.assertEqual(manager['undock_max_duration'], 45.0)
+        # The timed authorization design is gone, not merely unused.
+        for retired in (
+                'dock_departure_charge_grace', 'operator_motor_window',
+                'backup_timeout', 'allow_front_bumper_at_dock'):
+            self.assertNotIn(retired, manager)
 
     def test_measured_bumper_masks_are_loaded_by_compose(self):
         bridge = yaml.safe_load((
@@ -313,10 +324,13 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('create_publisher(\n            Twist', manager_text)
         self.assertNotIn("'/cmd_vel'", manager_text.split(
             'def _refresh_command_path', 1)[0])
-        self.assertIn("ActionClient(\n            self, BackUp, '/backup'", manager_text)
+        # Contact separation is delegated to the SBC, not driven from here.
+        self.assertIn(
+            "ActionClient(\n            self, HardwareUndock, "
+            "'/patrolbot/hardware_undock'", manager_text)
+        # Foreign BackUp goals are still watched for, so a stray Nav2 recovery
+        # counts as another action being active.
         self.assertIn("'assisted_teleop', 'backup'", manager_text)
-        # Nav2 BackUp takes positive target distance and produces negative Twist.
-        self.assertIn('backup.target.x = float(distance)', manager_text)
 
     def test_runtime_command_path_contract_covers_every_stage(self):
         manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')
@@ -348,7 +362,16 @@ class SafetyContractTest(unittest.TestCase):
     def test_hardware_controls_cannot_enable_or_move_as_a_drive_side_effect(self):
         server_text = SERVER_FILE.read_text(encoding='utf-8')
         protocol_text = PROTOCOL_FILE.read_text(encoding='utf-8')
-        self.assertEqual(server_text.count('robot->enableMotors();'), 1)
+        # Exactly two call sites, both deliberate: the explicit MOTOR_ENABLE
+        # command, and the undock state machine's edge-triggered effect. DRIVE
+        # and startup never enable the motors.
+        self.assertEqual(server_text.count('robot->enableMotors();'), 2)
+        self.assertIn('EFFECT_ENABLE_MOTORS', server_text)
+        drive_branch = server_text.split(
+            'if (command.type == patrolbot::COMMAND_DRIVE)', 1)[1]
+        drive_branch = drive_branch.split(
+            '} else if (command.type == patrolbot::COMMAND_UNDOCK)', 1)[0]
+        self.assertNotIn('enableMotors', drive_branch)
         self.assertIn('COMMAND_MOTOR_ENABLE', server_text)
         release_branch = server_text.split(
             'if (command.type == patrolbot::COMMAND_CHARGE_RELEASE)', 1)[1]
@@ -363,10 +386,118 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('setRotVel(', release_branch)
         self.assertNotIn('enableMotors()', release_branch)
         self.assertNotIn('motors_must_be_disabled_for_release', server_text)
-        self.assertIn('state.fault_flags != 0', server_text)
         self.assertIn('patrolbot::classifyDrive(', server_text)
-        self.assertIn('fault_flags != 0', protocol_text)
-        self.assertIn('DRIVE_ALLOWED_DOCK_DEPARTURE', protocol_text)
+
+    def test_timed_departure_authorization_is_gone_from_the_sbc(self):
+        """No timeout may authorize an ordinary DRIVE any more."""
+        texts = {
+            'server': SERVER_FILE.read_text(encoding='utf-8'),
+            'protocol': PROTOCOL_FILE.read_text(encoding='utf-8'),
+            'undock': UNDOCK_FILE.read_text(encoding='utf-8'),
+        }
+        for name, text in texts.items():
+            for retired in (
+                    'DepartureAuthorization', 'kDockDepartureWindowMs',
+                    'kDockTurnWindowMs', 'kReleaseToEnableWindowMs',
+                    'DRIVE_ALLOWED_DOCK_DEPARTURE', 'DRIVE_ALLOWED_DOCK_TURN',
+                    'motorEnableChargeAllowed'):
+                self.assertNotIn(retired, text, f'{retired} still in {name}')
+        # The drive gate takes a proven dock state, not a charge level.
+        self.assertIn('DockPhysicalState dock_state', texts['protocol'])
+        self.assertIn('DOCK_CLEAR_CONFIRMED', texts['protocol'])
+
+    def test_sbc_undock_never_commands_rotation(self):
+        """The collision-aware turn stays in Nav2, where the costmap is."""
+        undock_text = UNDOCK_FILE.read_text(encoding='utf-8')
+        self.assertNotIn('setRotVel', undock_text)
+        self.assertNotIn('commanded_angular', undock_text)
+        self.assertNotIn('turn_rad', undock_text)
+        server_text = SERVER_FILE.read_text(encoding='utf-8')
+        # The one rotational command in the undock path is an explicit zero.
+        self.assertIn('robot.setRotVel(0.0);', server_text)
+
+    def test_sbc_undock_keeps_reversing_when_charge_reasserts_healthily(self):
+        """Stopping on every re-latch lets the contacts settle back in."""
+        undock_text = UNDOCK_FILE.read_text(encoding='utf-8')
+        backing = undock_text.split('case UNDOCK_PHASE_BACKING_OUT:', 1)[1]
+        backing = backing.split('case UNDOCK_PHASE_VERIFYING_CLEARANCE:', 1)[0]
+        # Recovery is entered on interrupted motion, never on charge state.
+        self.assertIn('if (!inputs.motors_enabled)', backing)
+        self.assertIn('no_motion_after_reverse_command', backing)
+        self.assertIn('charge_resend_min_ms', backing)
+
+    def test_sbc_undock_completion_is_projected_displacement(self):
+        """Forward or sideways motion must never count as progress."""
+        undock_text = UNDOCK_FILE.read_text(encoding='utf-8')
+        self.assertIn(
+            'out->reverse_progress_m = -(dx * cos_yaw + dy * sin_yaw);',
+            undock_text)
+        self.assertIn('lateral_error_m', undock_text)
+        self.assertIn('heading_error_rad', undock_text)
+        self.assertIn('forward_motion_detected', undock_text)
+
+    def test_successful_undock_leaves_the_motors_live_for_nav2(self):
+        """A handoff with motors down would strand the robot."""
+        undock_text = UNDOCK_FILE.read_text(encoding='utf-8')
+        handoff = undock_text.split('case UNDOCK_PHASE_HANDOFF_READY:', 1)[1]
+        handoff = handoff.split('case UNDOCK_PHASE_STOPPING:', 1)[0]
+        self.assertNotIn('EFFECT_DISABLE_MOTORS', handoff)
+        self.assertIn('confirmClear', handoff)
+        stopping = undock_text.split('case UNDOCK_PHASE_STOPPING:', 1)[1]
+        # Failure and cancellation always stop AND disable.
+        self.assertIn('EFFECT_DISABLE_MOTORS', stopping)
+        self.assertIn('faultStop', stopping)
+
+    def test_undock_hardware_profile_matches_what_was_measured(self):
+        """Every value carries provenance from the 2026-07-29 commissioning."""
+        profile = UNDOCK_PROFILE_FILE.read_text(encoding='utf-8')
+        # Bumpers: 6+6 regression, each bit observed individually.
+        self.assertIn('bumper_mapping_valid = 1', profile)
+        self.assertIn('front_bumper_mask = 0x7e00', profile)
+        self.assertIn('rear_bumper_mask = 0x007e', profile)
+        # Rear sonar: only 11, 12 and 13 report on this robot. Index 10 is
+        # dead; listing it would make all_required_sensors_fresh permanently
+        # false and refuse every undock.
+        self.assertIn('rear_sonar_mapping_valid = 1', profile)
+        self.assertIn('rear_sonar_indices = 11,12,13', profile)
+        self.assertNotIn('rear_sonar_indices = 4,5,6,7', profile)
+        # E-stop is the physical button (SIP flags bit 5), not a charge
+        # interlock.
+        self.assertIn('estop_semantics_valid = 1', profile)
+        # Critical faults are an explicit mask, never "any nonzero".
+        self.assertIn('critical_fault_mask = 0x8304', profile)
+
+    def test_release_window_covers_the_measured_charger_latency(self):
+        """CHARGE 0 took 3552 ms to act; a shorter window fails every undock."""
+        profile = UNDOCK_PROFILE_FILE.read_text(encoding='utf-8')
+        match = re.search(r'^release_observe_ms\s*=\s*(\d+)', profile,
+                          re.MULTILINE)
+        self.assertIsNotNone(match, 'release_observe_ms must be set')
+        self.assertGreaterEqual(
+            int(match.group(1)), 4000,
+            'release_observe_ms must exceed the measured 3552 ms release '
+            'latency with margin; 300 ms burned every retry before the '
+            'charger let go')
+
+    def test_independent_lease_watchdog_supervises_the_undock_loop(self):
+        """An in-loop timeout cannot help if the loop itself stops."""
+        server_text = SERVER_FILE.read_text(encoding='utf-8')
+        self.assertIn('class UndockLeaseWatchdog : public ArASyncTask',
+                      server_text)
+        watchdog = server_text.split('virtual void* runThread(void*)', 1)[1]
+        watchdog = watchdog.split('ArUtil::sleep(50);', 1)[0]
+        self.assertIn('robot_->setVel(0);', watchdog)
+        self.assertIn('robot_->disableMotors();', watchdog)
+
+    def test_pi_no_longer_uses_backup_to_leave_the_dock(self):
+        manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')
+        self.assertNotIn('BackUp.Goal()', manager_text)
+        self.assertNotIn('_backup_client', manager_text)
+        self.assertNotIn('reverse_failures', manager_text)
+        self.assertNotIn('allow_transient_dock_charge', manager_text)
+        self.assertIn('HardwareUndock', manager_text)
+        # The turn is still Nav2's, so it keeps costmap awareness.
+        self.assertIn('Spin.Goal()', manager_text)
 
     def test_sbc_service_logging_is_compatible_with_systemd_229(self):
         unit_text = SERVER_UNIT_FILE.read_text(encoding='utf-8')

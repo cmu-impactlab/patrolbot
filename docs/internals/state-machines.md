@@ -62,13 +62,76 @@ This is what makes the SBC link self-healing without operator action — detaile
 stateDiagram-v2
     [*] --> Listening
     Listening --> Serving: accept() one Pi
-    Serving --> Serving: stream ODOM|LASER/AUX, read DRIVE
+    Serving --> Serving: send HELLO, stream ODOM|LASER/AUX, read DRIVE
     Serving --> Listening: EAGAIN guard (~3 s) / keepalive dead-peer → break & re-accept
 ```
 
 The server is single-client: an outer `while(robot.isRunning())` loop wraps `accept()`, so a gone
 Pi is detected (sustained `EAGAIN` + TCP keepalive/`TCP_USER_TIMEOUT`) and the server returns to
-`Listening` for the next connection.
+`Listening` for the next connection. Losing the client stops the base, **disables the motors
+unconditionally**, and invalidates any operation in flight; nothing resumes on reconnect.
+
+## SBC dock observer (persistent)
+
+Decides whether the robot may be driven at all. It survives client reconnects and starts at
+`UNKNOWN` — nothing is assumed at process start.
+
+```mermaid
+stateDiagram-v2
+    [*] --> UNKNOWN: process start
+    UNKNOWN --> DOCKED_CONFIRMED: charging debounced OR front-contact bits
+    UNKNOWN --> CLEAR_CONFIRMED: charge 0 debounced AND contacts clear AND stationary
+    DOCKED_CONFIRMED --> CLEAR_CONFIRMED: same explicit clear verification
+    DOCKED_CONFIRMED --> DEPARTING: UNDOCK accepted
+    DEPARTING --> CLEAR_CONFIRMED: full physical clearance proof
+    DEPARTING --> FAULT_STOPPED: failure or cancellation
+    CLEAR_CONFIRMED --> DOCKED_CONFIRMED: charge RISING EDGE after a confirmed zero,\nstationary, plus contact bits or a dwell
+    FAULT_STOPPED --> UNKNOWN: explicit DOCK_RESET once the condition clears
+```
+
+Ordinary `DRIVE` is permitted **only** in `CLEAR_CONFIRMED`. `charge_state` is an input to this
+observer, never an interlock in its own right, so a stale re-asserted charge level after a proven
+departure does not block navigation — and the only latch that survives such a level is
+`DEPARTING → CLEAR_CONFIRMED`, which requires measured displacement plus clear bumpers and rear
+sonar. A stale level alone can never move the observer back to `DOCKED_CONFIRMED`.
+
+## SBC undock operation (bounded)
+
+Runs only between `DEPARTING` entry and exit, at 20 Hz in the main loop, supervised from outside
+by an independent `ArASyncTask` command-lease watchdog.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PREPARING_UNDOCK
+    PREPARING_UNDOCK --> RELEASING: motors confirmed off, stationary
+    RELEASING --> ENABLING_MOTORS: falling edge or one valid charge-zero sample
+    RELEASING --> RELEASING: bounded retry, rate-limited CHARGE 0
+    ENABLING_MOTORS --> BACKING_OUT: motors confirmed in a LATER snapshot
+    BACKING_OUT --> BACKING_OUT: charge re-asserted but motors live and\nprogress healthy → keep reversing
+    BACKING_OUT --> RELEASING: motors dropped OR no motion (bounded)
+    BACKING_OUT --> VERIFYING_CLEARANCE: projected reverse progress ≥ clearance
+    VERIFYING_CLEARANCE --> BACKING_OUT: front contact persists, budget remains
+    VERIFYING_CLEARANCE --> HANDOFF_READY: stationary, bumpers clear, rear clear
+    HANDOFF_READY --> [*]: RESULT OK, MOTORS LEFT ENABLED, authority → DRIVE
+    PREPARING_UNDOCK --> STOPPING: any safety trip
+    RELEASING --> STOPPING: attempts exhausted
+    BACKING_OUT --> STOPPING: bumper/sonar/stall/e-stop/fault/timeout
+    STOPPING --> [*]: RESULT ERROR, motors DISABLED, dock state FAULT_STOPPED
+```
+
+Two terminal outcomes, deliberately different:
+
+| | Velocity | Motors | Authority | Dock state |
+|---|---|---|---|---|
+| Success (`HANDOFF_READY`) | 0, confirmed | **enabled** | transferred to `DRIVE` | `CLEAR_CONFIRMED` |
+| Failure / cancel (`STOPPING`) | 0, confirmed | **disabled** | `NONE` | `FAULT_STOPPED` |
+
+Success leaves the motors live because the generic drive gate refuses motion without them:
+handing off any other way would strand the robot. Charge re-assertion while the reverse is
+healthy does **not** stop the robot — stopping on every re-latch would let the contacts settle
+back in — it only triggers a rate-limited `CHARGE 0`. Completion uses signed reverse progress
+projected onto the departure heading, with lateral-drift and heading-error limits, so forward or
+sideways motion never counts as progress.
 
 ## `cmd_vel` arbitration (twist_mux)
 

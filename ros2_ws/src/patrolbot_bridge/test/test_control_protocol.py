@@ -2,9 +2,11 @@
 
 from patrolbot_bridge.control_protocol import (
     COMMAND_CHARGE_RELEASE,
+    COMMAND_DOCK_RESET,
     COMMAND_MOTOR_ENABLE,
+    COMMAND_UNDOCK,
     format_request,
-    motor_enable_charge_allowed,
+    motor_enable_allowed,
     parse_reply,
     valid_request_id,
 )
@@ -14,7 +16,9 @@ import pytest
 REQUEST_ID = '123e4567-e89b-12d3-a456-426614174000'
 
 
-@pytest.mark.parametrize('command', [COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE])
+@pytest.mark.parametrize(
+    'command',
+    [COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE, COMMAND_DOCK_RESET])
 def test_request_is_exactly_one_zero_motion_line(command):
     payload = format_request(command, REQUEST_ID)
     assert payload == f'{command}:{REQUEST_ID}\n'.encode('ascii')
@@ -31,11 +35,21 @@ def test_duplicate_ack_and_terminal_result_are_parseable():
     assert not result.motors_enabled
 
 
-def test_motor_enable_charge_gate_is_scoped_to_recent_release():
-    assert motor_enable_charge_allowed(0, False)
-    assert motor_enable_charge_allowed(3, True)
-    assert not motor_enable_charge_allowed(3, False)
-    assert not motor_enable_charge_allowed(-1, True)
+def test_motor_enable_is_decoupled_from_charging():
+    """Permitted only where dock contact is impossible, never by a timer."""
+    assert motor_enable_allowed('CLEAR_CONFIRMED', False)
+    assert motor_enable_allowed('UNKNOWN', False)
+    assert not motor_enable_allowed('DOCKED_CONFIRMED', False)
+    assert not motor_enable_allowed('DEPARTING', False)
+    assert not motor_enable_allowed('FAULT_STOPPED', False)
+    # E-stop always refuses, and there is no post-release back door left.
+    assert not motor_enable_allowed('CLEAR_CONFIRMED', True)
+
+
+def test_undock_is_not_a_simple_request_command():
+    """UNDOCK carries parameters, so it must not go through format_request."""
+    with pytest.raises(ValueError):
+        format_request(COMMAND_UNDOCK, REQUEST_ID)
 
 
 @pytest.mark.parametrize(

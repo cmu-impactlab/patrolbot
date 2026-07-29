@@ -1,18 +1,25 @@
-"""Pure safety contracts shared by the dock manager and offline tests."""
+"""Pure safety contracts shared by the dock manager and offline tests.
+
+Physical separation from the dock is owned by the SBC. Everything here is a
+Pi-side concern: whether it is sensible to ask for that operation at all, and
+whether navigation may resume afterwards. There is deliberately no
+`reverse_failures` any more — continuously monitoring a reverse the Pi does not
+command was the split-ownership defect this design removes.
+"""
 
 from dataclasses import dataclass
 from typing import List
 
 
 HARD_MAX_DISTANCE = 0.70
-# DO NOT RAISE. This matches the SBC's own reverse-only authorization, the
-# same way behavior_server's max_rotational_vel: 0.7 matches its turn
-# authorization — it is a hardware limit, not a tuning knob.
+# DO NOT RAISE. This mirrors the SBC's own hard cap; the SBC rejects anything
+# larger outright rather than clamping it, so raising this only changes which
+# side reports the failure.
 #
 # Measured 2026-07-28: at 0.10 m/s the robot reversed the full 0.53 m; raising
 # this to 0.20 m/s made the base re-latch charge and cut the motors 0.24 m in,
 # aborting the undock with "motors disabled". The reverse leg is slow because
-# the SBC says so, not because the software is being cautious.
+# the hardware says so, not because the software is being cautious.
 HARD_MAX_SPEED = 0.10
 VALIDATION_MAX_DISTANCE = 0.10
 VALIDATION_MAX_SPEED = 0.05
@@ -21,21 +28,16 @@ VALIDATION_MAX_SPEED = 0.05
 # representation error and does not silently clamp an actual over-limit goal.
 FLOAT32_BOUNDARY_EPSILON = 1e-6
 
+# Nine states, down from sixteen: the six that used to command and monitor
+# contact separation now live inside one SBC operation.
 HAPPY_PATH = (
     'IDLE',
     'PRECHECK',
-    'REQUEST_DOCK_RELEASE',
-    'WAIT_FOR_CHARGE_RELEASE',
-    'VERIFY_ESTOP_AND_MOTOR',
     'VERIFY_LOCALIZATION',
-    'VERIFY_REAR_SONAR',
     'VERIFY_COMMAND_PATH',
-    'GUARDED_REVERSE',
-    'CLEAR_CHARGE_LATCH',
-    'CLEAR_OF_DOCK',
-    'ENABLE_TURN',
+    'HARDWARE_UNDOCK',
+    'RESTORE_LOCALIZATION',
     'TURN_AWAY_FROM_DOCK',
-    'FINALIZE_CHARGE_LATCH',
     'STOPPED',
     'COMPLETE',
 )
@@ -45,10 +47,18 @@ ALLOWED_TRANSITIONS = {
     for index, state in enumerate(HAPPY_PATH[:-1])
 }
 
+# Mirrors patrolbot::DockPhysicalState. The SBC permits ordinary motion only in
+# CLEAR_CONFIRMED.
+DOCK_UNKNOWN = 'UNKNOWN'
+DOCK_DOCKED_CONFIRMED = 'DOCKED_CONFIRMED'
+DOCK_DEPARTING = 'DEPARTING'
+DOCK_CLEAR_CONFIRMED = 'CLEAR_CONFIRMED'
+DOCK_FAULT_STOPPED = 'FAULT_STOPPED'
+
 
 @dataclass(frozen=True)
 class SafetySnapshot:
-    """One fail-closed view of every input required for automatic reverse."""
+    """One fail-closed view of every input the Pi is responsible for."""
 
     link_connected: bool = False
     hardware_state_valid: bool = False
@@ -70,6 +80,15 @@ class SafetySnapshot:
     dock_pose_valid: bool = False
     command_path_valid: bool = False
     navigation_idle: bool = False
+    # SBC-owned dock ownership. Absent or stale telemetry reads as UNKNOWN.
+    dock_state: str = DOCK_UNKNOWN
+    dock_state_valid: bool = False
+    undock_active: bool = False
+    physically_clear: bool = False
+    # Advisory, published by the SBC and enforced here. It gates DOCKING and
+    # never undocking.
+    redock_inhibited: bool = True
+    undock_profile_commissioned: bool = False
 
 
 def transition_allowed(current: str, target: str) -> bool:
@@ -97,44 +116,41 @@ def validate_goal(distance: float, speed: float, validation_mode: bool) -> List[
 
 
 def precheck_failures(
-        state: SafetySnapshot, allow_front_bumper_at_dock: bool = False) -> List[str]:
-    """Validate docked, zero-motion gates before requesting charge release.
+        state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
+    """Validate the Pi-side gates before asking the SBC to undock.
 
-    E-stop clear and motor state are intentionally not required here. Manual
-    charging may leave motors reported enabled; the SBC release operation first
-    disables and confirms them before sending CHARGE 0. Some hardware may clear
-    the dock-related stop indication only during the post-release operator PWR
-    ON window (binding amendment A-1).
+    Physical readiness is the SBC's call: it owns the bumpers, the rear sonar,
+    the charger and the motors, and refuses the operation itself if any of them
+    is wrong. What is checked here is what only the Pi can see — localization,
+    the velocity command path, and whether another navigation action is running
+    — plus the SBC's own published verdict on whether the robot is docked and
+    commissioned.
+
+    E-stop and motor state are intentionally not required. A docked robot has
+    been observed reporting estop=1 with motors=0, and the SBC's release
+    sequence disables and confirms the motors itself before touching the
+    charger.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:
         failures.append('hardware link/state invalid')
-    if not state.charge_state_valid or state.charge_state <= 0:
-        failures.append('robot is not confirmed charging at the dock')
-    if state.fault_flags:
-        failures.append('hardware fault flags are nonzero')
-    if not state.bumpers_valid:
-        failures.append('bumper mapping/state invalid')
-    if state.rear_bumper_pressed:
-        failures.append('rear bumper pressed')
-    if state.front_bumper_pressed and not allow_front_bumper_at_dock:
-        failures.append('front bumper pressed without accepted dock baseline')
-    if not state.sonar_fresh or not state.rear_clear:
-        failures.append('rear sonar stale or obstructed')
-    if not state.odom_fresh or not state.stationary:
-        failures.append('odometry stale or robot moving')
+    if not state.dock_state_valid:
+        failures.append('SBC dock state is stale or unavailable')
+    elif state.dock_state == DOCK_FAULT_STOPPED:
+        failures.append(
+            'SBC dock state is FAULT_STOPPED; an explicit reset is required')
+    elif state.dock_state != DOCK_DOCKED_CONFIRMED:
+        failures.append(
+            f'SBC does not report the robot docked '
+            f'(dock_state={state.dock_state})')
+    if state.undock_active:
+        failures.append('an undock operation is already running')
+    if not validation_mode and not state.undock_profile_commissioned:
+        # Production undocking is refused by the SBC until rear-sonar indices,
+        # E-stop semantics and fault masks have been physically validated.
+        failures.append('SBC undock hardware profile is not commissioned')
     if not state.localization_fresh or not state.localization_valid:
         failures.append('localization invalid')
-    # Confirmed charging is physical proof of position: current only flows once
-    # the contacts are mated. The dock-pose comparison is a fixed radius around
-    # a single surveyed pose, but a real dock has capture range — a robot placed
-    # by hand sits well off that pose and charges perfectly well (observed:
-    # 0.32 m against a 0.25 m tolerance, charging happily). charge_state is
-    # already required above, so this only relaxes a redundant second opinion,
-    # and it relaxes it in favour of the hardware over an AMCL estimate.
-    confirmed_charging = state.charge_state_valid and state.charge_state > 0
-    if not state.dock_pose_valid and not confirmed_charging:
-        failures.append('robot is not within configured dock-pose tolerance')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')
     if not state.navigation_idle:
@@ -142,39 +158,27 @@ def precheck_failures(
     return failures
 
 
-def reverse_failures(
-        state: SafetySnapshot, expected_session: int,
-        allow_front_bumper_while_reversing: bool = False,
-        allow_transient_dock_charge: bool = False) -> List[str]:
-    """Validate every continuously monitored reverse-motion gate.
+def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
+    """Validate that Nav2 may take control after the SBC hands off.
 
-    A physically commissioned dock may hold a front panel while the robot
-    backs straight away from it. Rear contact always blocks reverse. The caller
-    must still require all bumpers clear before declaring the dock cleared.
+    Called once, after the hardware undock reports success. The SBC leaves the
+    motors live at zero velocity precisely so this can succeed; a handoff that
+    left them disabled would strand the robot, because the generic drive gate
+    refuses motion with the motors down.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:
         failures.append('hardware link/state invalid')
     if state.session_generation != expected_session:
         failures.append('hardware session changed')
-    if (not state.charge_state_valid or
-            (state.charge_state != 0 and not allow_transient_dock_charge)):
-        failures.append('charge release not confirmed')
+    if not state.dock_state_valid or state.dock_state != DOCK_CLEAR_CONFIRMED:
+        failures.append(
+            f'SBC has not confirmed physical clearance '
+            f'(dock_state={state.dock_state})')
+    if not state.motors_enabled:
+        failures.append('motors are not live for the Nav2 handoff')
     if state.estop_pressed:
         failures.append('E-stop asserted')
-    if not state.motors_enabled:
-        failures.append('motors disabled')
-    if state.fault_flags:
-        failures.append('hardware fault flags are nonzero')
-    if not state.bumpers_valid:
-        failures.append('bumper state invalid')
-    if (state.front_bumper_pressed and
-            not allow_front_bumper_while_reversing):
-        failures.append('front bumper pressed')
-    if state.rear_bumper_pressed:
-        failures.append('rear bumper pressed')
-    if not state.sonar_fresh or not state.rear_clear:
-        failures.append('rear sonar stale or obstructed')
     if not state.odom_fresh:
         failures.append('odometry stale')
     if not state.localization_fresh or not state.localization_valid:
@@ -186,13 +190,29 @@ def reverse_failures(
     return failures
 
 
+def automatic_docking_allowed(state: SafetySnapshot) -> bool:
+    """Report whether a mission may send the robot back to the dock.
+
+    The SBC publishes the inhibition but has no autonomous dock operation, so
+    nothing on the hardware side enforces it. This is the check that does.
+    Deliberately separate from undock readiness: after a successful undock the
+    robot is not ready to undock (it is already clear) and not allowed to dock
+    (the inhibition is running), and those are different facts.
+    """
+    if not state.dock_state_valid:
+        return False
+    if state.redock_inhibited:
+        return False
+    return not state.undock_active
+
+
 def dock_pose_initialization_failures(state: SafetySnapshot) -> List[str]:
     """Validate a zero-motion, operator-requested dock-pose initialization.
 
     This deliberately does not require an existing localization estimate or a
     clear E-stop: those are the facts being recovered/physically clarified at
     the dock. It does require positive evidence that the robot is docked,
-    stationary, fault-free, motor-disabled, and not executing another action.
+    stationary, fault-free, and not executing another action.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:

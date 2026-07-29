@@ -22,12 +22,44 @@ colcon test-result --verbose
 
 | Package | Tests |
 |---|---|
-| `patrolbot_bridge` | `test_copyright.py`, `test_flake8.py`, `test_pep257.py` |
+| `patrolbot_bridge` | `test_control_protocol.py`, `test_undock_protocol.py`, `test_safety_telemetry.py`, `test_fake_sbc_integration.py`, plus lint |
+| `patrolbot_dock_manager` | `test_contracts.py`, `test_manager_integration.py`, plus lint |
+| `patrolbot_navigation` | `test_safety_contract.py`, `test_safety_policy.py`, `test_joystick_policy.py`, `test_physical_calibration.py`, `test_collision_monitor_integration.py` |
+| `patrolbot_docking_plugins` | `test_charge_state.cpp` (gtest) |
+| `patrolbot_gimbal` | seven behaviour suites incl. `test_isolation_contract.py` |
 | `patrolbot-launch` | `test_copyright.py`, `test_flake8.py`, `test_pep257.py` |
-| `patrolbot_navigation` | `ament_lint_auto` / `ament_lint_common` |
 | `rosaria2` | `ament_lint_auto` / `ament_lint_common` |
 
-These are **lint/style** checks, not behavior tests. Treat them as a formatting gate.
+The two integration suites are skipped unless `PATROLBOT_RUN_INTEGRATION=1` is set, because they
+create real rclpy nodes and must run in an isolated ROS domain:
+
+```bash
+PATROLBOT_RUN_INTEGRATION=1 colcon test \
+  --packages-select patrolbot_bridge patrolbot_dock_manager
+```
+
+## SBC server tests
+
+The SBC has its own suites, and **neither links ARIA**, so both build and run on a workstation:
+
+```bash
+cd hardware/patrolbot_hw_server
+make -B test        # runs tests/protocol_test and tests/undock_test
+```
+
+`tests/undock_test.cpp` drives the dock observer and the undock controller through scripted
+hardware snapshots — a simulated base with configurable charge-release latency, charge
+re-assertion, wheel lock, motor drop-out, rear obstacles and bumper events. That covers the
+release-retry loop, no-motion detection, projected-displacement completion, cancellation,
+duplicate request IDs, the redock inhibition and restart behaviour without a robot.
+
+Because the pure modules are 32-bit-clean C++11, verify them against the target toolchain before
+deploying — ideally on the SBC itself, which is the only place g++ 5.4 exists:
+
+```bash
+g++ -m32 -Wall -Wextra -Wpedantic -O2 -std=c++11 -c protocol.cpp -o /tmp/protocol.o
+g++ -m32 -Wall -Wextra -Wpedantic -O2 -std=c++11 -c undock.cpp   -o /tmp/undock.o
+```
 
 ## Resilience tests (the important ones)
 
@@ -53,8 +85,12 @@ ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
 
 - No automated end-to-end navigation test (plan → follow → reach goal). Validate goals manually in
   RViz against the active map.
-- No simulation harness or checked-in mock SBC. Integration testing is currently on hardware.
-- The SBC server has no unit tests; it is validated by the resilience scenarios above.
+- No automated end-to-end navigation test on hardware; validate goals manually in RViz.
+- The undock hardware profile (rear-sonar indices, E-stop semantics, fault masks) cannot be
+  measured offline. Until `patrolbot_commission_probe` supplies them, a production undock is
+  refused by design.
+- Encoder fidelity on the charging plates, and the causal ordering of motor stopping during a
+  charge re-latch, need a supervised physical session.
 
 ## Suggested additions (future)
 

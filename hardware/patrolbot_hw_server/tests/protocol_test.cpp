@@ -1,118 +1,276 @@
+// Offline tests for the SBC/Pi wire protocol and the ordinary drive gate.
+//
+// Failures report file:line rather than aborting on the first bad assertion, so
+// one run reports every regression.
+
 #include "../protocol.hpp"
 
-#include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
-int main() {
-  const std::string id = "123e4567-e89b-12d3-a456-426614174000";
-  assert(patrolbot::isCanonicalUuid(id));
-  assert(!patrolbot::isCanonicalUuid("123e4567-e89b-12d3-a456-42661417400Z"));
+namespace {
 
-  patrolbot::ParsedCommand release =
-      patrolbot::parseCommand("CHARGE_RELEASE:" + id);
-  assert(release.type == patrolbot::COMMAND_CHARGE_RELEASE);
-  assert(release.request_id == id);
-  assert(release.linear == 0.0 && release.angular == 0.0);
+const char* g_case = "<none>";
+int g_failures = 0;
+int g_checks = 0;
 
-  patrolbot::ParsedCommand enable =
-      patrolbot::parseCommand("MOTOR_ENABLE:" + id);
-  assert(enable.type == patrolbot::COMMAND_MOTOR_ENABLE);
-  assert(enable.linear == 0.0 && enable.angular == 0.0);
+#define CHECK(expr)                                                          \
+  do {                                                                       \
+    ++g_checks;                                                              \
+    if (!(expr)) {                                                           \
+      std::fprintf(stderr, "FAIL [%s] %s:%d: %s\n", g_case, __FILE__,        \
+                   __LINE__, #expr);                                         \
+      ++g_failures;                                                          \
+    }                                                                        \
+  } while (0)
 
-  patrolbot::ParsedCommand drive = patrolbot::parseCommand("DRIVE:-0.05:0.0");
-  assert(drive.type == patrolbot::COMMAND_DRIVE);
-  assert(std::fabs(drive.linear + 0.05) < 1e-9);
-  assert(patrolbot::parseCommand("DRIVE:nan:0").type == patrolbot::COMMAND_INVALID);
-  assert(patrolbot::parseCommand("MOTOR_ENABLE:not-a-uuid").type ==
-         patrolbot::COMMAND_INVALID);
+#define RUN(name)                                                            \
+  g_case = #name;                                                            \
+  name();
 
-  assert(patrolbot::classifyDrive(
-             0.0, 0.0, true, 3, false, true, 99, false, false) ==
-         patrolbot::DRIVE_ALLOWED_ZERO);
-  assert(patrolbot::classifyDrive(
-             -0.05, 0.0, false, 0, true, false, 0, false, false) ==
-         patrolbot::DRIVE_ALLOWED_NORMAL);
-  assert(patrolbot::classifyDrive(
-             -0.10, 0.0, false, 3, true, false, 0, true, false) ==
-         patrolbot::DRIVE_ALLOWED_DOCK_DEPARTURE);
-  assert(patrolbot::classifyDrive(
-             -0.100002, 0.0, false, 3, true, false, 0, true, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             0.01, 0.0, false, 3, true, false, 0, true, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             -0.01, 0.01, false, 3, true, false, 0, true, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             -0.01, 0.0, true, 3, true, false, 0, true, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             -0.01, 0.0, false, 3, true, true, 0, true, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             -0.01, 0.0, false, 3, true, false, 1, true, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             -0.01, 0.0, false, 3, true, false, 0, false, false) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             0.0, 0.70, false, 3, true, false, 0, true, true) ==
-         patrolbot::DRIVE_ALLOWED_DOCK_TURN);
-  assert(patrolbot::classifyDrive(
-             0.0, -0.70, false, 3, true, false, 0, true, true) ==
-         patrolbot::DRIVE_ALLOWED_DOCK_TURN);
-  assert(patrolbot::classifyDrive(
-             0.0, 0.700002, false, 3, true, false, 0, true, true) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             0.001, 0.20, false, 3, true, false, 0, true, true) ==
-         patrolbot::DRIVE_REJECTED);
-  assert(patrolbot::classifyDrive(
-             0.0, 0.20, false, 3, true, false, 0, true, false) ==
-         patrolbot::DRIVE_REJECTED);
+using namespace patrolbot;
 
-  assert(patrolbot::motorEnableChargeAllowed(0, false));
-  assert(patrolbot::motorEnableChargeAllowed(3, true));
-  assert(!patrolbot::motorEnableChargeAllowed(3, false));
-  assert(!patrolbot::motorEnableChargeAllowed(-1, true));
+const std::string kId = "123e4567-e89b-12d3-a456-426614174000";
+const std::string kOtherId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+// bit 2 | bit 8 | bit 9 | bit 15, matching UndockHardwareProfile's default.
+const unsigned int kCritical = 0x8304;
 
-  patrolbot::LineBuffer buffer;
+void test_uuid_validation() {
+  CHECK(isCanonicalUuid(kId));
+  CHECK(!isCanonicalUuid("123e4567-e89b-12d3-a456-42661417400Z"));
+  CHECK(!isCanonicalUuid("123E4567-E89B-12D3-A456-426614174000"));
+  CHECK(!isCanonicalUuid(""));
+  CHECK(!isCanonicalUuid("123e4567e89b12d3a456426614174000"));
+}
+
+void test_maintenance_command_parsing() {
+  ParsedCommand release = parseCommand("CHARGE_RELEASE:" + kId);
+  CHECK(release.type == COMMAND_CHARGE_RELEASE);
+  CHECK(release.request_id == kId);
+
+  ParsedCommand enable = parseCommand("MOTOR_ENABLE:" + kId);
+  CHECK(enable.type == COMMAND_MOTOR_ENABLE);
+
+  ParsedCommand reset = parseCommand("DOCK_RESET:" + kId);
+  CHECK(reset.type == COMMAND_DOCK_RESET);
+  CHECK(reset.request_id == kId);
+
+  CHECK(parseCommand("MOTOR_ENABLE:not-a-uuid").type == COMMAND_INVALID);
+  CHECK(parseCommand("DOCK_RESET:not-a-uuid").type == COMMAND_INVALID);
+}
+
+void test_drive_command_parsing() {
+  ParsedCommand drive = parseCommand("DRIVE:-0.05:0.0");
+  CHECK(drive.type == COMMAND_DRIVE);
+  CHECK(std::fabs(drive.linear + 0.05) < 1e-9);
+  CHECK(parseCommand("DRIVE:nan:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:inf:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0.1abc:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0.1").type == COMMAND_INVALID);
+}
+
+void test_undock_command_parsing() {
+  ParsedCommand undock = parseCommand("UNDOCK:" + kId + ":0.53:0.10:30:0");
+  CHECK(undock.type == COMMAND_UNDOCK);
+  CHECK(undock.request_id == kId);
+  CHECK(std::fabs(undock.clearance_m - 0.53) < 1e-9);
+  CHECK(std::fabs(undock.speed_mps - 0.10) < 1e-9);
+  CHECK(std::fabs(undock.timeout_s - 30.0) < 1e-9);
+  CHECK(!undock.validation_mode);
+
+  ParsedCommand validation = parseCommand("UNDOCK:" + kId + ":0.10:0.05:20:1");
+  CHECK(validation.type == COMMAND_UNDOCK);
+  CHECK(validation.validation_mode);
+
+  // Every field is mandatory and strictly typed.
+  CHECK(parseCommand("UNDOCK:" + kId + ":0.53:0.10:30").type ==
+        COMMAND_INVALID);
+  CHECK(parseCommand("UNDOCK:" + kId + ":0.53:0.10:30:2").type ==
+        COMMAND_INVALID);
+  CHECK(parseCommand("UNDOCK:" + kId + ":nan:0.10:30:0").type ==
+        COMMAND_INVALID);
+  CHECK(parseCommand("UNDOCK:not-a-uuid:0.53:0.10:30:0").type ==
+        COMMAND_INVALID);
+}
+
+void test_undock_cancel_names_its_target() {
+  ParsedCommand cancel = parseCommand("UNDOCK_CANCEL:" + kId);
+  CHECK(cancel.type == COMMAND_UNDOCK_CANCEL);
+  // The payload is the id of the operation being cancelled, not a new one.
+  CHECK(cancel.target_request_id == kId);
+  CHECK(parseCommand("UNDOCK_CANCEL:not-a-uuid").type == COMMAND_INVALID);
+}
+
+void test_drive_requires_a_proven_clear_dock_state() {
+  // Zero is always accepted so a stop can never be refused.
+  CHECK(classifyDrive(0.0, 0.0, true, DOCK_DOCKED_CONFIRMED, false, true,
+                      0xffff, kCritical, true) == DRIVE_ALLOWED_ZERO);
+
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, false) == DRIVE_ALLOWED_NORMAL);
+  CHECK(classifyDrive(0.0, 0.70, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, false) == DRIVE_ALLOWED_NORMAL);
+
+  // Every state other than CLEAR_CONFIRMED refuses motion, including UNKNOWN
+  // at process start.
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_UNKNOWN, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_DOCKED_CONFIRMED, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_DEPARTING, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_FAULT_STOPPED, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+}
+
+void test_drive_is_refused_while_undock_owns_motion() {
+  // The exact reverse the undock itself commands is still refused when it
+  // arrives as an ordinary DRIVE, in every dock state.
+  CHECK(classifyDrive(-0.10, 0.0, false, DOCK_DEPARTING, true, false, 0,
+                      kCritical, true) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.10, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, true) == DRIVE_REJECTED);
+  CHECK(classifyDrive(0.0, 0.5, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, true) == DRIVE_REJECTED);
+  // A stop is still honoured during an undock.
+  CHECK(classifyDrive(0.0, 0.0, false, DOCK_DEPARTING, true, false, 0,
+                      kCritical, true) == DRIVE_ALLOWED_ZERO);
+}
+
+void test_drive_bounds_and_hardware_gates() {
+  CHECK(classifyDrive(0.31, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(0.0, 1.21, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, true, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, false, false, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, true, 0,
+                      kCritical, false) == DRIVE_REJECTED);
+
+  // Critical faults block; a non-critical flag such as low_battery (bit 3)
+  // does not, because a robot that has just left the dock reports it normally.
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
+                      0x0100, kCritical, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
+                      0x0008, kCritical, false) == DRIVE_ALLOWED_NORMAL);
+}
+
+void test_motor_enable_is_decoupled_from_charging() {
+  // Permitted only where the robot cannot still be connected to the dock.
+  CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false));
+  CHECK(motorEnableAllowed(DOCK_UNKNOWN, false));
+  CHECK(!motorEnableAllowed(DOCK_DOCKED_CONFIRMED, false));
+  CHECK(!motorEnableAllowed(DOCK_DEPARTING, false));
+  CHECK(!motorEnableAllowed(DOCK_FAULT_STOPPED, false));
+  // E-stop always refuses, and there is no "recent release" back door.
+  CHECK(!motorEnableAllowed(DOCK_CLEAR_CONFIRMED, true));
+  CHECK(!motorEnableAllowed(DOCK_UNKNOWN, true));
+}
+
+void test_line_buffer_reassembles_fragments() {
+  LineBuffer buffer;
   std::vector<std::string> lines;
-  assert(buffer.append("CHARGE_RE", 9, &lines));
-  assert(lines.empty());
-  const std::string remainder = "LEASE:" + id + "\nDRIVE:0:0\n";
-  assert(buffer.append(remainder.data(), remainder.size(), &lines));
-  assert(lines.size() == 2);
-  assert(lines[0] == "CHARGE_RELEASE:" + id);
-  assert(lines[1] == "DRIVE:0:0");
+  CHECK(buffer.append("CHARGE_RE", 9, &lines));
+  CHECK(lines.empty());
+  const std::string remainder = "LEASE:" + kId + "\nDRIVE:0:0\r\n";
+  CHECK(buffer.append(remainder.data(), remainder.size(), &lines));
+  CHECK(lines.size() == 2);
+  CHECK(lines[0] == "CHARGE_RELEASE:" + kId);
+  CHECK(lines[1] == "DRIVE:0:0");
 
-  assert(patrolbot::formatAck(patrolbot::COMMAND_MOTOR_ENABLE, id, true) ==
-         "ACK:MOTOR_ENABLE:" + id + ":REPLAYED\n");
-  assert(patrolbot::formatResult(
-             patrolbot::COMMAND_CHARGE_RELEASE, id, true, 0,
-             "charge released", 0, false, false) ==
-         "RESULT:CHARGE_RELEASE:" + id +
-             ":OK:0:charge_released:0:0:0\n");
+  LineBuffer small(16);
+  std::vector<std::string> overflow;
+  CHECK(!small.append("0123456789012345678901234567890", 31, &overflow));
+}
 
-  patrolbot::RequestTracker tracker(2);
+void test_control_frame_formatting() {
+  CHECK(formatAck(COMMAND_MOTOR_ENABLE, kId, true) ==
+        "ACK:MOTOR_ENABLE:" + kId + ":REPLAYED\n");
+  CHECK(formatAck(COMMAND_UNDOCK, kId, false) ==
+        "ACK:UNDOCK:" + kId + ":ACCEPTED\n");
+  CHECK(formatResult(COMMAND_CHARGE_RELEASE, kId, true, 0, "charge released", 0,
+                     false, false) ==
+        "RESULT:CHARGE_RELEASE:" + kId + ":OK:0:charge_released:0:0:0\n");
+  CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK\n");
+}
+
+void test_undock_frame_formatting() {
+  // Distinct leading verbs, so a bridge that predates them ignores the lines
+  // instead of raising a parse error on an unexpected RESULT arity.
+  const std::string event =
+      formatUndockEvent(kId, UNDOCK_PHASE_BACKING_OUT, 0.1234, 0.0056, 0.0102,
+                        3, true, 1.5, 2, DOCK_DEPARTING);
+  CHECK(event == "UNDOCK_EVENT:" + kId +
+                     ":4:BACKING_OUT:0.1234:0.0056:0.0102:3:1:1.5000:2:"
+                     "DEPARTING\n");
+
+  const std::string result = formatUndockResult(
+      kId, true, 0, "undocked", UNDOCK_PHASE_HANDOFF_READY, 0.5300, 0.0010,
+      0.0020, 3, true, false, 99.0, 1, DOCK_CLEAR_CONFIRMED, true);
+  CHECK(result == "UNDOCK_RESULT:" + kId +
+                      ":OK:0:undocked:6:HANDOFF_READY:0.5300:0.0010:0.0020:3:1:"
+                      "0:99.0000:1:CLEAR_CONFIRMED:1\n");
+
+  // Messages are sanitised to a single protocol-safe token.
+  const std::string failed = formatUndockResult(
+      kId, false, UNDOCK_SENSOR_BLOCKED, "rear path blocked",
+      UNDOCK_PHASE_STOPPING, 0.12, 0.0, 0.0, 0, false, false, 0.1, 3,
+      DOCK_FAULT_STOPPED, false);
+  CHECK(failed.find(":rear_path_blocked:") != std::string::npos);
+  CHECK(failed.find(":FAULT_STOPPED:0\n") != std::string::npos);
+}
+
+void test_request_tracker_lifecycle() {
+  RequestTracker tracker(2);
   std::string cached;
-  assert(tracker.inspect(patrolbot::COMMAND_CHARGE_RELEASE, id, &cached) ==
-         patrolbot::REQUEST_NEW);
-  tracker.begin(patrolbot::COMMAND_CHARGE_RELEASE, id);
-  assert(tracker.inspect(patrolbot::COMMAND_CHARGE_RELEASE, id, &cached) ==
-         patrolbot::REQUEST_DUPLICATE_PENDING);
-  assert(tracker.inspect(patrolbot::COMMAND_MOTOR_ENABLE, id, &cached) ==
-         patrolbot::REQUEST_BUSY);
-  const std::string terminal = patrolbot::formatResult(
-      patrolbot::COMMAND_CHARGE_RELEASE, id, true, 0, "released", 0, false,
-      false);
-  tracker.finish(patrolbot::COMMAND_CHARGE_RELEASE, id, terminal);
-  assert(!tracker.hasPending());
-  assert(tracker.inspect(patrolbot::COMMAND_CHARGE_RELEASE, id, &cached) ==
-         patrolbot::REQUEST_COMPLETED);
-  assert(cached == terminal);
+  CHECK(tracker.inspect(COMMAND_UNDOCK, kId, &cached) == REQUEST_NEW);
+  tracker.begin(COMMAND_UNDOCK, kId);
+  CHECK(tracker.inspect(COMMAND_UNDOCK, kId, &cached) ==
+        REQUEST_DUPLICATE_PENDING);
+  // A different command while an undock is pending is busy, which is exactly
+  // why cancellation cannot go through inspect().
+  CHECK(tracker.inspect(COMMAND_CHARGE_RELEASE, kId, &cached) == REQUEST_BUSY);
+  CHECK(tracker.inspect(COMMAND_UNDOCK, kOtherId, &cached) == REQUEST_BUSY);
+  CHECK(tracker.pendingMatches(COMMAND_UNDOCK, kId));
+  CHECK(!tracker.pendingMatches(COMMAND_UNDOCK, kOtherId));
+
+  const std::string terminal = formatUndockResult(
+      kId, true, 0, "undocked", UNDOCK_PHASE_HANDOFF_READY, 0.53, 0.0, 0.0, 0,
+      true, false, 99.0, 0, DOCK_CLEAR_CONFIRMED, true);
+  tracker.finish(COMMAND_UNDOCK, kId, terminal);
+  CHECK(!tracker.hasPending());
+  CHECK(tracker.inspect(COMMAND_UNDOCK, kId, &cached) == REQUEST_COMPLETED);
+  CHECK(cached == terminal);
+  CHECK(tracker.lookupCompleted(COMMAND_UNDOCK, kId, &cached));
+  CHECK(!tracker.lookupCompleted(COMMAND_UNDOCK, kOtherId, &cached));
+}
+
+}  // namespace
+
+int main() {
+  RUN(test_uuid_validation);
+  RUN(test_maintenance_command_parsing);
+  RUN(test_drive_command_parsing);
+  RUN(test_undock_command_parsing);
+  RUN(test_undock_cancel_names_its_target);
+  RUN(test_drive_requires_a_proven_clear_dock_state);
+  RUN(test_drive_is_refused_while_undock_owns_motion);
+  RUN(test_drive_bounds_and_hardware_gates);
+  RUN(test_motor_enable_is_decoupled_from_charging);
+  RUN(test_line_buffer_reassembles_fragments);
+  RUN(test_control_frame_formatting);
+  RUN(test_undock_frame_formatting);
+  RUN(test_request_tracker_lifecycle);
+
+  if (g_failures != 0) {
+    std::fprintf(stderr, "\nprotocol_test: %d of %d checks FAILED\n",
+                 g_failures, g_checks);
+    return 1;
+  }
+  std::fprintf(stderr, "protocol_test: %d checks passed\n", g_checks);
   return 0;
 }

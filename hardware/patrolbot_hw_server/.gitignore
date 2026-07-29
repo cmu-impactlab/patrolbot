@@ -1,2 +1,4 @@
 /patrolbot_server
+/patrolbot_commission_probe
 /tests/protocol_test
+/tests/undock_test

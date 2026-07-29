@@ -1,4 +1,16 @@
-"""Fail-closed, cancelable PatrolBot guarded-undock action server."""
+"""Fail-closed, cancelable PatrolBot undock orchestrator.
+
+Contact separation is not performed here. The SBC owns charger release, motor
+enable, reverse velocity, encoder displacement, charge-state recovery, stall
+detection and rear sonar/bumper safety as one exclusive, stateful operation.
+This node validates the Pi-side preconditions, requests that operation, relays
+its progress, and resumes Nav2 once the SBC reports the robot physically clear.
+
+It publishes no Twist and no longer uses Nav2 BackUp to escape the charging
+contacts. The 180 degree turn afterwards is still a Nav2 Spin, so it keeps full
+costmap and collision-monitor awareness; it runs only after the SBC has handed
+motion authority back with the motors already live.
+"""
 
 from functools import partial
 import math
@@ -9,23 +21,21 @@ from uuid import uuid4
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from nav2_msgs.action import BackUp, Spin
+from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.contracts import (
+    automatic_docking_allowed,
     dock_pose_initialization_failures,
+    DOCK_UNKNOWN,
     precheck_failures,
-    reverse_failures,
+    resume_failures,
     SafetySnapshot,
     transition_allowed,
     validate_goal,
 )
-from patrolbot_interfaces.action import Undock
+from patrolbot_interfaces.action import HardwareUndock, Undock
 from patrolbot_interfaces.msg import BaseState, DockReadiness
-from patrolbot_interfaces.srv import (
-    ChargeRelease,
-    InitializeDockPose,
-    MotorEnable,
-)
+from patrolbot_interfaces.srv import InitializeDockPose
 import rclpy
 from rclpy.action import (
     ActionClient,
@@ -63,12 +73,14 @@ class DockManager(Node):
         self._state_name = 'IDLE'
         self._state_started = time.monotonic()
         self._action_started = self._state_started
-        self._backup_feedback_distance = 0.0
+        self._hardware_distance = 0.0
+        self._hardware_phase = ''
+        self._hardware_release_attempts = 0
+        self._redock_inhibit_remaining = 0.0
         self._path_checked_at = 0.0
         self._path_valid = False
         self._path_reason = 'not checked'
         self._other_action_active = {}
-        self._owned_backup_goal_id = None
         self._owned_spin_goal_id = None
         self._active_correlation_id = ''
         self._last_localization_update_request_at = 0.0
@@ -82,12 +94,13 @@ class DockManager(Node):
         self.declare_parameter('dock_yaw_tolerance', 0.35)
         self.declare_parameter('max_position_variance', 0.25)
         self.declare_parameter('max_yaw_variance', 0.25)
-        self.declare_parameter('allow_front_bumper_at_dock', False)
         self.declare_parameter('sensor_timeout', 0.5)
-        self.declare_parameter('operator_motor_window', 10.0)
         self.declare_parameter('precheck_timeout', 5.0)
-        self.declare_parameter('backup_timeout', 10.0)
-        self.declare_parameter('dock_departure_charge_grace', 8.0)
+        # Requested of the SBC, which independently rejects anything outside
+        # its own hard caps rather than clamping it.
+        self.declare_parameter('undock_clearance_distance', 0.53)
+        self.declare_parameter('undock_reverse_speed', 0.10)
+        self.declare_parameter('undock_max_duration', 45.0)
         self.declare_parameter('undock_turn_yaw', math.pi)
         self.declare_parameter('spin_timeout', 20.0)
         self.declare_parameter('dock_pose_initialization_timeout', 5.0)
@@ -118,17 +131,15 @@ class DockManager(Node):
                 qos_profile_action_status_default,
                 callback_group=self._callbacks))
 
-        self._release_client = self.create_client(
-            ChargeRelease, '/patrolbot/charge_release',
-            callback_group=self._callbacks)
-        self._motor_enable_client = self.create_client(
-            MotorEnable, '/patrolbot/motor_enable',
-            callback_group=self._callbacks)
         self._localization_update_client = self.create_client(
             Empty, '/request_nomotion_update',
             callback_group=self._callbacks)
-        self._backup_client = ActionClient(
-            self, BackUp, '/backup', callback_group=self._callbacks)
+        # The one motion request this node makes for contact separation. There
+        # is no BackUp client any more: a generic Nav2 behavior must never be
+        # what pulls the robot off the charging contacts.
+        self._hardware_undock_client = ActionClient(
+            self, HardwareUndock, '/patrolbot/hardware_undock',
+            callback_group=self._callbacks)
         self._spin_client = ActionClient(
             self, Spin, '/spin', callback_group=self._callbacks)
         self._initial_pose_pub = self.create_publisher(
@@ -238,9 +249,7 @@ class DockManager(Node):
             pose_age = (
                 now - self._localization_at if self._localization_at else 1e6)
             state_name = self._state_name
-        failures = precheck_failures(
-            snapshot,
-            bool(self.get_parameter('allow_front_bumper_at_dock').value))
+        failures = precheck_failures(snapshot)
         message = DockReadiness()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = 'base_link'
@@ -261,6 +270,17 @@ class DockManager(Node):
         message.localization_age = float(pose_age)
         message.manager_state = state_name
         message.blocking_reason = '; '.join(failures) if failures else 'ready'
+        # Undock readiness and docking inhibition are different facts with
+        # different causes. After a successful undock the robot is not ready to
+        # undock (it is already clear) and not allowed to dock (the inhibition
+        # is running); collapsing those into one field hid both reasons.
+        message.dock_state = snapshot.dock_state
+        message.physically_clear = snapshot.physically_clear
+        message.automatic_docking_allowed = automatic_docking_allowed(snapshot)
+        message.redock_inhibited = snapshot.redock_inhibited
+        message.redock_inhibit_remaining = self._redock_inhibit_remaining
+        message.undock_profile_commissioned = (
+            snapshot.undock_profile_commissioned)
         self._readiness_pub.publish(message)
 
     def _base_state_callback(self, message):
@@ -317,7 +337,6 @@ class DockManager(Node):
     def _action_status_callback(self, action_name, message):
         with self._lock:
             owned_goal = {
-                'backup': self._owned_backup_goal_id,
                 'spin': self._owned_spin_goal_id,
             }.get(action_name)
         active = False
@@ -372,177 +391,77 @@ class DockManager(Node):
         correlation_id = str(uuid4())
         self._active_correlation_id = correlation_id
         self._action_started = time.monotonic()
+        self._hardware_distance = 0.0
+        self._hardware_phase = ''
+        self._hardware_release_attempts = 0
         initial_charge = -1
         try:
             self._transition('PRECHECK', correlation_id)
             snapshot = self._snapshot()
             initial_charge = snapshot.charge_state
             precheck_ok, reason = self._wait_for_precheck(
-                goal_handle, correlation_id)
+                goal_handle, correlation_id,
+                bool(goal_handle.request.validation_mode))
             if not precheck_ok:
                 return self._abort(
                     goal_handle, Undock.Result.PRECHECK_FAILED, reason,
                     initial_charge, manual_recovery=False)
             expected_session = self._snapshot().session_generation
 
-            self._transition('REQUEST_DOCK_RELEASE', correlation_id)
-            release = ChargeRelease.Request()
-            release.request_id = correlation_id
-            if not self._release_client.wait_for_service(timeout_sec=1.0):
-                return self._abort(
-                    goal_handle, Undock.Result.RELEASE_FAILED,
-                    'charge-release service unavailable', initial_charge,
-                    manual_recovery=False)
-            release_future = self._release_client.call_async(release)
-            self._transition('WAIT_FOR_CHARGE_RELEASE', correlation_id)
-            if not self._wait_future(
-                    release_future, goal_handle, 7.0, correlation_id):
-                return self._abort(
-                    goal_handle, Undock.Result.RELEASE_FAILED,
-                    'charge-release timeout or cancellation', initial_charge,
-                    manual_recovery=True)
-            release_response = release_future.result()
-            if release_response is None or not release_response.success:
-                message = (
-                    release_response.message if release_response is not None
-                    else 'charge-release returned no result')
-                return self._abort(
-                    goal_handle, Undock.Result.RELEASE_FAILED, message,
-                    initial_charge, manual_recovery=True)
-            if release_response.session_generation != expected_session:
-                return self._abort(
-                    goal_handle, Undock.Result.SESSION_CHANGED,
-                    'hardware session changed during release', initial_charge,
-                    manual_recovery=True)
-
-            self._transition('VERIFY_ESTOP_AND_MOTOR', correlation_id)
-            enable = MotorEnable.Request()
-            enable.request_id = str(uuid4())
-            if not self._motor_enable_client.wait_for_service(timeout_sec=1.0):
-                return self._abort(
-                    goal_handle, Undock.Result.MOTOR_STATE_FAILED,
-                    'motor-enable service unavailable', initial_charge,
-                    manual_recovery=True)
-            enable_future = self._motor_enable_client.call_async(enable)
-            if not self._wait_future(
-                    enable_future, goal_handle, 2.0, correlation_id):
-                return self._abort(
-                    goal_handle, Undock.Result.MOTOR_STATE_FAILED,
-                    'motor-enable timeout or cancellation', initial_charge,
-                    manual_recovery=True)
-            enable_response = enable_future.result()
-            if enable_response is None or not enable_response.success:
-                message = (
-                    enable_response.message if enable_response is not None
-                    else 'motor-enable returned no result')
-                return self._abort(
-                    goal_handle, Undock.Result.MOTOR_STATE_FAILED, message,
-                    initial_charge, manual_recovery=True)
-            if enable_response.session_generation != expected_session:
-                return self._abort(
-                    goal_handle, Undock.Result.SESSION_CHANGED,
-                    'hardware session changed during motor enable',
-                    initial_charge, manual_recovery=True)
-
-            # Motor enable is an explicit, UUID-correlated operation made only
-            # inside this operator-authorized bounded action. Contact charging
-            # may already have reasserted, so accept that state only while the
-            # commissioned front dock contact remains present. The SBC owns the
-            # independent short reverse-only authorization and expiry.
-            # The declared operator_motor_window (10 s) exists for exactly this
-            # wait and was never wired up — the hardcoded 1.0 s was shorter than
-            # the base takes to report motors live after a PWR-ON, so undock
-            # aborted with MOTOR_STATE_FAILED on a robot that was powering up
-            # perfectly normally.
-            motor_ok, observed_session = self._wait_for_operator_motor_state(
-                goal_handle, expected_session,
-                float(self.get_parameter('operator_motor_window').value),
-                correlation_id, allow_transient_dock_charge=True,
-                allow_session_advance=True)
-            if not motor_ok:
-                return self._abort(
-                    goal_handle, Undock.Result.MOTOR_STATE_FAILED,
-                    'motor state did not confirm after explicit enable',
-                    initial_charge, manual_recovery=True)
-            if observed_session != expected_session:
-                self.get_logger().info(
-                    f'undock={correlation_id} base session advanced '
-                    f'{expected_session} -> {observed_session} across the '
-                    f'commanded PWR-ON; adopting it as the new baseline')
-                expected_session = observed_session
-
-            # Release confirmation takes several seconds while the robot is
-            # stationary, so the precheck AMCL sample can age out. Refresh it
-            # before the combined reverse gate evaluates localization.
+            # AMCL can age out while the robot sits still, and the SBC will move
+            # it in a moment, so refresh the estimate before anything moves.
             self._transition('VERIFY_LOCALIZATION', correlation_id)
             if not self._wait_for_localization(
-                    goal_handle, 1.0, correlation_id):
+                    goal_handle, 2.0, correlation_id):
                 return self._abort(
                     goal_handle, Undock.Result.LOCALIZATION_FAILED,
-                    'localization invalid immediately before reverse',
-                    initial_charge, manual_recovery=True)
-
-            self._transition('VERIFY_REAR_SONAR', correlation_id)
-            allow_front = bool(
-                self.get_parameter('allow_front_bumper_at_dock').value)
-            failures = reverse_failures(
-                self._snapshot(), expected_session,
-                allow_front_bumper_while_reversing=allow_front,
-                allow_transient_dock_charge=True)
-            if failures:
-                return self._abort(
-                    goal_handle, Undock.Result.SENSOR_FAILED,
-                    '; '.join(failures), initial_charge,
-                    manual_recovery=True)
+                    'localization invalid immediately before undocking',
+                    initial_charge, manual_recovery=False)
 
             self._transition('VERIFY_COMMAND_PATH', correlation_id)
             self._refresh_command_path(force=True)
             if not self._snapshot().command_path_valid:
                 return self._abort(
                     goal_handle, Undock.Result.COMMAND_PATH_FAILED,
-                    self._path_reason, initial_charge, manual_recovery=True)
+                    self._path_reason, initial_charge, manual_recovery=False)
 
             if goal_handle.is_cancel_requested:
                 return self._canceled(goal_handle, initial_charge)
-            self._transition('GUARDED_REVERSE', correlation_id)
-            motion_ok, motion_reason, traveled = self._run_backup(
-                goal_handle, expected_session,
-                goal_handle.request.reverse_distance,
-                goal_handle.request.reverse_speed,
-                correlation_id)
-            if not motion_ok:
-                code = (Undock.Result.CANCELED if goal_handle.is_cancel_requested
-                        else Undock.Result.MOTION_FAILED)
+
+            # One atomic hardware operation replaces the release, the motor
+            # enable, the guarded reverse, the charge-latch clear and the
+            # clearance wait that used to be five separate Pi-driven steps.
+            self._transition('HARDWARE_UNDOCK', correlation_id)
+            hardware_ok, hardware_reason, hardware_result = (
+                self._run_hardware_undock(goal_handle, correlation_id))
+            traveled = self._hardware_distance
+            if not hardware_ok:
+                code = self._undock_result_code(
+                    goal_handle, hardware_result)
                 return self._abort(
-                    goal_handle, code, motion_reason, initial_charge,
+                    goal_handle, code, hardware_reason, initial_charge,
                     manual_recovery=True, distance=traveled)
 
-            self._transition('CLEAR_CHARGE_LATCH', correlation_id)
-            latch_ok, latch_reason = self._clear_charge_latch_after_backup(
-                goal_handle, expected_session, correlation_id)
-            if not latch_ok:
-                return self._abort(
-                    goal_handle, Undock.Result.RELEASE_FAILED, latch_reason,
-                    initial_charge, manual_recovery=True, distance=traveled)
-
-            self._transition('CLEAR_OF_DOCK', correlation_id)
-            if not self._wait_clear_of_dock(
-                    goal_handle, 2.0, correlation_id):
+            # The SBC hands off stopped, physically clear, with the motors
+            # still live. Confirm that before letting Nav2 command anything.
+            failures = resume_failures(self._snapshot(), expected_session)
+            if failures:
                 return self._abort(
                     goal_handle, Undock.Result.SAFETY_FAULT,
-                    'robot did not become stationary with charge and all '
-                    'bumper contacts clear after BackUp',
-                    initial_charge, manual_recovery=True, distance=traveled)
-
-            self._transition('ENABLE_TURN', correlation_id)
-            enable_ok, enable_reason = self._enable_motors_for_turn(
-                goal_handle, expected_session, correlation_id)
-            if not enable_ok:
-                return self._abort(
-                    goal_handle, Undock.Result.MOTOR_STATE_FAILED,
-                    enable_reason, initial_charge,
+                    '; '.join(failures), initial_charge,
                     manual_recovery=True, distance=traveled)
 
+            self._transition('RESTORE_LOCALIZATION', correlation_id)
+            if not self._wait_for_localization(
+                    goal_handle, 3.0, correlation_id):
+                return self._abort(
+                    goal_handle, Undock.Result.LOCALIZATION_FAILED,
+                    'localization did not recover after the hardware undock',
+                    initial_charge, manual_recovery=True, distance=traveled)
+
+            # Collision-aware turn, on the full safety chain. It is a Nav2 Spin
+            # and not an SBC manoeuvre precisely because the SBC cannot see the
+            # costmap or the laser.
             self._transition('TURN_AWAY_FROM_DOCK', correlation_id)
             turn_ok, turn_reason = self._run_spin(
                 goal_handle, expected_session,
@@ -555,31 +474,11 @@ class DockManager(Node):
                     goal_handle, code, turn_reason, initial_charge,
                     manual_recovery=True, distance=traveled)
 
-            # End every successful undock with one stationary, confirmed
-            # CHARGE 0. This clears any non-contact µARCS charge-state latch,
-            # revokes the SBC turn authorization, and leaves motors disabled.
-            self._transition('FINALIZE_CHARGE_LATCH', correlation_id)
-            final_release_ok, final_release_reason = (
-                self._clear_charge_latch_after_backup(
-                    goal_handle, expected_session, correlation_id))
-            if not final_release_ok:
-                return self._abort(
-                    goal_handle, Undock.Result.RELEASE_FAILED,
-                    final_release_reason, initial_charge,
-                    manual_recovery=True, distance=traveled)
-            if not self._wait_clear_of_dock(
-                    goal_handle, 2.0, correlation_id):
-                return self._abort(
-                    goal_handle, Undock.Result.SAFETY_FAULT,
-                    'robot did not finish undocking stationary with charge '
-                    'and all bumper contacts clear',
-                    initial_charge, manual_recovery=True, distance=traveled)
-
             self._transition('STOPPED', correlation_id)
             self._transition('COMPLETE', correlation_id)
             result = self._result(
-                True, Undock.Result.OK, 'guarded undock complete',
-                initial_charge, False, traveled)
+                True, Undock.Result.OK, 'undock complete', initial_charge,
+                False, traveled)
             goal_handle.succeed()
             return result
         except Exception as exc:  # Fail closed; action never publishes velocity.
@@ -593,13 +492,109 @@ class DockManager(Node):
             with self._goal_lock:
                 self._goal_reserved = False
             with self._lock:
-                self._owned_backup_goal_id = None
                 self._owned_spin_goal_id = None
             self._active_correlation_id = ''
             if self._state_name in ('COMPLETE', 'ABORTED', 'FAULT'):
                 self._state_name = 'IDLE'
 
-    def _wait_for_precheck(self, goal_handle, correlation_id):
+    @staticmethod
+    def _undock_result_code(goal_handle, hardware_result):
+        """Map an SBC failure onto the manager-facing result code."""
+        if goal_handle.is_cancel_requested:
+            return Undock.Result.CANCELED
+        if hardware_result is None:
+            return Undock.Result.MOTION_FAILED
+        code = hardware_result.code
+        mapping = {
+            HardwareUndock.Result.CANCELED: Undock.Result.CANCELED,
+            HardwareUndock.Result.TIMEOUT: Undock.Result.TIMEOUT,
+            HardwareUndock.Result.SESSION_CHANGED: Undock.Result.SESSION_CHANGED,
+            HardwareUndock.Result.RELEASE_FAILED: Undock.Result.RELEASE_FAILED,
+            HardwareUndock.Result.MOTOR_STATE_FAILED:
+                Undock.Result.MOTOR_STATE_FAILED,
+            HardwareUndock.Result.SENSOR_BLOCKED: Undock.Result.SENSOR_FAILED,
+            HardwareUndock.Result.SAFETY_FAULT: Undock.Result.SAFETY_FAULT,
+            HardwareUndock.Result.MOTION_FAILED: Undock.Result.MOTION_FAILED,
+            HardwareUndock.Result.PRECONDITION_FAILED:
+                Undock.Result.PRECHECK_FAILED,
+            HardwareUndock.Result.HARDWARE_PROFILE_UNCOMMISSIONED:
+                Undock.Result.PRECHECK_FAILED,
+            HardwareUndock.Result.BUSY: Undock.Result.PRECHECK_FAILED,
+            HardwareUndock.Result.INVALID_REQUEST: Undock.Result.REJECTED,
+            HardwareUndock.Result.LINK_UNAVAILABLE: Undock.Result.SESSION_CHANGED,
+        }
+        return mapping.get(code, Undock.Result.MOTION_FAILED)
+
+    def _run_hardware_undock(self, goal_handle, correlation_id):
+        """Request the SBC operation and relay its progress.
+
+        Returns (ok, reason, result). The Pi does not monitor the reverse: the
+        SBC evaluates rear sonar, bumpers, stall, displacement and charge state
+        every 50 ms with direct control of the wheels, and reports one terminal
+        result.
+        """
+        if not self._hardware_undock_client.wait_for_server(timeout_sec=3.0):
+            return False, 'hardware undock action unavailable', None
+        goal = HardwareUndock.Goal()
+        goal.clearance_distance = float(
+            self.get_parameter('undock_clearance_distance').value)
+        goal.reverse_speed = float(
+            self.get_parameter('undock_reverse_speed').value)
+        goal.maximum_duration = float(
+            self.get_parameter('undock_max_duration').value)
+        goal.validation_mode = bool(goal_handle.request.validation_mode)
+
+        send_future = self._hardware_undock_client.send_goal_async(
+            goal, feedback_callback=self._hardware_feedback_callback)
+        if not self._wait_future(send_future, goal_handle, 5.0, correlation_id):
+            return False, 'hardware undock goal acceptance timeout', None
+        hardware_goal = send_future.result()
+        if hardware_goal is None or not hardware_goal.accepted:
+            return False, 'hardware undock goal rejected', None
+
+        result_future = hardware_goal.get_result_async()
+        deadline = time.monotonic() + goal.maximum_duration + 30.0
+        cancel_sent = False
+        while not result_future.done() and time.monotonic() < deadline:
+            if goal_handle.is_cancel_requested and not cancel_sent:
+                hardware_goal.cancel_goal_async()
+                cancel_sent = True
+            self._publish_feedback(goal_handle, deadline, correlation_id)
+            time.sleep(0.05)
+        if not result_future.done():
+            hardware_goal.cancel_goal_async()
+            return False, 'hardware undock produced no result', None
+
+        wrapped = result_future.result()
+        if wrapped is None:
+            return False, 'hardware undock returned no result', None
+        result = wrapped.result
+        self._hardware_distance = float(result.distance_traveled)
+        self._hardware_release_attempts = int(result.release_attempts)
+        if not result.success:
+            return False, result.message or 'hardware undock failed', result
+        if not result.physically_clear:
+            return (
+                False,
+                'hardware undock reported success without physical clearance',
+                result)
+        self.get_logger().info(
+            f'undock={correlation_id} hardware undock complete: '
+            f'{result.distance_traveled:.3f} m, '
+            f'{result.release_attempts} release attempt(s), '
+            f'dock_state={result.final_dock_state}, '
+            f'motors_enabled={result.motors_enabled}')
+        return True, '', result
+
+    def _hardware_feedback_callback(self, feedback):
+        message = feedback.feedback
+        with self._lock:
+            self._hardware_distance = float(message.distance_traveled)
+            self._hardware_phase = message.phase_name
+            self._hardware_release_attempts = int(message.release_attempts)
+
+    def _wait_for_precheck(
+            self, goal_handle, correlation_id, validation_mode=False):
         deadline = time.monotonic() + float(
             self.get_parameter('precheck_timeout').value)
         stable_since = None
@@ -608,9 +603,7 @@ class DockManager(Node):
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during precheck'
             self._request_localization_update()
-            failures = precheck_failures(
-                self._snapshot(), bool(
-                    self.get_parameter('allow_front_bumper_at_dock').value))
+            failures = precheck_failures(self._snapshot(), validation_mode)
             if failures:
                 stable_since = None
                 last_failures = failures
@@ -621,45 +614,6 @@ class DockManager(Node):
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
         return False, '; '.join(last_failures)
-
-    def _wait_for_operator_motor_state(
-            self, goal_handle, expected_session, timeout, correlation_id,
-            allow_transient_dock_charge=False, allow_session_advance=False):
-        """Wait for the base to report motors live.
-
-        Returns (ok, observed_session). `allow_session_advance` tolerates the
-        session generation moving FORWARD while waiting: powering the motors
-        after a charge release is itself a PWR-ON cycle on this hardware, and
-        the SBC bumps its session for it. Treating that as a mid-operation
-        restart aborted every undock ~0.4 s into VERIFY_ESTOP_AND_MOTOR — long
-        before the motors, which did come on, could be observed. The caller
-        adopts the returned session so a LATER change is still caught.
-        """
-        deadline = time.monotonic() + timeout
-        observed_session = expected_session
-        while time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                return False, observed_session
-            self._request_localization_update()
-            state = self._snapshot()
-            session_ok = (
-                state.session_generation == expected_session or
-                (allow_session_advance and
-                 state.session_generation > expected_session))
-            if (not session_ok or
-                    not state.link_connected or not state.hardware_state_valid):
-                return False, observed_session
-            observed_session = state.session_generation
-            charge_allowed = (
-                state.charge_state == 0 or
-                (allow_transient_dock_charge and
-                 state.front_bumper_pressed))
-            if (state.charge_state_valid and charge_allowed and
-                    not state.estop_pressed and state.motors_enabled):
-                return True, observed_session
-            self._publish_feedback(goal_handle, deadline, correlation_id)
-            time.sleep(0.05)
-        return False, observed_session
 
     def _wait_for_localization(
             self, goal_handle, timeout, correlation_id):
@@ -689,172 +643,17 @@ class DockManager(Node):
         self._last_localization_update_request_at = now
         return True
 
-    def _run_backup(
-            self, goal_handle, expected_session, distance, speed,
-            correlation_id):
-        if not self._backup_client.wait_for_server(timeout_sec=2.0):
-            return False, 'Nav2 BackUp action unavailable', 0.0
-        backup = BackUp.Goal()
-        # Nav2 specifies positive target.x and positive speed for BackUp; the
-        # behavior itself produces negative linear velocity.
-        backup.target.x = float(distance)
-        backup.speed = float(speed)
-        backup.time_allowance.sec = int(
-            self.get_parameter('backup_timeout').value)
-        backup.time_allowance.nanosec = 0
-        self._backup_feedback_distance = 0.0
-        send_future = self._backup_client.send_goal_async(
-            backup, feedback_callback=self._backup_feedback_callback)
-        if not self._wait_future(
-                send_future, goal_handle, 2.0, correlation_id):
-            return False, 'BackUp goal acceptance timeout', 0.0
-        nav_goal = send_future.result()
-        if nav_goal is None or not nav_goal.accepted:
-            return False, 'BackUp goal rejected', 0.0
-        with self._lock:
-            self._owned_backup_goal_id = bytes(nav_goal.goal_id.uuid)
-            # A status sample may have arrived between goal acceptance and the
-            # client receiving its ID. The pre-send gate proved BackUp idle;
-            # subsequent status samples still detect any foreign goal.
-            self._other_action_active['backup'] = False
-        result_future = nav_goal.get_result_async()
-        deadline = time.monotonic() + float(
-            self.get_parameter('backup_timeout').value)
-        departure_started = time.monotonic()
-        charge_grace = float(
-            self.get_parameter('dock_departure_charge_grace').value)
-        reason = ''
-        while not result_future.done() and time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                reason = 'goal canceled during reverse'
-                break
-            self._request_localization_update()
-            transient_charge_allowed = (
-                time.monotonic() - departure_started <= charge_grace)
-            failures = reverse_failures(
-                self._snapshot(), expected_session,
-                allow_front_bumper_while_reversing=bool(
-                    self.get_parameter(
-                        'allow_front_bumper_at_dock').value),
-                allow_transient_dock_charge=transient_charge_allowed)
-            if failures:
-                reason = '; '.join(failures)
-                break
-            self._publish_feedback(goal_handle, deadline, correlation_id)
-            time.sleep(0.05)
-        if reason or not result_future.done():
-            if not reason:
-                reason = 'BackUp hard timeout'
-            cancel_future = nav_goal.cancel_goal_async()
-            cancel_deadline = time.monotonic() + 1.0
-            while not cancel_future.done() and time.monotonic() < cancel_deadline:
-                time.sleep(0.02)
-            if not self._wait_for_odom_zero(1.5):
-                reason += '; zero velocity after cancellation was not confirmed'
-            with self._lock:
-                self._owned_backup_goal_id = None
-            return False, reason, self._backup_feedback_distance
-        wrapped = result_future.result()
-        with self._lock:
-            self._owned_backup_goal_id = None
-        if (wrapped is None or wrapped.status != GoalStatus.STATUS_SUCCEEDED or
-                wrapped.result.error_code != BackUp.Result.NONE):
-            message = 'BackUp failed'
-            if wrapped is not None:
-                message = wrapped.result.error_msg or message
-            return False, message, self._backup_feedback_distance
-        return True, '', self._backup_feedback_distance
-
-    def _backup_feedback_callback(self, feedback):
-        self._backup_feedback_distance = float(
-            feedback.feedback.distance_traveled)
-
-    def _clear_charge_latch_after_backup(
-            self, goal_handle, expected_session, correlation_id):
-        if not self._wait_for_odom_zero(1.5):
-            return False, 'zero velocity before charge release was not confirmed'
-        state = self._snapshot()
-        if (not state.bumpers_valid or state.front_bumper_pressed or
-                state.rear_bumper_pressed):
-            return False, 'dock contacts are not clear for charge release'
-        # Nothing to clear. This step exists to drop a charge state the base
-        # RE-latched while backing away; when the base already reports 0 the
-        # release issued before the reverse is still in force. Asking for
-        # CHARGE 0 again is rejected by the SBC ("motors enabled while charge
-        # is already released") precisely because the motors are live for this
-        # manoeuvre — a rejection that means "already done", not "failed", and
-        # which aborted the undock one step from finishing.
-        if state.charge_state_valid and state.charge_state == 0:
-            self.get_logger().info(
-                f'undock={correlation_id} charge already released after '
-                f'reverse; no latch to clear')
-            return True, ''
-        if not self._release_client.wait_for_service(timeout_sec=1.0):
-            return False, 'post-motion charge-release service unavailable'
-        for attempt in range(2):
-            release = ChargeRelease.Request()
-            release.request_id = str(uuid4())
-            future = self._release_client.call_async(release)
-            if not self._wait_future(
-                    future, goal_handle, 7.0, correlation_id):
-                return (
-                    False,
-                    'post-motion charge-release timeout or cancellation')
-            response = future.result()
-            if response is not None and response.success:
-                if response.session_generation != expected_session:
-                    return (
-                        False,
-                        'hardware session changed during post-motion release')
-                return True, ''
-            message = (
-                response.message if response is not None
-                else 'post-motion charge release returned no result')
-            if (attempt == 0 and
-                    message == 'motion detected during release'):
-                # Nav2 can report Spin complete just before the base controller
-                # has fully settled. The SBC has already stopped and disabled
-                # motors on this rejection. Require a longer zero-odometry
-                # interval, then retry CHARGE 0 once; never retry another
-                # hardware error.
-                if not self._wait_for_odom_zero(
-                        3.0, stable_duration=1.0):
-                    return (
-                        False,
-                        'zero velocity after residual-motion release '
-                        'rejection was not confirmed')
-                continue
-            return False, message
-        return False, 'post-motion charge release retry exhausted'
-
-    def _enable_motors_for_turn(
-            self, goal_handle, expected_session, correlation_id):
-        if not self._motor_enable_client.wait_for_service(timeout_sec=1.0):
-            return False, 'motor-enable service unavailable before turn'
-        enable = MotorEnable.Request()
-        enable.request_id = str(uuid4())
-        future = self._motor_enable_client.call_async(enable)
-        if not self._wait_future(
-                future, goal_handle, 2.0, correlation_id):
-            return False, 'motor-enable timeout before turn'
-        response = future.result()
-        if response is None or not response.success:
-            message = (
-                response.message if response is not None
-                else 'motor-enable returned no result before turn')
-            return False, message
-        if response.session_generation != expected_session:
-            return False, 'hardware session changed during turn motor enable'
-        motor_ok, _observed = self._wait_for_operator_motor_state(
-                goal_handle, expected_session,
-                float(self.get_parameter('operator_motor_window').value),
-                correlation_id, allow_session_advance=True)
-        if not motor_ok:
-            return False, 'motor state did not confirm before turn'
-        return True, ''
-
     def _run_spin(
             self, goal_handle, expected_session, target_yaw, correlation_id):
+        """Turn away from the dock through Nav2, on the full safety chain.
+
+        Deliberately not an SBC manoeuvre: the SBC is blind to the costmap, the
+        laser and the collision monitor, and a 180 degree in-place turn is a
+        navigation concern rather than a hardware-contact one. By this point the
+        SBC has handed motion authority back with the motors live and the dock
+        observer in CLEAR_CONFIRMED, so an ordinary DRIVE is permitted again
+        without any charge-state exception.
+        """
         if not self._spin_client.wait_for_server(timeout_sec=2.0):
             return False, 'Nav2 Spin action unavailable'
         spin = Spin.Goal()
@@ -880,20 +679,7 @@ class DockManager(Node):
                 reason = 'goal canceled during turn'
                 break
             self._request_localization_update()
-            failures = reverse_failures(
-                self._snapshot(), expected_session,
-                # Same allowance as the reverse leg, and for the same reason:
-                # on a commissioned dock the front bumper is held by the dock
-                # itself and can stay latched after the robot has physically
-                # backed clear. Hardcoding False here aborted the turn on an
-                # expected mechanical state. Rear bumper and rear sonar still
-                # block unconditionally.
-                allow_front_bumper_while_reversing=bool(
-                    self.get_parameter('allow_front_bumper_at_dock').value),
-                # The base can relatch charge state 3 after the robot is
-                # physically clear. The preceding stationary release+enable
-                # pair arms the SBC's independent turn-only authorization.
-                allow_transient_dock_charge=True)
+            failures = resume_failures(self._snapshot(), expected_session)
             if failures:
                 reason = '; '.join(failures)
                 break
@@ -934,30 +720,6 @@ class DockManager(Node):
             time.sleep(0.05)
         return future.done()
 
-    def _wait_clear_of_dock(
-            self, goal_handle, timeout, correlation_id):
-        deadline = time.monotonic() + timeout
-        stable_since = None
-        while time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                return False
-            state = self._snapshot()
-            clear_and_stopped = (
-                state.odom_fresh and state.stationary and
-                state.charge_state_valid and state.charge_state == 0 and
-                state.bumpers_valid and not state.front_bumper_pressed and
-                not state.rear_bumper_pressed)
-            if clear_and_stopped:
-                if stable_since is None:
-                    stable_since = time.monotonic()
-                elif time.monotonic() - stable_since >= 0.5:
-                    return True
-            else:
-                stable_since = None
-            self._publish_feedback(goal_handle, deadline, correlation_id)
-            time.sleep(0.05)
-        return False
-
     def _wait_for_odom_zero(self, timeout, stable_duration=0.25):
         deadline = time.monotonic() + timeout
         stable_since = None
@@ -988,6 +750,8 @@ class DockManager(Node):
                 now - self._localization_at if self._localization_at else math.inf)
             rear_clear = self._rear_clear
             navigation_idle = not any(self._other_action_active.values())
+            self._redock_inhibit_remaining = float(
+                base.redock_inhibit_remaining if base else 0.0)
 
         localization_valid, dock_pose_valid = self._localization_health(pose)
         stationary = False
@@ -1017,6 +781,18 @@ class DockManager(Node):
             dock_pose_valid=dock_pose_valid and pose_age <= timeout,
             command_path_valid=self._path_valid,
             navigation_idle=navigation_idle,
+            # Mirrored from the SBC. Absent or stale telemetry reads as UNKNOWN
+            # and as inhibited, so every one of these fails closed.
+            dock_state=base.dock_state if base else DOCK_UNKNOWN,
+            dock_state_valid=bool(
+                base and base.dock_state_valid and base_age <= timeout),
+            undock_active=bool(base and base.undock_active),
+            physically_clear=bool(
+                base and base.dock_state_valid and
+                base.dock_state == 'CLEAR_CONFIRMED'),
+            redock_inhibited=True if base is None else base.redock_inhibited,
+            undock_profile_commissioned=bool(
+                base and base.undock_profile_commissioned),
         )
 
     def _localization_health(self, pose):
@@ -1135,6 +911,9 @@ class DockManager(Node):
         feedback.motors_enabled = snapshot.motors_enabled
         feedback.estop_pressed = snapshot.estop_pressed
         feedback.session_generation = snapshot.session_generation
+        with self._lock:
+            feedback.hardware_phase = self._hardware_phase
+            feedback.distance_traveled = float(self._hardware_distance)
         goal_handle.publish_feedback(feedback)
 
     def _result(
@@ -1153,6 +932,9 @@ class DockManager(Node):
         result.final_motors_enabled = snapshot.motors_enabled
         result.final_estop_pressed = snapshot.estop_pressed
         result.manual_recovery_required = manual_recovery
+        result.release_attempts = int(self._hardware_release_attempts)
+        result.physically_clear = snapshot.physically_clear
+        result.final_dock_state = snapshot.dock_state
         with self._lock:
             if self._localization is not None:
                 result.final_pose = self._localization

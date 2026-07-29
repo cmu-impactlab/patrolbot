@@ -41,9 +41,16 @@ maintainer; see [Known Gaps](../known-gaps.md#code-hygiene).
 | Publish | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` |
 | Publish | `/patrolbot/base_state` | `patrolbot_interfaces/BaseState` |
 | Publish | TF `odom→base_link` | `tf2` (50 Hz) |
-| Subscribe | `/cmd_vel` | `geometry_msgs/Twist` |
+| Subscribe | `/cmd_vel` | `geometry_msgs/Twist` (dropped while an undock owns motion) |
 | Service | `/patrolbot/charge_release` | `patrolbot_interfaces/ChargeRelease` |
 | Service | `/patrolbot/motor_enable` | `patrolbot_interfaces/MotorEnable` |
+| Action | `/patrolbot/hardware_undock` | `patrolbot_interfaces/HardwareUndock` |
+
+`/patrolbot/hardware_undock` is a thin transport for the SBC's exclusive dock-departure
+operation: it sends one `UNDOCK` frame, relays the progress events as feedback, forwards
+cancellation, and reports the terminal frame. It commands no motion of its own. Goals are refused
+at admission unless the SBC's `HELLO` banner advertises `FEATURES=UNDOCK`, so an older server
+fails closed instead of leaving the goal waiting for a reply that will never come.
 
 ## Internal architecture
 

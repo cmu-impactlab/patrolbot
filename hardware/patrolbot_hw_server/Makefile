@@ -5,20 +5,39 @@ ARIA_LDFLAGS = -L/usr/local/Aria/lib
 ARIA_LIBS = -lAria -lArNetworking -lpthread
 
 TARGET = patrolbot_server
-SOURCES = patrolbot_server.cpp protocol.cpp
+SOURCES = patrolbot_server.cpp protocol.cpp undock.cpp
 
-.PHONY: all clean test
+# Commissioning tool. Built here but never installed beside the server: the base
+# connection is single-owner, so only one of them may run at a time.
+PROBE = patrolbot_commission_probe
+PROBE_SOURCES = patrolbot_commission_probe.cpp
+
+HEADERS = protocol.hpp undock.hpp
+
+# Neither test binary links ARIA, so both build and run on a workstation.
+TESTS = tests/protocol_test tests/undock_test
+
+.PHONY: all clean test probe
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) protocol.hpp
+probe: $(PROBE)
+
+$(TARGET): $(SOURCES) $(HEADERS)
 	$(CXX) $(CXXFLAGS) $(ARIA_CXXFLAGS) $(SOURCES) -o $@ $(ARIA_LDFLAGS) $(ARIA_LIBS)
 
-tests/protocol_test: tests/protocol_test.cpp protocol.cpp protocol.hpp
+$(PROBE): $(PROBE_SOURCES)
+	$(CXX) $(CXXFLAGS) $(ARIA_CXXFLAGS) $(PROBE_SOURCES) -o $@ $(ARIA_LDFLAGS) $(ARIA_LIBS)
+
+tests/protocol_test: tests/protocol_test.cpp protocol.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) tests/protocol_test.cpp protocol.cpp -o $@
 
-test: tests/protocol_test
+tests/undock_test: tests/undock_test.cpp undock.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) tests/undock_test.cpp undock.cpp -o $@
+
+test: $(TESTS)
 	./tests/protocol_test
+	./tests/undock_test
 
 clean:
-	rm -f $(TARGET) tests/protocol_test
+	rm -f $(TARGET) $(PROBE) $(TESTS)

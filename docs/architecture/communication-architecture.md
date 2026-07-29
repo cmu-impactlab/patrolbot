@@ -22,7 +22,7 @@ flowchart LR
     end
 
     SRV ==>|"ODOM:x,y,th,vx,vth|LASER:r1..rN\\n  ~20 Hz"| BR
-    SRV ==>|"AUX:SONAR=..|BATT=..|FLAGS=..\\n  ~4–5 Hz"| BR
+    SRV ==>|"AUX:SONAR=..|BATT=..|FLAGS=..|DOCK=..\\n  ~4–5 Hz"| BR
     BR  -->|"DRIVE:linear:angular\\n  on demand"| SRV
     BR  -->|"CHARGE_RELEASE:uuid / MOTOR_ENABLE:uuid\\n  deliberate only"| SRV
     SRV -->|"ACK / RESULT\\n  UUID-correlated"| BR
@@ -76,7 +76,7 @@ line to:
 ### 2. Auxiliary line (`AUX`) — ~4–5 Hz
 
 ```
-AUX:SONAR=x,y;x,y;...|BATT=volt,soc,chargeState,temp|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed\n
+AUX:SONAR=x,y;x,y;...|BATT=volt,soc,chargeState,temp|FLAGS=flags,faultFlags,stallValue,motorsEnabled,eStopPressed|DOCK=dockState,phase,PHASE_NAME,undockActive,releaseAttempts,rearRange,rearUsable,redockInhibited,inhibitRemainingMs,profileCommissioned\n
 ```
 
 Emitted on every 5th nav frame and **deliberately decoupled** from the navigation line. The Pi's
@@ -89,6 +89,11 @@ therefore cannot stop TCP reads or disturb navigation-critical `/odom` and `/sca
 | `SONAR` | per-reading local X/Y of each sonar return | `/sonar` (`sensor_msgs/PointCloud2`, `base_link`, sensor-data BEST_EFFORT QoS) |
 | `BATT` | voltage, state-of-charge (`-1` if unavailable), charge state, temperature | `/battery` (`sensor_msgs/BatteryState`) |
 | `FLAGS` | flags, fault flags, stall value, motors-enabled, e-stop state | `/diagnostics` (`diagnostic_msgs/DiagnosticArray`) |
+| `DOCK` | persistent dock observer state, active undock phase, rear-sonar summary, redock inhibition, profile commissioning | `/patrolbot/base_state` (`patrolbot_interfaces/BaseState`) |
+
+`DOCK` is emitted only by protocol 2 servers. Both parsers skip unknown `\|SECTION=` keys, so the
+addition is compatible in both directions; a bridge that never sees it reports `dock_state`
+`UNKNOWN` and treats docking as inhibited, which is the fail-closed reading.
 
 This base has no real state-of-charge sensor, so `/battery.percentage` is `NaN`; only `voltage`
 is meaningful. Stall parsing: the high byte of `stallValue` is the left wheel, the low byte the
@@ -104,13 +109,22 @@ DRIVE:linear:angular\n
 
 Sent by the Pi bridge whenever it receives a `/cmd_vel` message. `linear` is m/s, `angular` is
 rad/s. The SBC reads these non-blocking and forwards them to the base via ARIA. `DRIVE` never
-enables motors and is rejected while charging.
+enables motors.
+
+A nonzero `DRIVE` is admitted only when the SBC's persistent dock observer is in
+`CLEAR_CONFIRMED`, the motors are enabled, E-stop is clear, no critical fault flag is set, and no
+`UNDOCK` operation is running. `charge_state` is **not** an input to that decision: it is
+evidence feeding the observer, never an interlock in its own right. A robot whose departure was
+proven by measured displacement stays drivable even if the µARCS controller re-asserts a stale
+charge level, and a robot that has not proven it is refused however its charge state happens to
+read. There is no timed authorization of any kind.
 
 ### 4. Hardware-control requests and replies — deliberate only
 
 ```text
 CHARGE_RELEASE:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n
 MOTOR_ENABLE:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n
+DOCK_RESET:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx\n
 ACK:COMMAND:request_uuid:ACCEPTED|REPLAYED\n
 RESULT:COMMAND:request_uuid:OK|ERROR:code:message:chargeState:motorsEnabled:eStopPressed\n
 ```
@@ -119,12 +133,58 @@ The request ID must be a lowercase canonical UUID. The SBC keeps one operation i
 bounded cache of completed results. Repeating the same command and UUID returns `REPLAYED` plus
 the original terminal result; it does not repeat the hardware action.
 
-`CHARGE_RELEASE` owns only the stationary motor-disable/charge-release transition. It can send
-µARCS command 68 with argument 0 only after its preconditions hold, confirms three stable
-charge-state-zero samples, never sends velocity, and never enables motors. `MOTOR_ENABLE` is a
-separate request rejected while charging, moving, E-stopped, faulted, or telemetry-stale. The Pi
-service response adds the bridge's process-local `session_generation`, so callers can reject a
-result that crossed a reconnect.
+These three are **fully decoupled zero-motion maintenance commands**. None of them can move the
+robot, and none of them authorizes anything else to.
+
+- `CHARGE_RELEASE` owns only the stationary motor-disable/charge-release transition. It sends
+  µARCS command 68 with argument 0 after its preconditions hold, confirms the charge state, never
+  sends velocity, and **never enables motors**.
+- `MOTOR_ENABLE` **never releases charging** and is refused unless the dock observer is
+  `CLEAR_CONFIRMED` or `UNKNOWN` — that is, unless dock contact is impossible. There is no
+  post-release window and no charge-state exception: enabling the motors in order to leave the
+  dock is the `UNDOCK` operation's job.
+- `DOCK_RESET` is the only way out of the observer's `FAULT_STOPPED` state, and it is refused
+  while the underlying condition persists. A charger release never clears a fault: it does not
+  resolve an encoder failure, a bumper fault, an E-stop or a sonar failure.
+
+The Pi service response adds the bridge's process-local `session_generation`, so callers can
+reject a result that crossed a reconnect.
+
+### 5. Dock departure (`UNDOCK`) — the exclusive motion operation
+
+```text
+UNDOCK:request_uuid:clearance_m:speed_mps:timeout_s:validation\n
+UNDOCK_CANCEL:target_undock_uuid\n
+UNDOCK_EVENT:uuid:phase:PHASE_NAME:distance:lateral:heading:charge:motors:rearRange:attempts:DOCK_STATE\n
+UNDOCK_RESULT:uuid:OK|ERROR:code:message:phase:PHASE_NAME:distance:lateral:heading:charge:motors:estop:rearRange:attempts:DOCK_STATE:physicallyClear\n
+```
+
+One atomic operation replaces the release / enable / `BackUp` / re-release chain. While it runs,
+the SBC owns motion outright: ordinary `DRIVE` is refused, the maintenance commands are refused,
+a second `UNDOCK` with a different ID is busy, and the same ID replays. Only cancellation and
+E-stop are still accepted.
+
+`UNDOCK_CANCEL` carries the **target** operation's ID rather than a new request ID, and is
+dispatched outside the request tracker — the tracker keys on the command name, so a cancel of a
+pending `UNDOCK` would otherwise be rejected as busy. Cancellation does not report `CANCELED`
+until velocity is confirmed zero and the motors are disabled.
+
+Progress frames use distinct leading verbs rather than overloading `RESULT`, so a bridge that
+predates them ignores the lines instead of raising a parse error on an unexpected arity.
+
+Out-of-range goal fields are **rejected, never silently clamped**. Production `UNDOCK` is refused
+with `HARDWARE_PROFILE_UNCOMMISSIONED` until the SBC's rear-sonar indices, E-stop semantics and
+fault masks have been physically validated; a bounded `validation` goal (≤ 0.10 m, ≤ 0.05 m/s) is
+the only exception, so the commissioning session can exercise the real operation.
+
+### 6. Capability banner (`HELLO`) — once per session
+
+```text
+HELLO:PROTOCOL=2:FEATURES=UNDOCK\n
+```
+
+Sent by the SBC when it accepts a client. A bridge that does not see `FEATURES=UNDOCK` refuses
+undock goals at admission rather than sending a command the server will never answer.
 
 ## Connection lifecycle
 

@@ -31,6 +31,10 @@ bool final_motors_enabled
 bool final_estop_pressed
 geometry_msgs/PoseWithCovarianceStamped final_pose
 bool manual_recovery_required
+# Reported by the SBC, which owns the physical separation.
+uint16 release_attempts
+bool physically_clear
+string final_dock_state
 ---
 string state
 float32 elapsed_seconds
@@ -44,3 +48,6 @@ int16 charge_state
 bool motors_enabled
 bool estop_pressed
 uint64 session_generation
+# Relayed from the SBC while the hardware undock is running.
+string hardware_phase
+float32 distance_traveled

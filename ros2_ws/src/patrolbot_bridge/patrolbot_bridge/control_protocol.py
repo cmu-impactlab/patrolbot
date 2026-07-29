@@ -7,7 +7,20 @@ from uuid import UUID
 
 COMMAND_CHARGE_RELEASE = 'CHARGE_RELEASE'
 COMMAND_MOTOR_ENABLE = 'MOTOR_ENABLE'
-COMMANDS = frozenset((COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE))
+COMMAND_DOCK_RESET = 'DOCK_RESET'
+# UNDOCK and UNDOCK_CANCEL are acknowledged with the same ACK frame as the
+# zero-motion controls, so they belong here even though their progress and
+# terminal frames live in undock_protocol.
+COMMAND_UNDOCK = 'UNDOCK'
+COMMAND_UNDOCK_CANCEL = 'UNDOCK_CANCEL'
+COMMANDS = frozenset((
+    COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE, COMMAND_DOCK_RESET,
+    COMMAND_UNDOCK, COMMAND_UNDOCK_CANCEL,
+))
+# Commands whose payload is a bare request id.
+SIMPLE_COMMANDS = frozenset((
+    COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE, COMMAND_DOCK_RESET,
+))
 
 
 @dataclass(frozen=True)
@@ -36,19 +49,25 @@ def valid_request_id(value: str) -> bool:
 
 def format_request(command: str, request_id: str) -> bytes:
     """Format an idempotent, newline-terminated hardware control request."""
-    if command not in COMMANDS:
+    if command not in SIMPLE_COMMANDS:
         raise ValueError(f'unsupported command: {command}')
     if not valid_request_id(request_id):
         raise ValueError('request_id must be a canonical UUID')
     return f'{command}:{request_id}\n'.encode('ascii')
 
 
-def motor_enable_charge_allowed(
-        charge_state: int, recent_release: bool) -> bool:
-    """Allow a re-latched charge state only after a scoped confirmed release."""
-    if charge_state == 0:
-        return True
-    return charge_state > 0 and recent_release
+def motor_enable_allowed(dock_state: str, estop_pressed: bool) -> bool:
+    """Permit a motor enable only where dock contact is impossible.
+
+    MOTOR_ENABLE is a decoupled maintenance command: it never releases charging
+    and never authorizes motion. There is no post-release window and no
+    charge-state exception, because enabling the motors in order to leave the
+    dock is the UNDOCK operation's job. The SBC independently enforces the same
+    rule against its own dock observer.
+    """
+    if estop_pressed:
+        return False
+    return dock_state in ('CLEAR_CONFIRMED', 'UNKNOWN')
 
 
 def parse_reply(line: str) -> Optional[ControlReply]:

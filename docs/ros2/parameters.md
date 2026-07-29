@@ -106,15 +106,26 @@ The generic `docking_server` parameter block is retained only for a future revie
 the node is not launched or lifecycle-managed. Its configured PatrolBot plugin uses typed base
 state rather than inferring charge from `BatteryState.current`.
 
-The active `patrolbot_dock_manager` defaults are deliberately non-operational:
+`patrolbot_dock_manager` orchestrates the undock but performs no contact separation itself; the
+values it sends are a *request* to the SBC, which rejects anything outside its own hard caps
+rather than clamping it.
 
 | Parameter | Value | Meaning |
 |---|---|---|
-| `dock_pose_configured` | `false` | no surveyed dock pose; initialize/undock reject |
-| `dock_id` | `main_charger` | expected identifier once commissioned |
-| `sensor_timeout` | `0.5 s` | rear sonar/base state must be fresh |
-| `operator_motor_window` | `10.0 s` | bounded post-release window for separate physical/software motor action |
-| `backup_timeout` | `10.0 s` | upper bound for the guarded Nav2 BackUp phase |
+| `dock_pose_configured` | `true` | surveyed main-charger pose is commissioned |
+| `dock_id` | `main_charger` | expected identifier |
+| `sensor_timeout` | `0.5 s` | base state / odom / localization must be fresh |
+| `undock_clearance_distance` | `0.53 m` | reverse distance requested of the SBC |
+| `undock_reverse_speed` | `0.10 m/s` | **hardware ceiling, not a tuning knob** — at 0.20 m/s the base re-latched charge and cut the motors 0.24 m in (2026-07-28) |
+| `undock_max_duration` | `45.0 s` | backstop only; the SBC owns the real operation timeout |
+| `undock_turn_yaw` | `π` | post-clearance turn, executed as a Nav2 `Spin` |
+| `spin_timeout` | `20.0 s` | upper bound for that turn |
+
+Retired with the timed-authorization design: `dock_departure_charge_grace`,
+`operator_motor_window`, `backup_timeout`, `allow_front_bumper_at_dock`. Their jobs moved inside
+the SBC's exclusive `UNDOCK` state machine, which is configured by
+`hardware/patrolbot_hw_server/undock_profile.conf` rather than by ROS parameters — the values are
+hardware facts, not deployment tuning, and must not be changeable from the Pi.
 
 The `nav_command_mux` separately arbitrates autonomous producers before smoothing and collision
 monitoring: controller priority 5, behavior priority 7, and reserved docking priority 9, each with

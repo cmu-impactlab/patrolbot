@@ -16,6 +16,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ChargeRelease.srv"
   "srv/InitializeDockPose.srv"
   "srv/MotorEnable.srv"
+  "action/HardwareUndock.action"
   "action/Undock.action"
   DEPENDENCIES action_msgs builtin_interfaces geometry_msgs std_msgs
 )

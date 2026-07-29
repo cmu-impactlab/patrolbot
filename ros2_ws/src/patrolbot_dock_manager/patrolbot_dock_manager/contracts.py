@@ -161,10 +161,10 @@ def precheck_failures(
 def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
     """Validate that Nav2 may take control after the SBC hands off.
 
-    Called once, after the hardware undock reports success. The SBC leaves the
-    motors live at zero velocity precisely so this can succeed; a handoff that
-    left them disabled would strand the robot, because the generic drive gate
-    refuses motion with the motors down.
+    Called for a bounded convergence window after the hardware undock reports
+    success. The SBC leaves the motors live at zero velocity precisely so this
+    can succeed; a handoff that left them disabled would strand the robot,
+    because the generic drive gate refuses motion with the motors down.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:

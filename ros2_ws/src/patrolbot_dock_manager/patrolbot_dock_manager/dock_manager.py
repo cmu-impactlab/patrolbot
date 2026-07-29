@@ -103,6 +103,8 @@ class DockManager(Node):
         self.declare_parameter('undock_max_duration', 45.0)
         self.declare_parameter('undock_turn_yaw', math.pi)
         self.declare_parameter('spin_timeout', 20.0)
+        self.declare_parameter('post_undock_localization_timeout', 5.0)
+        self.declare_parameter('handoff_timeout', 4.0)
         self.declare_parameter('dock_pose_initialization_timeout', 5.0)
         self.declare_parameter('initial_pose_xy_variance', 0.04)
         self.declare_parameter('initial_pose_yaw_variance', 0.0685)
@@ -434,6 +436,7 @@ class DockManager(Node):
             self._transition('HARDWARE_UNDOCK', correlation_id)
             hardware_ok, hardware_reason, hardware_result = (
                 self._run_hardware_undock(goal_handle, correlation_id))
+            hardware_completed_at = time.monotonic()
             traveled = self._hardware_distance
             if not hardware_ok:
                 code = self._undock_result_code(
@@ -442,21 +445,33 @@ class DockManager(Node):
                     goal_handle, code, hardware_reason, initial_charge,
                     manual_recovery=True, distance=traveled)
 
-            # The SBC hands off stopped, physically clear, with the motors
-            # still live. Confirm that before letting Nav2 command anything.
-            failures = resume_failures(self._snapshot(), expected_session)
-            if failures:
-                return self._abort(
-                    goal_handle, Undock.Result.SAFETY_FAULT,
-                    '; '.join(failures), initial_charge,
-                    manual_recovery=True, distance=traveled)
-
+            # Localization is restored BEFORE the handoff gate, because the
+            # gate checks it: the robot has just moved half a metre, so the
+            # pre-undock AMCL sample is necessarily stale by now.
             self._transition('RESTORE_LOCALIZATION', correlation_id)
             if not self._wait_for_localization(
-                    goal_handle, 3.0, correlation_id):
+                    goal_handle,
+                    float(self.get_parameter(
+                        'post_undock_localization_timeout').value),
+                    correlation_id, newer_than=hardware_completed_at):
                 return self._abort(
                     goal_handle, Undock.Result.LOCALIZATION_FAILED,
                     'localization did not recover after the hardware undock',
+                    initial_charge, manual_recovery=True, distance=traveled)
+
+            # The SBC hands off stopped, physically clear, with the motors still
+            # live, and its terminal frame says so before the telemetry does:
+            # BaseState publishes at 10 Hz and its dock section carries the
+            # SBC's ~4 Hz auxiliary rate. Sampling once here read dock_state as
+            # DEPARTING and aborted a completed undock, so wait for the
+            # published state to catch up instead of taking one sample.
+            handoff_ok, handoff_reason = self._wait_for_handoff(
+                goal_handle, expected_session,
+                float(self.get_parameter('handoff_timeout').value),
+                correlation_id)
+            if not handoff_ok:
+                return self._abort(
+                    goal_handle, Undock.Result.SAFETY_FAULT, handoff_reason,
                     initial_charge, manual_recovery=True, distance=traveled)
 
             # Collision-aware turn, on the full safety chain. It is a Nav2 Spin
@@ -586,6 +601,28 @@ class DockManager(Node):
             f'motors_enabled={result.motors_enabled}')
         return True, '', result
 
+    def _wait_for_handoff(
+            self, goal_handle, expected_session, timeout, correlation_id):
+        """Wait for the published state to agree that Nav2 may take control.
+
+        Returns (ok, reason). The SBC's terminal frame is authoritative and has
+        already been checked; this confirms the same thing through the
+        independent telemetry path before anything commands velocity.
+        """
+        deadline = time.monotonic() + timeout
+        last_failures = ['handoff not evaluated']
+        while time.monotonic() < deadline:
+            if goal_handle.is_cancel_requested:
+                return False, 'goal canceled during handoff'
+            self._request_localization_update()
+            failures = resume_failures(self._snapshot(), expected_session)
+            if not failures:
+                return True, ''
+            last_failures = failures
+            self._publish_feedback(goal_handle, deadline, correlation_id)
+            time.sleep(0.05)
+        return False, '; '.join(last_failures)
+
     def _hardware_feedback_callback(self, feedback):
         message = feedback.feedback
         with self._lock:
@@ -616,8 +653,8 @@ class DockManager(Node):
         return False, '; '.join(last_failures)
 
     def _wait_for_localization(
-            self, goal_handle, timeout, correlation_id):
-        """Force a stationary AMCL update and require a fresh valid estimate."""
+            self, goal_handle, timeout, correlation_id, newer_than=0.0):
+        """Force AMCL and require a fresh valid estimate after the given epoch."""
         deadline = time.monotonic() + timeout
         self._request_localization_update(force=True)
         while time.monotonic() < deadline:
@@ -625,7 +662,10 @@ class DockManager(Node):
                 return False
             self._request_localization_update()
             state = self._snapshot()
-            if state.localization_fresh and state.localization_valid:
+            with self._lock:
+                localization_at = self._localization_at
+            if (localization_at > newer_than and
+                    state.localization_fresh and state.localization_valid):
                 return True
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)

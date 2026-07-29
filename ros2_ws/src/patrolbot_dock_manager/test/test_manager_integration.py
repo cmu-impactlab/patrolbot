@@ -69,6 +69,15 @@ class FakeWorld(Node):
         self.undock_steps = 6
         self.undock_reports_clear = True
         self.undock_leaves_motors_enabled = True
+        self.handoff_telemetry_delay = 0.0
+        self.pause_localization_during_undock = False
+        self.localization_restore_delay = 0.0
+        self._dock_state_clear_at = 0.0
+        self._localization_resume_at = 0.0
+        self.localization_enabled = True
+        self.hardware_completed_at = 0.0
+        self.localization_resumed_at = 0.0
+        self.spin_called_at = 0.0
         self.spin_calls = 0
 
         self.behavior_pub = self.create_publisher(
@@ -96,6 +105,8 @@ class FakeWorld(Node):
         self.dock_state = 'DEPARTING'
         self.undock_active = True
         self.motors_enabled = True
+        if self.pause_localization_during_undock:
+            self.localization_enabled = False
         result = HardwareUndock.Result()
         feedback = HardwareUndock.Feedback()
         for step in range(self.undock_steps):
@@ -136,6 +147,7 @@ class FakeWorld(Node):
         result.physically_clear = bool(success and self.undock_reports_clear)
         result.final_dock_state = (
             'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED')
+        self.hardware_completed_at = time.monotonic()
         if success:
             goal_handle.succeed()
         else:
@@ -145,9 +157,21 @@ class FakeWorld(Node):
     def _settle(self, success):
         self.undock_active = False
         if success:
-            self.dock_state = 'CLEAR_CONFIRMED'
+            if self.handoff_telemetry_delay is None:
+                self._dock_state_clear_at = 0.0
+            elif self.handoff_telemetry_delay > 0.0:
+                self._dock_state_clear_at = (
+                    time.monotonic() + self.handoff_telemetry_delay)
+            else:
+                self.dock_state = 'CLEAR_CONFIRMED'
             self.motors_enabled = bool(self.undock_leaves_motors_enabled)
             self.redock_inhibited = True
+            if self.pause_localization_during_undock:
+                if self.localization_restore_delay is None:
+                    self._localization_resume_at = 0.0
+                else:
+                    self._localization_resume_at = (
+                        time.monotonic() + self.localization_restore_delay)
             # The base re-latches a stale charge state after the robot is
             # physically clear. It must not block anything any more.
             self.charge_state = 3
@@ -157,6 +181,7 @@ class FakeWorld(Node):
 
     def _spin(self, goal_handle):
         self.spin_calls += 1
+        self.spin_called_at = time.monotonic()
         time.sleep(0.10)
         result = Spin.Result()
         result.error_code = Spin.Result.NONE
@@ -164,6 +189,16 @@ class FakeWorld(Node):
         return result
 
     def _publish_state(self):
+        monotonic_now = time.monotonic()
+        if (self._dock_state_clear_at and
+                monotonic_now >= self._dock_state_clear_at):
+            self.dock_state = 'CLEAR_CONFIRMED'
+            self._dock_state_clear_at = 0.0
+        if (self._localization_resume_at and
+                monotonic_now >= self._localization_resume_at):
+            self.localization_enabled = True
+            self.localization_resumed_at = monotonic_now
+            self._localization_resume_at = 0.0
         now = self.get_clock().now().to_msg()
         state = BaseState()
         state.header.stamp = now
@@ -215,14 +250,15 @@ class FakeWorld(Node):
         odom.child_frame_id = 'base_link'
         self.odom_pub.publish(odom)
 
-        pose = PoseWithCovarianceStamped()
-        pose.header.stamp = now
-        pose.header.frame_id = 'map'
-        pose.pose.pose.orientation.w = 1.0
-        pose.pose.covariance[0] = 0.01
-        pose.pose.covariance[7] = 0.01
-        pose.pose.covariance[35] = 0.01
-        self.pose_pub.publish(pose)
+        if self.localization_enabled:
+            pose = PoseWithCovarianceStamped()
+            pose.header.stamp = now
+            pose.header.frame_id = 'map'
+            pose.pose.pose.orientation.w = 1.0
+            pose.pose.covariance[0] = 0.01
+            pose.pose.covariance[7] = 0.01
+            pose.pose.covariance[35] = 0.01
+            self.pose_pub.publish(pose)
 
     def destroy_node(self):
         self.undock_server.destroy()
@@ -253,6 +289,8 @@ def harness():
         Parameter('undock_reverse_speed', value=0.10),
         Parameter('undock_max_duration', value=10.0),
         Parameter('spin_timeout', value=5.0),
+        Parameter('post_undock_localization_timeout', value=0.75),
+        Parameter('handoff_timeout', value=0.75),
         Parameter('dock_pose_initialization_timeout', value=1.0),
     ])
     world = FakeWorld()
@@ -340,6 +378,50 @@ def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     assert world.spin_calls == 1
     # A stale charge state after clearance must not have blocked anything.
     assert world.charge_state == 3
+
+
+def test_waits_for_post_result_localization_and_delayed_handoff(harness):
+    """A terminal success may arrive before either Pi telemetry path catches up."""
+    _manager, world, client_node = harness
+    world.handoff_telemetry_delay = 0.20
+    world.pause_localization_during_undock = True
+    world.localization_restore_delay = 0.25
+
+    goal_handle = send_undock(client_node)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+
+    assert wrapped.result.success
+    assert world.localization_resumed_at > world.hardware_completed_at
+    assert world.spin_called_at >= world.localization_resumed_at
+    assert world.spin_calls == 1
+
+
+def test_handoff_telemetry_timeout_stays_stopped(harness):
+    """The terminal result cannot bypass an independent telemetry timeout."""
+    _manager, world, client_node = harness
+    world.handoff_telemetry_delay = None
+
+    goal_handle = send_undock(client_node)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.SAFETY_FAULT
+    assert 'physical clearance' in wrapped.result.message
+    assert world.spin_calls == 0
+
+
+def test_post_result_localization_timeout_stays_stopped(harness):
+    """A pre-undock AMCL sample is not accepted after physical separation."""
+    _manager, world, client_node = harness
+    world.pause_localization_during_undock = True
+    world.localization_restore_delay = None
+
+    goal_handle = send_undock(client_node)
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.LOCALIZATION_FAILED
+    assert world.spin_calls == 0
 
 
 def test_hardware_failure_is_reported_without_a_nav2_turn(harness):

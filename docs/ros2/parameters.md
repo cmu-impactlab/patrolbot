@@ -119,6 +119,8 @@ rather than clamping it.
 | `undock_reverse_speed` | `0.10 m/s` | **hardware ceiling, not a tuning knob** — at 0.20 m/s the base re-latched charge and cut the motors 0.24 m in (2026-07-28) |
 | `undock_max_duration` | `45.0 s` | backstop only; the SBC owns the real operation timeout |
 | `undock_turn_yaw` | `π` | post-clearance turn, executed as a Nav2 `Spin` |
+| `post_undock_localization_timeout` | `5.0 s` | require a valid AMCL sample received after the hardware result |
+| `handoff_timeout` | `4.0 s` | bounded wait for independent Pi telemetry to confirm the SBC terminal handoff |
 | `spin_timeout` | `20.0 s` | upper bound for that turn |
 
 Retired with the timed-authorization design: `dock_departure_charge_grace`,

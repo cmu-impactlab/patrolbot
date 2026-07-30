@@ -47,7 +47,7 @@ Classification rules:
 | PB-AUDIT-018 | Direction-aware mitigations and opt-in sensor scaffold exist; physical near-field validation remains. |
 | PB-AUDIT-021 | Measurement gate exists; main-LiDAR height measurement and TF correction remain. |
 | PB-AUDIT-022 | Key-only/no-root-login SSH hardening is live-verified; eventual SBC platform replacement remains. |
-| PB-AUDIT-026 | Both causes of `localization invalid` are fixed in the repo and pass 69 tests in the running image: a docked-and-idle AMCL refresh for the freshness half, and an evidence-gated `docked_max_position_variance` backstop for the variance half. Undeployed; closure still needs the supervised undock with the re-seed loop stopped. |
+| PB-AUDIT-026 | Deployed and live-verified: readiness now reports `ready_for_undock: true`, `blocking_reason: ready` and `localization_age` 0.20 s where it read `localization invalid` at 7.8-27.3 s. Closure still needs the supervised undock regression with the re-seed loop deliberately stopped. |
 
 ## Not touched — 1
 
@@ -338,6 +338,41 @@ requires mated plates *and* agreement with the surveyed dock pose, leaving
 `max_position_variance` untouched for general navigation.
 
 Counts are now **11 fully completed, 14 in progress, and 1 not touched**.
+
+## PB-AUDIT-026 deployed — 2026-07-30
+
+The fix is on the robot. Commit `dabeb87980670df9ee172f6cfb5f7e27b4978164`
+(branch `sbc-owned-undock`, pushed to origin) built image
+`patrolbot:git-dabeb879` with source digest
+`62300d8e436bbb54f7cce014303b0df31edc41f6d538a29647776a49a24d55a5`. The exact
+image passed 69 dock-manager checks, 50 bridge checks with 11 skips, and 59
+navigation checks with 10 skips before anything was recreated. Only
+`patrolbot-navigation` was recreated; the web-bridge image was then re-derived
+from the same core image so the PB-AUDIT-025 invariant still holds.
+
+Live evidence after the change: `ready_for_undock: true`,
+`blocking_reason: ready`, `localization_fresh`/`localization_valid`/
+`dock_pose_valid` all true, `localization_age` 0.203 s against the earlier
+7.8-27.3 s, `dock_state: DOCKED_CONFIRMED`, charge state 2, motors disabled,
+E-stop clear, zero faults, stationary, rear clear, one `/cmd_vel` publisher and
+one subscriber, zero odometry twist on both axes, four healthy containers with
+zero restarts, and `status.sh` reporting verified provenance, one `BaseState`
+hash, one `DockReadiness` hash and `OVERALL=ready`. No velocity, goal, pose,
+charge-release, motor-enable or undock command was sent.
+
+Two consequences to carry forward. First, `ready_for_undock` is now true while
+the web bridge runs with commands enabled, so the dashboard's Undock button is
+accepted rather than refused — deliberate, and the precondition for the
+supervised regression, but it changes what a dashboard press does. Second,
+`patrolbot-bridge` and `patrolbot-bringup` still carry older image labels; their
+behaviour already comes from the committed tree through the read-only bind
+mounts and no message definition changed, so every interface hash still agrees,
+but the full single-identity cutover of those two containers remains.
+
+Rollback lives in
+`/home/ubuntu/patrolbot-backups/20260730T133000Z-pre-audit026-deploy/` with the
+pre-change `.env`, a checksummed copy of the previous source tree, the four
+container inspects and the previous deployed digest `4ec08f46...`.
 
 ## Detailed evidence
 

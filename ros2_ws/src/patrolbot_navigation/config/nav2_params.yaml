@@ -386,8 +386,24 @@ patrolbot_dock_manager:
     dock_position_tolerance: 0.60
     dock_yaw_tolerance: 0.35
     max_position_variance: 0.25
+    # PB-AUDIT-026. Docked, AMCL's x-variance sampled 0.57-0.63 across 70 forced
+    # no-motion updates and never converged, because the dock fills the laser's
+    # near field and nothing constrains the approach axis. yy stayed at 0.001,
+    # yaw at 0.0003, and the pose was accurate to ~6 cm against the surveyed
+    # dock pose, so this is dock geometry rather than a lost robot. 1.0 clears
+    # the worst measured sample with headroom while still refusing an estimate
+    # that has actually diverged. It applies ONLY while the SBC's dock observer
+    # reports mated plates AND the pose already agrees with the surveyed dock
+    # pose; max_position_variance above is unchanged and still gates general
+    # navigation. Do not raise that one to solve a docked problem.
+    docked_max_position_variance: 1.0
     max_yaw_variance: 0.25
     sensor_timeout: 0.5
+    # A stationary AMCL publishes nothing, so without this the docked pose is
+    # always older than sensor_timeout and readiness reports "localization
+    # invalid" while idle even though the precheck's forced refresh clears it
+    # immediately. One no-motion update per tick, docked and idle only.
+    docked_localization_refresh_period: 0.2
     precheck_timeout: 5.0
     # Requested of the SBC's exclusive UNDOCK operation. The SBC rejects
     # anything outside its own hard caps rather than clamping it, so these are

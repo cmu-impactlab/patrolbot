@@ -1,8 +1,8 @@
 # PB-AUDIT Status Summary
 
-Status date: 2026-07-26.
+Status date: 2026-07-30.
 
-This file is the short completion index for the 24 findings in
+This file is the short completion index for the 26 findings in
 `PATROLBOT_RPI5_AUDIT.md`. Detailed evidence remains in the canonical audit and
 the separate implementation/cutover reports.
 
@@ -14,7 +14,7 @@ Classification rules:
 - **Not touched:** no remediation has been performed beyond investigation and
   documentation.
 
-## Fully completed — 10
+## Fully completed — 11
 
 | ID | Short status |
 |---|---|
@@ -22,14 +22,15 @@ Classification rules:
 | PB-AUDIT-002 | The production undock action now releases charging, explicitly enables motors, reverses 0.50 m through the guarded Nav2 path, turns away 180 degrees, and ends stopped with motors disabled. |
 | PB-AUDIT-011 | Original charging-state interface defect corrected and stationary release/recharge transition verified. |
 | PB-AUDIT-013 | Compatible user unit and bounded persistent journal survived a real power cycle and retained both boot records. |
-| PB-AUDIT-014 | Final velocity-smoother configuration corrected, deployed, and live-verified. |
+| PB-AUDIT-014 | Final velocity-smoother configuration is deployed and live-verified at 0.30 m/s, matching the SBC drive gate. |
 | PB-AUDIT-016 | Unexplained-outage cause resolved from operator and log evidence; prevention is tracked by PB-AUDIT-012. |
 | PB-AUDIT-017 | External DDS command-graph exposure contained with loopback-only discovery. |
 | PB-AUDIT-019 | Proven-dead launch/container artifacts removed; retained source/images have explicit offline rollback roles. |
 | PB-AUDIT-020 | Commit-SHA-labelled image/source provenance is deployed and live-verified with checksum-backed rollback. |
 | PB-AUDIT-024 | Informational protocol-design review accepted; no corrective action required. |
+| PB-AUDIT-025 | Web-bridge image rebuilt from the running core image; all four `BaseState` endpoints share one type hash and dock telemetry reaches the dashboard again. Readiness now compares interface hashes. |
 
-## In progress — 13
+## In progress — 14
 
 | ID | Short status |
 |---|---|
@@ -42,16 +43,28 @@ Classification rules:
 | PB-AUDIT-009 | DRIVE-triggered auto-enable is fixed; explicit post-release motor enable, enabled feedback, and automatic disable after charge reassertion are live-verified. Enabled-motor E-stop cutoff remains. |
 | PB-AUDIT-010 | System clock and persistent Chrony policy are corrected and survived reboot; RTC-battery replacement plus a post-replacement cold boot remain. |
 | PB-AUDIT-012 | Pi fault/battery protections are deployed; real SBC power-fail signal and graceful shutdown path remain. |
-| PB-AUDIT-015 | The F710 receiver and centered `/joy` path are live-verified; deadman/nonzero takeover and timeout motion validation remain. |
+| PB-AUDIT-015 | The F710 receiver and centered `/joy` path are live-verified; the 0.35/0.30 m/s rejection mismatch is fixed, while supervised full-stick, release, and timeout motion acceptance remains. |
 | PB-AUDIT-018 | Direction-aware mitigations and opt-in sensor scaffold exist; physical near-field validation remains. |
 | PB-AUDIT-021 | Measurement gate exists; main-LiDAR height measurement and TF correction remain. |
 | PB-AUDIT-022 | Key-only/no-root-login SSH hardening is live-verified; eventual SBC platform replacement remains. |
+| PB-AUDIT-026 | Both causes of `localization invalid` are fixed in the repo and pass 69 tests in the running image: a docked-and-idle AMCL refresh for the freshness half, and an evidence-gated `docked_max_position_variance` backstop for the variance half. Undeployed; closure still needs the supervised undock with the re-seed loop stopped. |
 
 ## Not touched — 1
 
 | ID | Short status |
 |---|---|
-| PB-AUDIT-023 | Gyro firmware mode and physical performance remain unqueried and unvalidated. |
+| PB-AUDIT-023 | Gyro firmware mode and physical performance remain unqueried and unvalidated. ARIA's `ArRobotConfigPacketReader` does expose `getHasGyro()`, `getGyroType()` and `getGyroFWVersion()`, and `patrolbot-sh.p` carries only `GyroScaler` (no `HasGyro`), so the answer lives in firmware and the deployed server never asks for it. Reading it needs a server change plus a restart window — it is not obtainable read-only while the server owns `ttyS2`. |
+
+## Added after the original 24 — 2026-07-30
+
+Both new findings were confirmed live while diagnosing an operator report that
+the dashboard said the dock observer was not returning valid data. The dock
+observer itself was healthy throughout (`dock_state: DOCKED_CONFIRMED`,
+`dock_state_valid: true`, `telemetry_age: 0.21`, commissioned undock profile
+loaded on the SBC). PB-AUDIT-025 is the reported symptom; PB-AUDIT-026 is the
+refusal that surfaces next once the dashboard can see the robot again, because
+the dock-pose re-seed loop that normally masks it lives in the very node
+PB-AUDIT-025 detached. No robot state was changed during the investigation.
 
 ## Latest safe non-motion completion — 2026-07-23
 
@@ -295,6 +308,36 @@ physical sensor campaigns remain separate open findings.
 
 Current finding counts are **10 fully completed, 13 in progress, and 1 not
 touched**.
+
+## PB-AUDIT-025 closed and PB-AUDIT-026 fixed in repo — 2026-07-30
+
+PB-AUDIT-025 is closed on the robot. The dashboard bridge image is now built
+from the exact core image the containers run (`docker/Dockerfile.web-bridge`),
+so its `patrolbot_interfaces` cannot lag behind the publisher again. Live
+`/patrolbot/base_state` carries one publisher and three subscriptions with a
+single type hash `RIHS01_c42605b3...`, the bridge reports
+`dock capabilities: undock, charge_release, motor_enable`, and its 30 s
+dock-pose re-seed loop resumed. `docker/status.sh` now compares the RIHS01
+hashes of `BaseState` and `DockReadiness` across every container that carries
+the interfaces, read from each image's installed type descriptions rather than
+from the DDS graph — an unmatched subscription is absent from
+`ros2 topic info -v` entirely, so the graph could not have detected this.
+Only the web-bridge container was recreated; bridge, navigation and bringup
+stayed healthy and no robot state changed.
+
+PB-AUDIT-026 turned out to be two defects behind one blocking reason. The
+variance half was real but transient: with the re-seed loop dead for ~24 h the
+docked x-variance had grown to 0.57-0.63, while live covariance after the fix
+is `xx=0.041, yy=0.033, yaw=0.053`, inside the existing 0.25 gate. The half
+that actually blocks an idle robot is freshness — a stationary AMCL publishes
+nothing, so the docked pose is always older than the 0.5 s `sensor_timeout`
+(measured 7.8 s and 12.3 s), and readiness reported a blocker the precheck
+clears itself. Both are fixed in the repo and unlaunched: a docked-and-idle
+no-motion refresh, and an evidence-gated `docked_max_position_variance` that
+requires mated plates *and* agreement with the surveyed dock pose, leaving
+`max_position_variance` untouched for general navigation.
+
+Counts are now **11 fully completed, 14 in progress, and 1 not touched**.
 
 ## Detailed evidence
 

@@ -18,6 +18,7 @@ from patrolbot_dock_manager.contracts import (
     HAPPY_PATH,
     HARD_MAX_DISTANCE,
     HARD_MAX_SPEED,
+    localization_position_limit,
     precheck_failures,
     resume_failures,
     SafetySnapshot,
@@ -239,6 +240,68 @@ def test_dock_pose_initialization_requires_charging_and_stillness():
         replace(SAFE_DOCKED, stationary=False)) != []
 
 
+def test_dock_pose_initialization_rejects_stale_charge_while_clear():
+    failures = dock_pose_initialization_failures(replace(
+        SAFE_DOCKED,
+        charge_state=3,
+        dock_state=DOCK_CLEAR_CONFIRMED,
+        physically_clear=True,
+    ))
+    assert failures == [
+        'SBC does not report the robot docked '
+        '(dock_state=CLEAR_CONFIRMED)']
+
+
+def test_dock_pose_initialization_requires_fresh_dock_observer():
+    assert dock_pose_initialization_failures(replace(
+        SAFE_DOCKED, dock_state_valid=False)) != []
+
+
 def test_dock_pose_initialization_ignores_motor_state():
     assert dock_pose_initialization_failures(
         replace(SAFE_DOCKED, motors_enabled=True)) == []
+
+
+# ---------------------------------------------------------------------------
+# Docked localization variance (PB-AUDIT-026)
+# ---------------------------------------------------------------------------
+
+# The values actually measured on the charger: the approach axis never settles,
+# the cross axis and yaw do.
+DOCKED_X_VARIANCE = 0.63
+GENERAL_LIMIT = 0.25
+DOCKED_LIMIT = 1.0
+
+
+def test_general_limit_applies_away_from_the_dock():
+    assert localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, False, False) == GENERAL_LIMIT
+    assert DOCKED_X_VARIANCE > localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, False, False)
+
+
+def test_docked_allowance_needs_both_pieces_of_evidence():
+    # Mated plates but a pose that has drifted off the dock: no allowance.
+    assert localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, True, False) == GENERAL_LIMIT
+    # A pose at the dock but no dock contact — the robot may have left.
+    assert localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, False, True) == GENERAL_LIMIT
+    assert localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, True, True) == DOCKED_LIMIT
+
+
+def test_measured_docked_variance_passes_only_the_docked_limit():
+    assert DOCKED_X_VARIANCE <= localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, True, True)
+
+
+def test_docked_allowance_never_tightens_the_general_limit():
+    assert localization_position_limit(
+        GENERAL_LIMIT, 0.01, True, True) == GENERAL_LIMIT
+
+
+def test_docked_allowance_still_refuses_a_diverged_estimate():
+    # Particle spread after a genuine loss of localization, at the dock.
+    assert 4.0 > localization_position_limit(
+        GENERAL_LIMIT, DOCKED_LIMIT, True, True)

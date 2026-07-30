@@ -25,8 +25,10 @@ from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.contracts import (
     automatic_docking_allowed,
+    DOCK_DOCKED_CONFIRMED,
     dock_pose_initialization_failures,
     DOCK_UNKNOWN,
+    localization_position_limit,
     precheck_failures,
     resume_failures,
     SafetySnapshot,
@@ -93,8 +95,21 @@ class DockManager(Node):
         self.declare_parameter('dock_position_tolerance', 0.25)
         self.declare_parameter('dock_yaw_tolerance', 0.35)
         self.declare_parameter('max_position_variance', 0.25)
+        # Seated on the charger, AMCL's position variance along the approach
+        # axis never comes down: the dock fills the laser's near field and the
+        # scan cannot constrain that one direction. Measured 0.57-0.63 over 70
+        # forced no-motion updates while yy was 0.001 and yaw 0.0003, with the
+        # pose itself accurate to ~6 cm against the surveyed dock pose. This
+        # separate allowance applies ONLY while the SBC's dock observer reports
+        # mated plates and the pose already agrees with the surveyed dock pose;
+        # `max_position_variance` still guards everything else, because it also
+        # gates general navigation.
+        self.declare_parameter('docked_max_position_variance', 1.0)
         self.declare_parameter('max_yaw_variance', 0.25)
         self.declare_parameter('sensor_timeout', 0.5)
+        # Comfortably inside sensor_timeout so a docked pose is never reported
+        # stale purely because a stationary AMCL had nothing to say.
+        self.declare_parameter('docked_localization_refresh_period', 0.2)
         self.declare_parameter('precheck_timeout', 5.0)
         # Requested of the SBC, which independently rejects anything outside
         # its own hard caps rather than clamping it.
@@ -160,6 +175,17 @@ class DockManager(Node):
             callback_group=self._callbacks)
         self.create_timer(
             0.5, self._readiness_timer, callback_group=self._callbacks)
+        # AMCL publishes once after initialization and then stays silent until
+        # the robot moves, so a docked robot's last pose is always older than
+        # `sensor_timeout` and idle readiness reported "localization invalid"
+        # permanently — a blocker that the precheck's own forced refresh clears
+        # a moment later. That made the dashboard look like it was refusing to
+        # undock for a localization reason that did not exist. Keeping the docked
+        # view fresh costs one no-motion AMCL update per tick and only while the
+        # robot is docked and idle; a moving robot already publishes on odometry.
+        self.create_timer(
+            float(self.get_parameter('docked_localization_refresh_period').value),
+            self._docked_localization_refresh, callback_group=self._callbacks)
         self.get_logger().info(
             'Guarded undock manager ready. Motion remains fail-closed until '
             'bumper mapping and dock pose are explicitly configured.')
@@ -224,7 +250,8 @@ class DockManager(Node):
             with self._lock:
                 pose = self._localization
                 pose_at = self._localization_at
-            valid, at_dock = self._localization_health(pose)
+            valid, at_dock = self._localization_health(
+                pose, docked=self._dock_contact_confirmed())
             if pose is not None and pose_at > published_at and valid and at_dock:
                 response.success = True
                 response.code = InitializeDockPose.Response.OK
@@ -671,6 +698,20 @@ class DockManager(Node):
             time.sleep(0.05)
         return False
 
+    def _docked_localization_refresh(self):
+        """Keep a docked robot's AMCL pose fresh enough to judge readiness.
+
+        Runs only while the SBC reports mated plates and no undock goal is in
+        flight; an active goal drives its own forced refreshes, and a robot that
+        has left the dock gets pose updates from its own motion.
+        """
+        with self._goal_lock:
+            if self._goal_reserved:
+                return
+        if not self._dock_contact_confirmed():
+            return
+        self._request_localization_update()
+
     def _request_localization_update(self, force=False):
         """Ask AMCL to update from the next scan even without odometry motion."""
         now = time.monotonic()
@@ -793,7 +834,8 @@ class DockManager(Node):
             self._redock_inhibit_remaining = float(
                 base.redock_inhibit_remaining if base else 0.0)
 
-        localization_valid, dock_pose_valid = self._localization_health(pose)
+        localization_valid, dock_pose_valid = self._localization_health(
+            pose, docked=self._dock_contact_confirmed())
         stationary = False
         if odom is not None:
             stationary = (
@@ -835,7 +877,23 @@ class DockManager(Node):
                 base and base.undock_profile_commissioned),
         )
 
-    def _localization_health(self, pose):
+    def _dock_contact_confirmed(self):
+        """Report whether the SBC's own dock observer sees mated plates.
+
+        Fail-closed on purpose: missing or stale `BaseState` reads as not
+        docked, so the docked variance allowance below can never be granted on
+        the strength of telemetry the Pi can no longer see.
+        """
+        now = time.monotonic()
+        timeout = float(self.get_parameter('sensor_timeout').value)
+        with self._lock:
+            base = self._base_state
+            base_age = now - self._base_state_at if self._base_state_at else math.inf
+        return bool(
+            base is not None and base.dock_state_valid and
+            base.dock_state == DOCK_DOCKED_CONFIRMED and base_age <= timeout)
+
+    def _localization_health(self, pose, docked=False):
         if pose is None:
             return False, False
         covariance = pose.pose.covariance
@@ -845,6 +903,26 @@ class DockManager(Node):
             covariance[0], covariance[7], covariance[35])
         if not all(math.isfinite(value) for value in values):
             return False, False
+        configured = bool(self.get_parameter('dock_pose_configured').value)
+        at_dock = False
+        if configured:
+            yaw = self._yaw(pose.pose.pose.orientation)
+            dx = pose.pose.pose.position.x - float(
+                self.get_parameter('dock_pose_x').value)
+            dy = pose.pose.pose.position.y - float(
+                self.get_parameter('dock_pose_y').value)
+            target_yaw = float(self.get_parameter('dock_pose_yaw').value)
+            yaw_error = math.atan2(
+                math.sin(yaw - target_yaw), math.cos(yaw - target_yaw))
+            at_dock = bool(
+                math.hypot(dx, dy) <=
+                float(self.get_parameter('dock_position_tolerance').value) and
+                abs(yaw_error) <=
+                float(self.get_parameter('dock_yaw_tolerance').value))
+        position_limit = localization_position_limit(
+            self.get_parameter('max_position_variance').value,
+            self.get_parameter('docked_max_position_variance').value,
+            docked, at_dock)
         # bool() here is load-bearing, not decoration. `covariance` is
         # numpy-backed, so each comparison yields numpy.bool_ and `and` returns
         # the last operand — leaving `valid` a numpy.bool_. Assigning that to a
@@ -854,24 +932,11 @@ class DockManager(Node):
         # DockReadiness publish and mid-undock on the first feedback — but only
         # once AMCL had a pose, since this returns early on `pose is None`.
         valid = bool(
-            covariance[0] <= self.get_parameter('max_position_variance').value and
-            covariance[7] <= self.get_parameter('max_position_variance').value and
+            covariance[0] <= position_limit and
+            covariance[7] <= position_limit and
             covariance[35] <= self.get_parameter('max_yaw_variance').value)
-        if not bool(self.get_parameter('dock_pose_configured').value):
+        if not configured:
             return valid, False
-        x = pose.pose.pose.position.x
-        y = pose.pose.pose.position.y
-        yaw = self._yaw(pose.pose.pose.orientation)
-        dx = x - float(self.get_parameter('dock_pose_x').value)
-        dy = y - float(self.get_parameter('dock_pose_y').value)
-        target_yaw = float(self.get_parameter('dock_pose_yaw').value)
-        yaw_error = math.atan2(
-            math.sin(yaw - target_yaw), math.cos(yaw - target_yaw))
-        at_dock = bool(
-            math.hypot(dx, dy) <=
-            float(self.get_parameter('dock_position_tolerance').value) and
-            abs(yaw_error) <=
-            float(self.get_parameter('dock_yaw_tolerance').value))
         return valid, bool(valid and at_dock)
 
     @staticmethod

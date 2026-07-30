@@ -122,6 +122,29 @@ topic_endpoint_nodes() {
   return 1
 }
 
+interface_type_hash() {
+  # The RIHS01 hash rosidl generated for one interface, read out of the image's
+  # own installed type description rather than off the DDS graph. A subscriber
+  # whose hash disagrees is never matched, so it does not appear on the topic at
+  # all -- which is exactly why the DDS graph cannot be used to detect this.
+  local container=$1 kind=$2 name=$3
+  docker exec "$container" timeout --signal=INT --kill-after=2 10 python3 -c '
+import json
+import sys
+
+kind, name = sys.argv[1], sys.argv[2]
+path = ("/opt/patrolbot_ws/install/patrolbot_interfaces/share/"
+        "patrolbot_interfaces/{}/{}.json".format(kind, name))
+with open(path) as handle:
+    hashes = json.load(handle)["type_hashes"]
+wanted = "patrolbot_interfaces/{}/{}".format(kind, name)
+for entry in hashes:
+    if entry["type_name"] == wanted:
+        print(entry["hash_string"])
+        break
+' "$kind" "$name" 2>/dev/null
+}
+
 ros_name_exists() {
   local kind=$1 name=$2 output
   output=$(ros_exec patrolbot-navigation "ros2 '$kind' list 2>&1") || return 1
@@ -194,6 +217,46 @@ else
   printf '  %-24s LOCALHOST only\n' "DDS discovery scope"
 fi
 
+# PB-AUDIT-025. The source digest above only covers the core stack, so a derived
+# image (the dashboard bridge) could lag behind with an older
+# `patrolbot_interfaces`. ROS 2 then refuses to match its subscription against
+# the live publisher because the message type hashes differ -- silently, with no
+# error on either side. That cost a day of dashboard dock telemetry. Every
+# container carrying the interfaces must agree on the hash of the messages the
+# dock path depends on.
+for interface in msg/BaseState msg/DockReadiness; do
+  interface_kind=${interface%%/*}
+  interface_name=${interface##*/}
+  reference_hash=""
+  reference_container=""
+  interface_hash_ok=true
+  for container in "${CONTAINERS[@]}" patrolbot-web-bridge; do
+    docker inspect "$container" >/dev/null 2>&1 || continue
+    container_hash=$(interface_type_hash \
+      "$container" "$interface_kind" "$interface_name") || container_hash=""
+    if [[ -z "$container_hash" ]]; then
+      printf '  %-24s %s: hash unreadable\n' "$interface_name types" "$container"
+      interface_hash_ok=false
+      continue
+    fi
+    if [[ -z "$reference_hash" ]]; then
+      reference_hash=$container_hash
+      reference_container=$container
+    elif [[ "$container_hash" != "$reference_hash" ]]; then
+      printf '  %-24s %s disagrees with %s (%s vs %s)\n' \
+        "$interface_name types" "$container" "$reference_container" \
+        "${container_hash:0:18}" "${reference_hash:0:18}"
+      interface_hash_ok=false
+    fi
+  done
+  if [[ "$interface_hash_ok" == true && -n "$reference_hash" ]]; then
+    printf '  %-24s one hash (%s)\n' \
+      "$interface_name types" "${reference_hash:0:18}"
+  else
+    ready=false
+  fi
+done
+
 monitor_processes=""
 for container in "${CONTAINERS[@]}"; do
   found=$(docker exec "$container" ps -eo pid,args 2>/dev/null \
@@ -261,8 +324,8 @@ fi
 
 smoother_max=$(ros_exec patrolbot-bringup \
   "ros2 param get /teleop_velocity_smoother max_velocity 2>&1" || true)
-if [[ "$smoother_max" == *"[0.35, 0.0, 0.7]"* ]]; then
-  printf '  %-24s [0.35, 0.0, 0.7]\n' "teleop smoother max"
+if [[ "$smoother_max" == *"[0.3, 0.0, 0.7]"* ]]; then
+  printf '  %-24s [0.30, 0.0, 0.7]\n' "teleop smoother max"
 else
   printf '  %-24s %s (unexpected)\n' "teleop smoother max" \
     "${smoother_max:-unavailable}"

@@ -30,6 +30,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import PointCloud2, PointField
+from std_srvs.srv import Empty
 
 
 pytestmark = pytest.mark.skipif(
@@ -79,6 +80,14 @@ class FakeWorld(Node):
         self.localization_resumed_at = 0.0
         self.spin_called_at = 0.0
         self.spin_calls = 0
+        # Stands in for AMCL's no-motion update service. A real stationary AMCL
+        # publishes nothing until asked, which is why the manager asks.
+        self.nomotion_update_calls = 0
+        # Scripted AMCL output. The defaults are a tight fix at the configured
+        # dock pose; tests move them to exercise the docked variance allowance.
+        self.position_variance = 0.01
+        self.pose_x = 0.0
+        self.pose_y = 0.0
 
         self.behavior_pub = self.create_publisher(
             Twist, '/input/nav_behavior', 10)
@@ -97,8 +106,15 @@ class FakeWorld(Node):
             self, Spin, '/spin', execute_callback=self._spin,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=self.callbacks)
+        self.nomotion_service = self.create_service(
+            Empty, '/request_nomotion_update', self._nomotion_update,
+            callback_group=self.callbacks)
         self.timer = self.create_timer(
             0.04, self._publish_state, callback_group=self.callbacks)
+
+    def _nomotion_update(self, _request, response):
+        self.nomotion_update_calls += 1
+        return response
 
     def _hardware_undock(self, goal_handle):
         self.undock_calls += 1
@@ -254,8 +270,10 @@ class FakeWorld(Node):
             pose = PoseWithCovarianceStamped()
             pose.header.stamp = now
             pose.header.frame_id = 'map'
+            pose.pose.pose.position.x = self.pose_x
+            pose.pose.pose.position.y = self.pose_y
             pose.pose.pose.orientation.w = 1.0
-            pose.pose.covariance[0] = 0.01
+            pose.pose.covariance[0] = self.position_variance
             pose.pose.covariance[7] = 0.01
             pose.pose.covariance[35] = 0.01
             self.pose_pub.publish(pose)
@@ -512,6 +530,51 @@ def test_readiness_separates_undock_readiness_from_docking_inhibition(harness):
     # two different reasons, two different fields.
     assert not precheck_ready(manager)
     assert manager._snapshot().redock_inhibited
+
+
+def test_docked_localization_is_refreshed_while_idle(harness):
+    """PB-AUDIT-026: a stationary AMCL must still be asked, or readiness lies.
+
+    Without this the docked pose is permanently older than `sensor_timeout` and
+    idle readiness reports "localization invalid" — the blocker the operator saw
+    on the dashboard — even though the precheck's own forced refresh clears it.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    baseline = world.nomotion_update_calls
+    assert wait_until(lambda: world.nomotion_update_calls > baseline + 2)
+    assert manager._snapshot().localization_fresh
+
+
+def test_localization_is_not_refreshed_once_clear_of_the_dock(harness):
+    """Away from the dock, motion is what updates AMCL. Do not poll it."""
+    manager, world, _client_node = harness
+    assert wait_until(lambda: world.nomotion_update_calls > 0)
+    world.dock_state = 'CLEAR_CONFIRMED'
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
+    # Let any request already in flight land before sampling the counter.
+    time.sleep(0.5)
+    settled = world.nomotion_update_calls
+    time.sleep(1.0)
+    assert world.nomotion_update_calls == settled
+
+
+def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
+    """The wider docked limit is evidence-gated, not a blanket relaxation."""
+    manager, world, _client_node = harness
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    # The measured docked approach-axis variance: refused by the general limit,
+    # admitted only because the plates are mated and the pose is at the dock.
+    world.position_variance = 0.63
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+    # Same variance, but the estimate has drifted well outside the dock's
+    # capture tolerance: the allowance must not apply any more.
+    world.pose_x = 5.0
+    assert wait_until(lambda: not manager._snapshot().localization_valid)
 
 
 def precheck_ready(manager):

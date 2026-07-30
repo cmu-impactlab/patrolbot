@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# Derived image for the dashboard bridge role (compose service `web-bridge`).
+#
+# The bridge node itself is bind-mounted from ~/patrolbot-dashboard, so the only
+# thing this image adds to the core stack is the WebSocket client library that
+# the core image deliberately does not carry.
+#
+# PB-AUDIT-025: build this FROM the exact core image the running containers use.
+# `patrolbot_interfaces` is baked into the core image, and a ROS 2 subscription
+# only matches a publisher when their message type hashes agree. When this image
+# lagged behind the core image, `BaseState` grew fields, the type hash changed,
+# and the dashboard silently received zero dock telemetry with no error on
+# either side. Deriving from the running core image makes that impossible.
+ARG PATROLBOT_BASE_IMAGE
+FROM ${PATROLBOT_BASE_IMAGE}
+
+# python3-psutil is already present in the core image; it is named here so the
+# dashboard bridge's dependency set stays explicit rather than inherited by
+# accident.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-websockets \
+      python3-psutil \
+    && rm -rf /var/lib/apt/lists/*
+
+# Record which core image supplied the interfaces, so `status.sh` and any
+# operator can tell at a glance whether this image is still in step.
+ARG PATROLBOT_BASE_IMAGE
+LABEL io.patrolbot.web-bridge-base-image="${PATROLBOT_BASE_IMAGE}"

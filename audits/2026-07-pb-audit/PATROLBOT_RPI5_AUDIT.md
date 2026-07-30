@@ -29,6 +29,30 @@ Sudo usage record: Pi — `sudo ss -tnp`, `sudo ls /proc/<pid>/fd`, `sudo dmesg`
 
 **Update time:** 2026-07-17, approximately 01:42 +03.
 
+### 2026-07-29 joystick limit correction
+
+The F710 receiver, `/joy`, teleop, mux, smoother, bridge, and SBC logs were
+revalidated read-only after the operator reported chunky manual control. The
+controller path was present and running, but the SBC logged 54 `DRIVE refused`
+events during the 14:28 Qatar-time test: Python teleop and the final smoother
+allowed 0.35 m/s while the SBC's ordinary-drive contract allows at most
+0.30 m/s. Rejection forces zero velocity, so this was an integration mismatch,
+not a missing or disconnected controller.
+
+The teleop default and adjustable linear ceiling plus the final smoother are
+now all 0.30 m/s. A cross-language static contract compares them with the C++
+gate. All three core containers run the same immutable image,
+`patrolbot:joycap-b8345696-20260729t114355z`, revision
+`b83456965c922ef26b3cfdf911261c2084f4b17a+joystick-cap-20260729T114355Z`,
+source digest
+`d66434f751d54be00543c8a37bc5edc588bd316d93f2389e25ffc9af5697b593`.
+The exact image passed 59 navigation tests with 10 hardware-dependent skips;
+live parameter readback confirmed the matched limits. The stationary cutover
+sent no motion command, the SBC fail-safe disabled motors on disconnect, the
+single client reconnected, and no new `DRIVE refused` event appeared.
+Full-stick physical acceptance remains supervised work because the live base
+state still reported `front_bumper_pressed=true`.
+
 ### Reading rule
 
 Sections 2–23 below are retained as the complete evidence record from the
@@ -274,6 +298,8 @@ not substitute for SBC or physical commissioning.
 | PB-AUDIT-022 | **SSH hardened live; platform replacement open** | Password and challenge-response authentication and root login are disabled. Two fresh key-only paths passed and password-only authentication was refused. | **No for full closure.** The addressable SSH exposure is fixed; platform closure still requires Pi-direct µARCS/SICK migration or SBC replacement. |
 | PB-AUDIT-023 | **Unverified** | Gyro FLASH mode and physical performance remain unknown. | **No.** Requires µARCS/physical validation. |
 | PB-AUDIT-024 | **Accepted design note** | New control-protocol framing/idempotency tests were added; the direct wired TCP transport design is unchanged. | No corrective action required on Pi for this informational item. |
+| PB-AUDIT-025 | **Closed and live-verified 2026-07-30** | The dashboard bridge image is now derived from the exact core image the containers run (`docker/Dockerfile.web-bridge`), so its `patrolbot_interfaces` cannot lag the publisher again. `/patrolbot/base_state` has one publisher and three subscriptions, all on type hash `RIHS01_c42605b3...`; the bridge reports `dock capabilities: undock, charge_release, motor_enable` and its 30 s dock-pose re-seed loop resumed. `status.sh` compares `BaseState`/`DockReadiness` RIHS01 hashes across every container carrying the interfaces, read from installed type descriptions rather than the DDS graph, because an unmatched subscription never appears on the topic at all. | **Completed.** Only the web-bridge container was recreated; the core stack stayed healthy and no robot state changed. |
+| PB-AUDIT-026 | **Fixed in repo 2026-07-30; undeployed** | Two defects hid behind one `localization invalid`. Variance: the 0.57-0.63 x-variance was measured after the re-seed loop had been dead ~24 h; with it restored, live covariance is `xx=0.041, yy=0.033, yaw=0.053`, inside the existing 0.25 gate. Freshness: a stationary AMCL publishes nothing, so the docked pose is always older than the 0.5 s `sensor_timeout` (measured 7.8 s, 12.3 s) and idle readiness reported a blocker the precheck's own forced refresh clears. Fixed by a docked-and-idle no-motion refresh plus an evidence-gated `docked_max_position_variance` requiring mated plates *and* agreement with the surveyed dock pose; `max_position_variance` is untouched. 69 tests pass in the running image. | **Software decision made and tested; not deployed.** Needs a navigation rebuild/recreate, then the supervised undock with the re-seed loop deliberately stopped. |
 
 ### Seven-item Raspberry Pi 5 backlog disposition
 
@@ -684,6 +710,8 @@ Code able to defeat protections (audit-required enumeration): docking server byp
 | PB-AUDIT-022 | Low | High | security/maintainability | SBC on EOL Ubuntu 16.04/i686; SSH password auth default-on; ros in docker group | SBC | P3 |
 | PB-AUDIT-023 | Info | Low | verification | Gyro utilization unverifiable read-only (FLASH HasGyro unknown); no client-side gyro handling exists | µARCS/odometry | — |
 | PB-AUDIT-024 | Info | High | design-note | Custom TCP text protocol lacks checksums (TCP-only integrity, wired link); 9600-baud fixed serial leg; µARCS "revive at last speed" semantics fully mitigated by server zeroing | protocol | — |
+| PB-AUDIT-025 | High | High | deployment/interface | `patrolbot-web-bridge` image carries a stale `patrolbot_interfaces`; its `BaseState` type hash differs from the publisher's, so DDS never matches the subscription and the dashboard receives zero dock telemetry | patrolbot-web-bridge container, patrolbot_interfaces | P1 |
+| PB-AUDIT-026 | Medium | High | localization | AMCL along-dock x-variance stays ~0.59 while docked — 2.4× the dock manager's 0.25 gate — so `localization_valid` is false and undock is refused whenever the web bridge's re-seed loop is not running; the two nodes also gate on different statistics (per-axis vs trace) | patrolbot_dock_manager, patrolbot_web_bridge, AMCL | P2 |
 
 ---
 
@@ -1028,6 +1056,77 @@ RTPS/UDP sockets bound on 0.0.0.0 and the Wi-Fi address (`ss` on the Pi); no SRO
 ### PB-AUDIT-023 (Informational): Gyro utilization unverified. Standard equipment ("Gyroscopic Correction"); GyroScaler present in `.p` (client-side factor); HasGyro FLASH unknown and unreadable read-only; no client-side gyro handling exists (correct if HasGyro=2 — firmware fusion; a wasted sensor if HasGyro=1). Resolve via CONFIGpac inspection during the §19 uARCScf session; 'G' LCD indicator would flag a disabled gyro. No defect asserted.
 
 ### PB-AUDIT-024 (Informational): Protocol design notes. The µARCS↔ARIA leg keeps the manual's framed/checksummed protocol; the new SBC↔Pi text protocol relies on TCP integrity (fine on a direct wired link); serial leg fixed at 9600 baud via socat (SIP 10 Hz fits; a fixed latency floor); µARCS's documented "revive at last speed on next command after watchdog stop" is fully mitigated by the server's zero-before-idle/zero-before-reaccept behavior. DRIVE parsing reads ≤255 B and `sscanf`s only the first line per cycle (oldest-first within a 50 ms window; partial-line fragments dropped) — safe direction, worth a unit test (§15).
+
+---
+
+### PB-AUDIT-025: Stale `patrolbot_interfaces` in the web-bridge image silently detaches the dashboard from all dock telemetry
+
+**Severity:** High (operationally blocking: undock is unavailable from the operator interface)  **Confidence:** High  **Category:** deployment/interface  **Affected components:** `patrolbot-web-bridge` container, `patrolbot_interfaces`, `/patrolbot/base_state`  **Current status:** Confirmed live 2026-07-30
+
+#### Expected behavior
+Every node that exchanges `patrolbot_interfaces` messages is built from one source revision, so `/patrolbot/base_state` matches between `patrolbot_bridge` (publisher) and all subscribers. The dashboard's dock panel then reflects the SBC dock observer.
+
+#### Observed behavior
+The dashboard reports that the dock observer is not returning valid data and refuses undock. The dock observer is in fact healthy: `/patrolbot/base_state` carries `dock_state: DOCKED_CONFIRMED`, `dock_state_valid: true`, `link_connected: true`, `telemetry_age: 0.21`, `undock_profile_commissioned: true`, and the SBC server has the commissioned profile loaded with the single Pi client attached. The dashboard never sees any of it, because `patrolbot_web_bridge`'s subscription is not matched by DDS.
+
+#### Evidence
+- `ros2 topic info /patrolbot/base_state -v` (2026-07-30, in `patrolbot-bridge`): publisher `patrolbot_bridge` and subscriber `patrolbot_safety_watchdog` both report type hash `RIHS01_c42605b3c757f31e91741727eef927c6ff0ae6c0f28146b77080006f7461e0a8`; subscriber `patrolbot_web_bridge` reports `RIHS01_05e23bff5e5d1a31256636942f4619e82d57f56b4cf308d5ad2464d3bb348760`.
+- Message definitions differ at the source: `/opt/patrolbot_ws/install/patrolbot_interfaces/share/patrolbot_interfaces/msg/BaseState.msg` is **49 lines, md5 `5a1bebb0ce654c613b024e5cbde5e1de`** in `patrolbot-bridge` and **20 lines, md5 `6d871dff600ca6a29290a70912502bb0`** in `patrolbot-web-bridge`. The short version predates the SBC-owned-undock fields (`dock_state`, `dock_state_valid`, `dock_phase`, `undock_active`, `minimum_rear_range`, `redock_inhibited`, …).
+- Consequence visible in the web bridge's own log: its dock-pose re-seed loop ran every 30 s until epoch 1785327485 (≈24 h before the check) and has produced nothing since the container was recreated ~19 h ago, because that loop is driven by the `base_state` callback that now never fires.
+
+#### Impact
+Operational: undock cannot be commanded from the dashboard, and every dock/charge indicator it renders is stale or empty. Secondary: the automatic dock-pose seeding that masks PB-AUDIT-026 is disabled, so localization validity degrades unattended. Safety-relevant only in that it hides true state from the operator — it does not bypass any interlock; the SBC and dock manager remain correct.
+
+#### Most likely cause
+ROS 2 Jazzy enforces type-hash compatibility, so a subscriber built against an older `.msg` is not matched rather than failing loudly. The web-bridge image was not rebuilt when `BaseState` gained the undock fields; nothing in the deployment path compares interface revisions across images, and the mismatch produces no error on either side.
+
+#### Recommended approach (not executed)
+1. Confirm the intended `patrolbot_interfaces` revision (the one in `patrolbot-bridge`). 2. Back up the current web-bridge image tag. 3. Rebuild `patrolbot-web-bridge` against that revision and recreate the container. 4. Re-run `ros2 topic info /patrolbot/base_state -v` and require a single type hash across all four endpoints. 5. Add the hash/`.msg` digest comparison to the readiness check alongside the existing source-digest gate (PB-AUDIT-020), so this fails loudly next time.
+
+#### Verification after fixing
+All publishers and subscribers of `/patrolbot/base_state` report one type hash; `patrolbot_web_bridge` logs resume dock-pose seeding; the dashboard shows `DOCKED_CONFIRMED` and offers undock.
+
+#### Mistakes to avoid while fixing
+Rebuilding only the web bridge's Python package without rebuilding `patrolbot_interfaces` in the same image; assuming a container restart is enough (the stale `.msg` is baked into the image); comparing container tags rather than the actual `BaseState.msg` digest; treating the dashboard's message as evidence of an SBC or dock-observer fault.
+
+#### Sources
+Live `ros2 topic info -v`, per-container `BaseState.msg` md5/line counts, `docker logs patrolbot-web-bridge`, `/patrolbot/base_state` echo, SBC `patrolbot_server` journal (2026-07-30).
+
+---
+
+### PB-AUDIT-026: AMCL along-dock variance permanently exceeds the dock manager's gate; two nodes gate on different statistics
+
+**Severity:** Medium  **Confidence:** High  **Category:** localization  **Affected components:** `patrolbot_dock_manager`, `patrolbot_web_bridge`, AMCL  **Current status:** Confirmed live 2026-07-30
+
+#### Expected behavior
+While parked at the commissioned `main_charger` pose with a healthy scan, localization should satisfy the dock manager's validity gate so a departure precheck passes on its own, without depending on a periodic re-seed.
+
+#### Observed behavior
+`/patrolbot/dock_readiness` reports `ready_for_undock: false`, `blocking_reason: localization invalid`, `localization_fresh: false`, `localization_valid: false`, `dock_pose_valid: false`, with `localization_age` reaching 513 s. Forcing 70 successive `/request_nomotion_update` calls and sampling `/amcl_pose` gave a stable, non-converging distribution: `covariance[0]` (x) = **0.57–0.63** across nine samples, while `covariance[7]` (y) ≈ 0.001 and `covariance[35]` (yaw) ≈ 0.0003. The gate in `dock_manager._localization_health()` requires each of x, y, yaw ≤ `max_position_variance` / `max_yaw_variance` = 0.25, so x fails by roughly 2.4×. The estimate itself is accurate — (99.35, 126.31) against the configured dock pose (99.289, 126.338), about 6 cm out, well inside `dock_position_tolerance` 0.6.
+
+#### Evidence
+- Live params: `max_position_variance=0.25`, `max_yaw_variance=0.25`, `dock_pose_configured=true`, `dock_pose_x=99.28925458355519`, `dock_pose_y=126.33778290362004`, `dock_pose_yaw=-1.578938606346`, `dock_position_tolerance=0.6`, `dock_yaw_tolerance=0.35`.
+- Nine `/amcl_pose` covariance samples under sustained forced updates: `xx=0.5936 0.5857 0.5678 0.6032 0.6329 0.5955 0.5862 0.5901 0.5929`; `yy≤0.0013`; `yaw≤0.0003`.
+- AMCL is `active [3]`, `/scan` runs at ~10 Hz, and no-motion updates are honoured (`amcl: Requesting no-motion update` in the navigation container log), so this is convergence geometry, not a dead sensor or stalled node.
+- Threshold divergence: `dock_manager` gates per axis at 0.25 each; `patrolbot_web_bridge._localization_is_usable()` gates on the **trace** (`xx+yy+yaw`) against the same 0.25 (`covariance_warn_threshold`, `web_bridge.yaml:38`). The two disagree about the same pose.
+
+#### Impact
+The docked robot is geometrically under-constrained along the approach axis: the laser pins lateral offset and heading against the dock face and wall but leaves depth free, so the particle cloud stays smeared roughly ±0.77 m in x and never converges while stationary. Undock therefore depends entirely on the web bridge's `/patrolbot/initialize_dock_pose` re-seed loop firing beforehand — which is exactly what PB-AUDIT-025 disabled. With the re-seed loop down, `_wait_for_localization()` will time out and the action will refuse with "localization invalid immediately before undocking". This is a fail-closed refusal, not an unsafe motion.
+
+#### Most likely cause
+Expected AMCL behavior for a nose-in dock pose with a single planar scanner: the visible geometry constrains y and yaw strongly and x weakly, and no-motion resampling cannot manufacture the missing information. The 0.25 per-axis gate was chosen for open-floor localization and was never validated against the docked pose specifically; the divergent trace-vs-per-axis comparison in the web bridge suggests the two gates were written independently.
+
+#### Recommended approach (not executed)
+1. Decide which node is authoritative for localization validity and make the other consume it, rather than leaving two thresholds on two statistics. 2. Either accept that the docked pose is authorized by the seeded dock pose (the design intent) and gate departure on `dock_pose_valid` plus the position/yaw tolerances rather than raw x-variance, or raise `max_position_variance` only for the docked precheck with the tighter tolerance check retained. 3. Do not simply widen the global gate — it also guards general navigation. 4. Make the dock-pose seed a precondition of the undock action itself instead of relying on an asynchronous loop in a different node.
+
+#### Verification after fixing
+With the web bridge's seed loop deliberately stopped, `/patrolbot/dock_readiness` still reaches `ready_for_undock: true` at the dock; a supervised undock completes; away from the dock, an artificially poor fix still blocks navigation.
+
+#### Mistakes to avoid while fixing
+Raising `max_position_variance` globally to clear the docked case; treating the 6 cm position agreement as proof the covariance gate is wrong (the covariance is honest — the pose is under-constrained); relying on the re-seed loop as the fix, since it lives in a different container and failed silently here; changing thresholds while PB-AUDIT-025 still hides the resulting state from the dashboard.
+
+#### Sources
+Live `/patrolbot/dock_readiness` and `/amcl_pose` sampling, `ros2 param get /patrolbot_dock_manager`, `dock_manager.py` `_localization_health()` / `_wait_for_localization()`, `patrolbot_web_bridge/bridge_node.py` `_localization_is_usable()`, `config/web_bridge.yaml:38` (2026-07-30).
 
 ---
 

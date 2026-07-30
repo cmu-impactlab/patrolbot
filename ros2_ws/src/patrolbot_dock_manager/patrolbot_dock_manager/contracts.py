@@ -115,6 +115,36 @@ def validate_goal(distance: float, speed: float, validation_mode: bool) -> List[
     return failures
 
 
+def localization_position_limit(
+        limit: float, docked_limit: float,
+        dock_contact_confirmed: bool, at_dock_pose: bool) -> float:
+    """Which AMCL position-variance limit applies to the current pose.
+
+    PB-AUDIT-026. Seated on the charger, AMCL's variance along the approach axis
+    is permanently loose — measured 0.57-0.63 while the cross-axis stayed at
+    0.001 and yaw at 0.0003 — because the dock fills the laser's near field and
+    no scan return constrains that direction. The pose itself was accurate to
+    ~6 cm against the surveyed dock pose, so refusing to undock on that variance
+    was refusing on dock geometry rather than on any doubt about where the robot
+    was.
+
+    The wider `docked_limit` therefore needs *both* pieces of evidence, and each
+    covers the other's blind spot:
+
+    - `dock_contact_confirmed` (the SBC's own dock observer, mated plates) alone
+      would accept a pose estimate that has drifted somewhere else on the map;
+    - `at_dock_pose` (the estimate agrees with the surveyed dock pose) alone
+      would accept a robot that has physically left the dock.
+
+    `limit` is returned unchanged in every other case, including a `docked_limit`
+    that is somehow tighter, so widening the docked allowance can never tighten
+    the general one.
+    """
+    if dock_contact_confirmed and at_dock_pose:
+        return max(float(limit), float(docked_limit))
+    return float(limit)
+
+
 def precheck_failures(
         state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
     """Validate the Pi-side gates before asking the SBC to undock.
@@ -211,12 +241,18 @@ def dock_pose_initialization_failures(state: SafetySnapshot) -> List[str]:
 
     This deliberately does not require an existing localization estimate or a
     clear E-stop: those are the facts being recovered/physically clarified at
-    the dock. It does require positive evidence that the robot is docked,
-    stationary, fault-free, and not executing another action.
+    the dock. The SBC dock observer is authoritative; raw charge state can
+    re-latch after a proven departure and is never enough by itself.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:
         failures.append('hardware link/state invalid')
+    if not state.dock_state_valid:
+        failures.append('SBC dock state is stale or unavailable')
+    elif state.dock_state != DOCK_DOCKED_CONFIRMED:
+        failures.append(
+            f'SBC does not report the robot docked '
+            f'(dock_state={state.dock_state})')
     if not state.charge_state_valid or state.charge_state <= 0:
         failures.append('robot is not confirmed charging at the dock')
     # Motor state is deliberately NOT required here. This operation publishes a

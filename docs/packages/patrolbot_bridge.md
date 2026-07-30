@@ -46,6 +46,10 @@ maintainer; see [Known Gaps](../known-gaps.md#code-hygiene).
 | Service | `/patrolbot/motor_enable` | `patrolbot_interfaces/MotorEnable` |
 | Action | `/patrolbot/hardware_undock` | `patrolbot_interfaces/HardwareUndock` |
 
+`/battery.power_supply_status` is derived from the raw ARIA charge value and the fresh SBC dock
+observer together. A positive raw value is reported as charging only in `DOCKED_CONFIRMED`;
+after a proven departure, stale float/overcharge telemetry is reported as discharging.
+
 `/patrolbot/hardware_undock` is a thin transport for the SBC's exclusive dock-departure
 operation: it sends one `UNDOCK` frame, relays the progress events as feedback, forwards
 cancellation, and reports the terminal frame. It commands no motion of its own. Goals are refused

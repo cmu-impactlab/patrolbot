@@ -6,8 +6,10 @@ teleop_velocity_smoother:
     smoothing_frequency: 20.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.35, 0.0, 0.7]
-    min_velocity: [-0.35, 0.0, -0.7]
+    # Match the SBC classifyDrive ceiling. A larger upstream cap makes the SBC
+    # alternate between motion and a forced zero near full-stick input.
+    max_velocity: [0.30, 0.0, 0.7]
+    min_velocity: [-0.30, 0.0, -0.7]
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 0.5
     # Linear acceleration stays below the manual's 1.4 m/s^2 firmware top.

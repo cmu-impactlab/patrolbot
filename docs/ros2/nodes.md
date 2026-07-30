@@ -142,7 +142,7 @@ nothing to act on; navigation is unaffected.
 
 **Subscribers:** `/joy` (`sensor_msgs/Joy`).
 **Publishers:** `/cmd_vel_joy` → remapped to `/input/joy` by the launch (twist_mux priority 8).
-**Parameters:** `max_linear` (0.35 m/s), `max_angular` (0.7 rad/s), `deadzone`
+**Parameters:** `max_linear` (0.30 m/s), `max_angular` (0.7 rad/s), `deadzone`
 (0.12), acceleration ramps, speed-trim limits/steps, and output `rate` (30 Hz).
 **Controls:** hold **RB** (button 5); left-stick Y drives and left-stick X turns.
 D-pad axes 7/6 are fallbacks; A/Y and X/B trim the speed limits.

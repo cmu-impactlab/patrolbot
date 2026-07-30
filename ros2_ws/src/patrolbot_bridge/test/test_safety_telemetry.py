@@ -2,6 +2,11 @@
 
 from patrolbot_bridge.safety_telemetry import (
     battery_diagnostic,
+    BATTERY_STATUS_CHARGING,
+    BATTERY_STATUS_DISCHARGING,
+    BATTERY_STATUS_NOT_CHARGING,
+    BATTERY_STATUS_UNKNOWN,
+    battery_supply_status,
     decode_fault_flags,
 )
 
@@ -37,3 +42,26 @@ def test_battery_thresholds_match_the_patrolbot_manual():
 def test_invalid_battery_voltage_is_an_error():
     assert battery_diagnostic(float('nan'), 0)[0] == 2
     assert battery_diagnostic(0.0, 0)[0] == 2
+
+
+def test_battery_status_trusts_dock_observer_over_stale_raw_charge():
+    assert battery_supply_status(
+        3, 'CLEAR_CONFIRMED', True) == BATTERY_STATUS_DISCHARGING
+    assert battery_supply_status(
+        2, 'CLEAR_CONFIRMED', True) == BATTERY_STATUS_DISCHARGING
+    assert battery_supply_status(
+        3, 'DOCKED_CONFIRMED', True) == BATTERY_STATUS_CHARGING
+    assert battery_supply_status(
+        0, 'DOCKED_CONFIRMED', True) == BATTERY_STATUS_NOT_CHARGING
+
+
+def test_battery_status_fails_unknown_without_fresh_dock_state():
+    assert battery_supply_status(3, 'CLEAR_CONFIRMED', False) == (
+        BATTERY_STATUS_UNKNOWN)
+    assert battery_supply_status(3, 'UNKNOWN', True) == BATTERY_STATUS_UNKNOWN
+
+
+def test_battery_diagnostic_does_not_call_stale_float_charging():
+    assert battery_diagnostic(
+        25.8, 3, 'CLEAR_CONFIRMED', True) == (
+            0, 'battery voltage normal')

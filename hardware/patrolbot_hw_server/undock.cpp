@@ -80,6 +80,7 @@ UndockHardwareProfile::UndockHardwareProfile()
       lease_max_age_ms(250),
       clearance_extension_m(0.05),
       redock_dwell_ms(2000),
+      redock_min_voltage_v(27.5),
       validation_max_clearance_m(0.10),
       validation_max_speed_mps(0.05),
       redock_inhibit_ms(60000),
@@ -96,7 +97,8 @@ UndockConfig::UndockConfig()
       validation_mode(false) {}
 
 UndockInputs::UndockInputs()
-    : now_ms(0), charge_state(-1), motors_enabled(false),
+    : now_ms(0), charge_state(-1), battery_voltage_v(0.0),
+      motors_enabled(false),
       // Fail closed: a snapshot that was never populated must not read as safe.
       estop_pressed(true), fault_flags(0), stall_value(0),
       enc_x_mm(0.0), enc_y_mm(0.0), enc_yaw_deg(0.0), odometer_m(0.0),
@@ -149,7 +151,7 @@ bool stationary(const UndockInputs& inputs) {
 DockObserver::DockObserver()
     : state_(DOCK_UNKNOWN), charge_debounce_(0), debounced_charging_(false),
       previous_debounced_charging_(false), seen_any_sample_(false),
-      charging_stationary_since_ms_(-1), undock_completed_(false),
+      dock_power_stationary_since_ms_(-1), undock_completed_(false),
       undock_completed_ms_(-1), departure_x_mm_(0.0), departure_y_mm_(0.0),
       redock_pending_(false) {}
 
@@ -169,7 +171,6 @@ void DockObserver::update(const UndockInputs& inputs,
       seen_any_sample_ = true;
       if (debounced_charging_ && !previous_debounced_charging_) {
         redock_pending_ = true;
-        charging_stationary_since_ms_ = inputs.now_ms;
       }
     }
   }
@@ -181,17 +182,35 @@ void DockObserver::update(const UndockInputs& inputs,
 
   const bool contact = frontContactPressed(inputs, profile);
   const bool still = stationary(inputs);
+  const bool dock_power_confirmed =
+      debounced_charging_ && std::isfinite(inputs.battery_voltage_v) &&
+      inputs.battery_voltage_v >= profile.redock_min_voltage_v;
 
   if (!debounced_charging_ || !still) {
     redock_pending_ = false;
-    charging_stationary_since_ms_ = -1;
   }
+  if ((state_ == DOCK_UNKNOWN || state_ == DOCK_CLEAR_CONFIRMED) &&
+      dock_power_confirmed && still) {
+    if (dock_power_stationary_since_ms_ < 0) {
+      dock_power_stationary_since_ms_ = inputs.now_ms;
+    }
+  } else {
+    dock_power_stationary_since_ms_ = -1;
+  }
+  const bool dock_power_dwelled =
+      dock_power_stationary_since_ms_ >= 0 &&
+      inputs.now_ms - dock_power_stationary_since_ms_ >=
+          profile.redock_dwell_ms;
 
   switch (state_) {
     case DOCK_UNKNOWN:
-      if (debounced_charging_ || contact) {
+      // Raw charging may be stale after a server restart while physically
+      // clear. Only real charger voltage sustained while stationary proves the
+      // dock. Contact alone can be an obstacle and is not sufficient.
+      if (dock_power_dwelled) {
         state_ = DOCK_DOCKED_CONFIRMED;
-      } else if (still) {
+        dock_power_stationary_since_ms_ = -1;
+      } else if (!dock_power_confirmed && !contact && still) {
         // Explicit clear verification. Unreachable while charging or in
         // contact, so it cannot manufacture a false clearance.
         state_ = DOCK_CLEAR_CONFIRMED;
@@ -209,20 +228,15 @@ void DockObserver::update(const UndockInputs& inputs,
       break;
 
     case DOCK_CLEAR_CONFIRMED:
-      // A stale charge level, however long it is held, is never evidence of
-      // re-docking. Only a rising edge after a confirmed zero counts, and even
-      // then it needs contact evidence or a stationary dwell.
-      if (redock_pending_ && debounced_charging_ && still) {
+      // A missed 0 -> charging edge is repaired by sustained physical charger
+      // voltage. Raw states 2 and 3 are deliberately treated identically:
+      // either may be stale after departure.
+      if (dock_power_dwelled) {
+        state_ = DOCK_DOCKED_CONFIRMED;
+        redock_pending_ = false;
+        dock_power_stationary_since_ms_ = -1;
+      } else if (redock_pending_ && dock_power_confirmed && still) {
         if (contact) {
-          state_ = DOCK_DOCKED_CONFIRMED;
-          redock_pending_ = false;
-        } else if (!redockInhibited(inputs, profile) &&
-                   charging_stationary_since_ms_ >= 0 &&
-                   inputs.now_ms - charging_stationary_since_ms_ >=
-                       profile.redock_dwell_ms) {
-          // No contact bit available. A long stationary dwell is accepted only
-          // once the robot is no longer inside its post-undock inhibition, so a
-          // stale report seconds after a proven departure cannot revoke it.
           state_ = DOCK_DOCKED_CONFIRMED;
           redock_pending_ = false;
         }
@@ -236,6 +250,7 @@ void DockObserver::update(const UndockInputs& inputs,
 
 void DockObserver::beginDeparture(const UndockInputs& inputs) {
   state_ = DOCK_DEPARTING;
+  dock_power_stationary_since_ms_ = -1;
   departure_x_mm_ = inputs.enc_x_mm;
   departure_y_mm_ = inputs.enc_y_mm;
   undock_completed_ = false;
@@ -244,18 +259,18 @@ void DockObserver::beginDeparture(const UndockInputs& inputs) {
 
 void DockObserver::confirmClear(const UndockInputs& inputs) {
   state_ = DOCK_CLEAR_CONFIRMED;
+  dock_power_stationary_since_ms_ = -1;
   undock_completed_ = true;
   undock_completed_ms_ = inputs.now_ms;
   // Any edge observed while the controller owned the state belongs to the
   // departure, not to a new docking event.
   redock_pending_ = false;
-  charging_stationary_since_ms_ = -1;
 }
 
 void DockObserver::faultStop() {
   state_ = DOCK_FAULT_STOPPED;
+  dock_power_stationary_since_ms_ = -1;
   redock_pending_ = false;
-  charging_stationary_since_ms_ = -1;
 }
 
 bool DockObserver::reset(const UndockInputs& inputs,
@@ -282,6 +297,7 @@ bool DockObserver::reset(const UndockInputs& inputs,
     return false;
   }
   state_ = DOCK_UNKNOWN;
+  dock_power_stationary_since_ms_ = -1;
   if (error != NULL) error->clear();
   return true;
 }

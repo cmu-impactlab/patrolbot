@@ -25,10 +25,10 @@ The **only** device wired to the Pi, and the operator's manual-override interfac
 | Control | Axis/Button | Action |
 |---|---|---|
 | Deadman | **RB** (button 5) | must be held for any motion (safety interlock) |
-| Drive | left-stick **Y** (axis 1), D-pad Y (axis 7) fallback | forward / reverse, default maximum 0.35 m/s |
+| Drive | left-stick **Y** (axis 1), D-pad Y (axis 7) fallback | forward / reverse, maximum 0.30 m/s |
 | Turn | left-stick **X** (axis 0), D-pad X (axis 6) fallback | rotate, default maximum 0.7 rad/s |
 | Deadzone | — | 0.12 |
-| Speed trim | A/Y and X/B | decrease/increase linear and angular maximums |
+| Speed trim | A/Y and X/B | adjust linear and angular maximums within their hardware-safe caps |
 
 While RB is held, the teleop publishes its acceleration-ramped command at 30 Hz,
 including zero when the sticks are centered, at twist_mux **priority 8** (above
@@ -37,6 +37,11 @@ disappears. The rising RB edge cancels any active Nav2 goal. On RB release it ra
 to zero, publishes one final zero, and goes silent after cancellation is confirmed;
 the canceled goal never resumes automatically. See
 [Nodes → patrolbot_joy_teleop](../ros2/nodes.md#patrolbot_joy_teleop).
+
+The linear maximum is pinned to the SBC's ordinary `DRIVE` ceiling. Raising it
+above 0.30 m/s makes the hardware server reject the command and force zero
+velocity, which feels like intermittent or chunky control rather than a clean
+speed clamp.
 
 ### Failure conditions
 

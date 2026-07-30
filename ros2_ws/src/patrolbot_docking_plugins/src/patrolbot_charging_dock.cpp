@@ -118,14 +118,18 @@ bool PatrolBotChargingDock::telemetryFreshLocked(const rclcpp::Time & now) const
 
 bool PatrolBotChargingDock::isDocked()
 {
-  return isCharging();
+  std::scoped_lock lock(mutex_);
+  return telemetryFreshLocked(node_->now()) &&
+         isDockedState(state_.dock_state_valid, state_.dock_state);
 }
 
 bool PatrolBotChargingDock::isCharging()
 {
   std::scoped_lock lock(mutex_);
   return telemetryFreshLocked(node_->now()) &&
-         isChargingState(state_.charge_state_valid, state_.charge_state);
+         isChargingState(
+           state_.charge_state_valid, state_.charge_state,
+           state_.dock_state_valid, state_.dock_state);
 }
 
 bool PatrolBotChargingDock::hasStoppedCharging()
@@ -147,7 +151,10 @@ bool PatrolBotChargingDock::disableCharging()
     release_future_ = {};
     return true;
   }
-  if (!isChargingState(state_.charge_state_valid, state_.charge_state)) {
+  if (!isChargingState(
+      state_.charge_state_valid, state_.charge_state,
+      state_.dock_state_valid, state_.dock_state))
+  {
     return false;
   }
 

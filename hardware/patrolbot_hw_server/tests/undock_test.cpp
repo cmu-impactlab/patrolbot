@@ -86,6 +86,7 @@ class FakeBase {
         rear_fresh(true),
         rear_near_field_unreliable(false),
         rear_bumper(false),
+        battery_voltage_override_v(NAN),
         estop(false),
         fault_flags(0),
         stalled(false),
@@ -127,6 +128,7 @@ class FakeBase {
   bool rear_fresh;
   bool rear_near_field_unreliable;
   bool rear_bumper;
+  double battery_voltage_override_v;
   bool estop;
   unsigned int fault_flags;
   bool stalled;
@@ -223,6 +225,11 @@ class FakeBase {
 
  private:
   void refreshDerived() {
+    // The real charger holds about 29.7 V. Raw charge state can re-latch after
+    // contact breaks, but the off-dock pack falls to about 25.8 V.
+    inputs.battery_voltage_v = std::isfinite(battery_voltage_override_v)
+        ? battery_voltage_override_v
+        : ((contactsMated() && inputs.charge_state > 0) ? 29.7 : 25.8);
     inputs.estop_pressed = estop;
     inputs.fault_flags = fault_flags;
     unsigned int stall = 0;
@@ -282,7 +289,8 @@ class FakeBase {
 
 // Brings the observer to DOCKED_CONFIRMED without starting an operation.
 void settleDocked(FakeBase* base) {
-  base->settle(6);
+  base->settle(
+      static_cast<int>(base->profile.redock_dwell_ms / kTickMs) + 5);
 }
 
 // ---------------------------------------------------------------------------
@@ -877,6 +885,60 @@ void test_stale_charge_after_clearance_keeps_clear_confirmed() {
   CHECK(base.inputs.motors_enabled);
 }
 
+void test_stale_overcharge_after_clearance_does_not_redock_without_voltage() {
+  FakeBase base;
+  base.charge_reassert_after_ms = 200;
+  base.charge_reasserts_when_clear = true;
+  base.profile.redock_dwell_ms = 200;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+  CHECK(base.runToCompletion(1000).success);
+  CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+
+  // State 2 is no stronger than stale float state 3 after physical clearance.
+  base.inputs.charge_state = 2;
+  base.settle(20);
+  CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+}
+
+void test_charger_voltage_repairs_a_missed_redock_edge() {
+  FakeBase base;
+  base.charge_reassert_after_ms = 200;
+  base.charge_reasserts_when_clear = true;
+  base.profile.redock_dwell_ms = 200;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+  CHECK(base.runToCompletion(1000).success);
+  CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+
+  // The robot returns to the physical contacts while raw charging never
+  // produced a new edge. Charger voltage, not state 2/3, repairs the observer.
+  base.inputs.enc_x_mm = 0.0;
+  base.inputs.enc_y_mm = 0.0;
+  base.dock_holds_front_bumper = false;
+  base.inputs.charge_state = 2;
+  base.settle(6);
+  CHECK_EQ_INT(base.observer.state(), DOCK_DOCKED_CONFIRMED);
+}
+
+void test_transient_charger_voltage_does_not_redock() {
+  FakeBase base;
+  base.charge_reassert_after_ms = 200;
+  base.charge_reasserts_when_clear = true;
+  base.profile.redock_dwell_ms = 200;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+  CHECK(base.runToCompletion(1000).success);
+
+  base.inputs.charge_state = 2;
+  base.battery_voltage_override_v = 29.7;
+  base.settle(3);
+  CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+  base.battery_voltage_override_v = 25.8;
+  base.settle(10);
+  CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+}
+
 void test_redock_requires_a_rising_edge_not_a_stale_level() {
   FakeBase base;
   base.charge_reassert_after_ms = 200;
@@ -1219,6 +1281,9 @@ void test_redock_inhibition_needs_both_time_and_distance() {
 void test_restart_while_docked_starts_unknown_and_never_drives() {
   FakeBase base;
   CHECK_EQ_INT(base.observer.state(), DOCK_UNKNOWN);
+  base.settle(
+      static_cast<int>(base.profile.redock_dwell_ms / kTickMs) - 1);
+  CHECK_EQ_INT(base.observer.state(), DOCK_UNKNOWN);
   base.settle(6);
   CHECK_EQ_INT(base.observer.state(), DOCK_DOCKED_CONFIRMED);
   CHECK_EQ_INT(base.motor_enable_count, 0);
@@ -1365,6 +1430,9 @@ int main() {
   RUN(test_rear_bumper_stops_immediately);
   RUN(test_persistent_front_contact_extends_then_fails);
   RUN(test_stale_charge_after_clearance_keeps_clear_confirmed);
+  RUN(test_stale_overcharge_after_clearance_does_not_redock_without_voltage);
+  RUN(test_charger_voltage_repairs_a_missed_redock_edge);
+  RUN(test_transient_charger_voltage_does_not_redock);
   RUN(test_redock_requires_a_rising_edge_not_a_stale_level);
   RUN(test_redock_by_stationary_dwell_without_contact_bits);
   RUN(test_estop_from_every_phase_stops_and_disables);

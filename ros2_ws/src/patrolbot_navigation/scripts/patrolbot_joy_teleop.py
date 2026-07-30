@@ -67,10 +67,13 @@ class JoyTeleop(Node):
         super().__init__('p3dxJoyTeleop')
 
         # Live-adjustable speed limits (A/Y, X/B)
-        self.declare_parameter('max_linear', 0.35)    # m/s at full stick
+        # The SBC rejects ordinary DRIVE commands above 0.30 m/s. Keep both
+        # the default and the operator-adjustable ceiling at that hardware
+        # contract so full-stick input can never become an on/off command.
+        self.declare_parameter('max_linear', 0.30)    # m/s at full stick
         self.declare_parameter('max_angular', 0.7)    # rad/s at full stick
         self.declare_parameter('min_linear', 0.05)
-        self.declare_parameter('max_linear_cap', 1.5)
+        self.declare_parameter('max_linear_cap', 0.30)
         self.declare_parameter('min_angular', 0.1)
         self.declare_parameter('max_angular_cap', 3.0)
         self.declare_parameter('linear_step', 0.05)

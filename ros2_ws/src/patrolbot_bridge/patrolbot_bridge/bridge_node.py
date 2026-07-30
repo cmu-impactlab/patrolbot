@@ -19,6 +19,13 @@ from patrolbot_bridge.control_protocol import (
     parse_reply,
     valid_request_id,
 )
+from patrolbot_bridge.safety_telemetry import (
+    battery_diagnostic,
+    BATTERY_MIN_OPERATING_VOLTS,
+    BATTERY_RECHARGE_VOLTS,
+    battery_supply_status,
+    decode_fault_flags,
+)
 from patrolbot_bridge.undock_protocol import (
     CANCELED,
     format_undock_cancel,
@@ -30,12 +37,6 @@ from patrolbot_bridge.undock_protocol import (
     SESSION_CHANGED,
     TIMEOUT,
     UndockResult,
-)
-from patrolbot_bridge.safety_telemetry import (
-    battery_diagnostic,
-    BATTERY_MIN_OPERATING_VOLTS,
-    BATTERY_RECHARGE_VOLTS,
-    decode_fault_flags,
 )
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.msg import BaseState
@@ -597,6 +598,15 @@ class PatrolBotBridge(Node):
                 self._publish_sonar(sections['SONAR'], stamp)
             except Exception:
                 pass
+        # Record DOCK before publishing BATT even though BATT appears first on
+        # the wire. This makes one AUX frame internally consistent: battery
+        # charging status is derived from the dock observer in that same frame,
+        # never the previous frame or raw charge state alone.
+        if 'DOCK' in sections:
+            try:
+                self._record_dock_section(sections['DOCK'])
+            except Exception:
+                pass
         if 'BATT' in sections:
             try:
                 self._publish_battery(sections['BATT'], stamp)
@@ -605,11 +615,6 @@ class PatrolBotBridge(Node):
         if 'FLAGS' in sections:
             try:
                 self._publish_flags(sections['FLAGS'], stamp)
-            except Exception:
-                pass
-        if 'DOCK' in sections:
-            try:
-                self._record_dock_section(sections['DOCK'])
             except Exception:
                 pass
 
@@ -680,6 +685,12 @@ class PatrolBotBridge(Node):
         with self._state_lock:
             self._charge_state = charge_state
             self._charge_state_at = time.monotonic()
+            dock_state = self._dock_state
+            dock_age = (
+                time.monotonic() - self._dock_state_at
+                if self._dock_state_at else math.inf)
+            dock_state_valid = bool(
+                self._link_connected and dock_state and dock_age <= 1.0)
 
         msg = BatteryState()
         msg.header.stamp = stamp
@@ -687,14 +698,14 @@ class PatrolBotBridge(Node):
         msg.percentage = (soc / 100.0) if soc >= 0.0 else float('nan')
         msg.temperature = temp if temp > -100.0 else float('nan')
         msg.present = True
-        # ARIA charge state >0 = charging/charged on the dock; <=0 = on battery.
-        if charge_state > 0:
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_CHARGING
-        else:
-            msg.power_supply_status = BatteryState.POWER_SUPPLY_STATUS_DISCHARGING
+        # Raw charge state 3 can re-latch after a proven departure. The fresh
+        # SBC dock observer is authoritative for physical charger contact.
+        msg.power_supply_status = battery_supply_status(
+            charge_state, dock_state, dock_state_valid)
         self._publish_with_timing(self.battery_pub, msg, '/battery')
 
-        level, message = battery_diagnostic(volt, charge_state)
+        level, message = battery_diagnostic(
+            volt, charge_state, dock_state, dock_state_valid)
         status = DiagnosticStatus()
         status.name = 'patrolbot/battery'
         status.hardware_id = 'pioneer_patrolbot'
@@ -707,6 +718,11 @@ class PatrolBotBridge(Node):
         status.values = [
             KeyValue(key='voltage', value=f'{volt:.3f}'),
             KeyValue(key='charge_state', value=str(charge_state)),
+            KeyValue(key='dock_state', value=(
+                dock_state if dock_state_valid else 'UNKNOWN')),
+            KeyValue(
+                key='power_supply_status',
+                value=str(msg.power_supply_status)),
             KeyValue(
                 key='recharge_threshold_volts',
                 value=str(BATTERY_RECHARGE_VOLTS)),
@@ -904,7 +920,6 @@ class PatrolBotBridge(Node):
             motors = self._motors_enabled
             estop = self._estop_pressed
             fault_flags = self._fault_flags
-            stall_value = self._stall_value
             dock_state = self._dock_state
             dock_age = (
                 started - self._dock_state_at

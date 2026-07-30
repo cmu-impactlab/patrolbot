@@ -79,21 +79,25 @@ Decides whether the robot may be driven at all. It survives client reconnects an
 ```mermaid
 stateDiagram-v2
     [*] --> UNKNOWN: process start
-    UNKNOWN --> DOCKED_CONFIRMED: charging debounced OR front-contact bits
-    UNKNOWN --> CLEAR_CONFIRMED: charge 0 debounced AND contacts clear AND stationary
+    UNKNOWN --> DOCKED_CONFIRMED: charger voltage above threshold\nfor the configured stationary dwell
+    UNKNOWN --> CLEAR_CONFIRMED: no charger voltage AND contacts clear AND stationary
     DOCKED_CONFIRMED --> CLEAR_CONFIRMED: same explicit clear verification
     DOCKED_CONFIRMED --> DEPARTING: UNDOCK accepted
     DEPARTING --> CLEAR_CONFIRMED: full physical clearance proof
     DEPARTING --> FAULT_STOPPED: failure or cancellation
-    CLEAR_CONFIRMED --> DOCKED_CONFIRMED: charge RISING EDGE after a confirmed zero,\nstationary, plus contact bits or a dwell
+    CLEAR_CONFIRMED --> DOCKED_CONFIRMED: charge rising edge plus charger voltage,\nstationary, and contact bits
+    CLEAR_CONFIRMED --> DOCKED_CONFIRMED: charger voltage above threshold\nfor the configured stationary dwell
     FAULT_STOPPED --> UNKNOWN: explicit DOCK_RESET once the condition clears
 ```
 
-Ordinary `DRIVE` is permitted **only** in `CLEAR_CONFIRMED`. `charge_state` is an input to this
-observer, never an interlock in its own right, so a stale re-asserted charge level after a proven
-departure does not block navigation — and the only latch that survives such a level is
-`DEPARTING → CLEAR_CONFIRMED`, which requires measured displacement plus clear bumpers and rear
-sonar. A stale level alone can never move the observer back to `DOCKED_CONFIRMED`.
+Ordinary `DRIVE` is permitted **only** in `CLEAR_CONFIRMED`. Raw `charge_state` is evidence
+feeding this observer, never an interlock or physical-location claim in its own right. Both
+state `2` (overcharge) and state `3` (float) have been observed or must be assumed capable of
+remaining stale after departure. Neither can move the observer back to `DOCKED_CONFIRMED`
+without sustained real charger voltage (commissioned at `>= 27.5 V`, versus an observed
+`25.8 V` off dock) while stationary. This also repairs a genuinely missed raw charge edge after
+the robot returns to the charger. `DEPARTING → CLEAR_CONFIRMED` still requires measured
+displacement plus clear bumpers and rear sonar.
 
 ## SBC undock operation (bounded)
 

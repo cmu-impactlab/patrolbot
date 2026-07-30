@@ -28,9 +28,9 @@ Declared ROS parameters (override with `--ros-args -p`):
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `max_linear` | `0.35` | m/s at full stick |
+| `max_linear` | `0.30` | m/s at full stick; matches the SBC `DRIVE` ceiling |
 | `max_angular` | `0.7` | rad/s at full stick |
-| `min_linear` / `max_linear_cap` | `0.05` / `1.5` | limits for A/Y speed trim |
+| `min_linear` / `max_linear_cap` | `0.05` / `0.30` | limits for A/Y speed trim; the upper bound must not exceed the SBC gate |
 | `min_angular` / `max_angular_cap` | `0.1` / `3.0` | limits for X/B speed trim |
 | `linear_step` / `angular_step` | `0.05` / `0.1` | per-button speed adjustment |
 | `deadzone` | `0.12` | stick deadzone |
@@ -152,8 +152,8 @@ canceled goal automatically.
 
 | Parameter | Value |
 |---|---|
-| `max_velocity` | `[0.35, 0.0, 0.7]` |
-| `min_velocity` | `[-0.35, 0.0, -0.7]` |
+| `max_velocity` | `[0.30, 0.0, 0.7]` |
+| `min_velocity` | `[-0.30, 0.0, -0.7]` |
 | `max_accel` | `[1.0, 0.0, 1.5]` |
 | `max_decel` | `[-1.4, 0.0, -2.0]` |
 | `smoothing_frequency` | `20.0` Hz |
@@ -161,6 +161,8 @@ canceled goal automatically.
 
 These are the declared Jazzy `nav2_velocity_smoother` keys. The retired Kobuki-style
 `speed_lim_*`, `accel_lim_*`, `frequency`, and `decel_factor` keys are not valid here.
+The linear bounds intentionally match the SBC's `classifyDrive` ceiling; a larger
+upstream value is rejected as a stop, not clamped by the hardware server.
 
 ## Launch-time environment variables (`bringup.launch.py`)
 

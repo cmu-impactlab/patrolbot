@@ -299,6 +299,8 @@ patrolbot::UndockHardwareProfile loadProfile(const char* path) {
       profile.clearance_extension_m = std::atof(value.c_str());
     } else if (key == "redock_dwell_ms") {
       profile.redock_dwell_ms = std::atol(value.c_str());
+    } else if (key == "redock_min_voltage_v") {
+      profile.redock_min_voltage_v = std::atof(value.c_str());
     } else if (key == "validation_max_clearance_m") {
       profile.validation_max_clearance_m = std::atof(value.c_str());
     } else if (key == "validation_max_speed_mps") {
@@ -379,6 +381,7 @@ patrolbot::UndockInputs readUndockInputs(
   inputs.now_ms = now_ms;
   robot->lock();
   inputs.charge_state = robot->getChargeState();
+  inputs.battery_voltage_v = robot->getRealBatteryVoltageNow();
   inputs.motors_enabled = robot->areMotorsEnabled();
   inputs.estop_pressed = robot->isEStopPressed();
   inputs.fault_flags = robot->getFaultFlags();

@@ -81,7 +81,10 @@ Field mapping in the bridge:
 
 - `voltage` — `getRealBatteryVoltageNow()`; **the meaningful field.**
 - `percentage` — `NaN` if the base reports no state-of-charge (`soc = -1`), which is the case here.
-- `power_supply_status` — `CHARGING` if ARIA charge state > 0 (on dock), else `DISCHARGING`.
+- `power_supply_status` — raw ARIA charge state is interpreted only through the fresh SBC dock
+  observer: `CHARGING` for positive raw charge in `DOCKED_CONFIRMED`, `NOT_CHARGING` for raw
+  zero while docked, `DISCHARGING` in `DEPARTING` or `CLEAR_CONFIRMED`, and `UNKNOWN` when the
+  observer is stale or faulted. Raw state `2`/`3` can re-latch after physical departure.
 - `temperature` — `NaN` if unavailable.
 
 **Failure conditions:** treat `percentage` as unavailable on this base — monitor `voltage`. A

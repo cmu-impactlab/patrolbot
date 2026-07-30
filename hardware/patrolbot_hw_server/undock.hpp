@@ -198,9 +198,12 @@ struct UndockHardwareProfile {
   // How far past the requested clearance VERIFYING_CLEARANCE may extend when the
   // front contact is still engaged, per attempt.
   double clearance_extension_m;
-  // Stationary dwell after a charge rising edge that, on its own, is enough to
-  // declare the robot docked again when no contact bit is asserted.
+  // Stationary dwell of corroborated charger voltage required to declare the
+  // robot docked again when no contact bit is asserted.
   long redock_dwell_ms;
+  // Minimum real battery voltage that corroborates physical charger power.
+  // Raw charge_state can re-latch after departure and is never sufficient.
+  double redock_min_voltage_v;
 
   // --- validation-mode caps -------------------------------------------------
   double validation_max_clearance_m;
@@ -242,6 +245,7 @@ struct UndockInputs {
   long long now_ms;
 
   int charge_state;
+  double battery_voltage_v;
   bool motors_enabled;
   bool estop_pressed;
   unsigned int fault_flags;
@@ -357,7 +361,9 @@ class DockObserver {
   bool debounced_charging_;
   bool previous_debounced_charging_;
   bool seen_any_sample_;
-  long long charging_stationary_since_ms_;
+  // A missed raw charge edge may be repaired only by sustained physical
+  // charger voltage. State 2/3 alone is never dock evidence.
+  long long dock_power_stationary_since_ms_;
 
   bool undock_completed_;
   long long undock_completed_ms_;

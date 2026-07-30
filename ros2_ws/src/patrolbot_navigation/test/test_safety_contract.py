@@ -208,12 +208,36 @@ class SafetyContractTest(unittest.TestCase):
             'speed_lim_v', 'speed_lim_w', 'accel_lim_v', 'accel_lim_w',
             'frequency', 'decel_factor', 'robot_feedback'}
         self.assertFalse(obsolete & smoother.keys())
-        self.assertEqual(smoother['max_velocity'], [0.35, 0.0, 0.7])
-        self.assertEqual(smoother['min_velocity'], [-0.35, 0.0, -0.7])
+        self.assertEqual(smoother['max_velocity'], [0.30, 0.0, 0.7])
+        self.assertEqual(smoother['min_velocity'], [-0.30, 0.0, -0.7])
         self.assertEqual(smoother['max_accel'], [1.0, 0.0, 1.5])
         self.assertEqual(smoother['max_decel'], [-1.4, 0.0, -2.0])
         self.assertEqual(smoother['velocity_timeout'], 0.5)
         self.assertIs(smoother['enable_stamped_cmd_vel'], False)
+
+    def test_manual_linear_caps_match_the_sbc_drive_contract(self):
+        teleop = (
+            PACKAGE_ROOT / 'scripts' /
+            'patrolbot_joy_teleop.py').read_text(encoding='utf-8')
+        smoother = yaml.safe_load((
+            LAUNCH_PACKAGE_ROOT / 'param' / 'defaults' /
+            'smoother.yaml').read_text(encoding='utf-8'))[
+                'teleop_velocity_smoother']['ros__parameters']
+        protocol = PROTOCOL_FILE.read_text(encoding='utf-8')
+        match = re.search(
+            r'std::fabs\(linear\) <= ([0-9.]+)', protocol)
+        self.assertIsNotNone(match)
+        hardware_cap = float(match.group(1))
+
+        self.assertIn(
+            "self.declare_parameter('max_linear', 0.30)", teleop)
+        self.assertIn(
+            "self.declare_parameter('max_linear_cap', 0.30)", teleop)
+        self.assertEqual(smoother['max_velocity'][0], hardware_cap)
+        self.assertEqual(smoother['min_velocity'][0], -hardware_cap)
+        self.assertIn(
+            '*"[0.3, 0.0, 0.7]"*',
+            STATUS_FILE.read_text(encoding='utf-8'))
 
     def test_empty_mobile_base_component_container_is_removed(self):
         mobile_base = (

@@ -46,4 +46,5 @@
 **/patrolbot_server
 **/tests/protocol_test
 **/*.bak
+**/*.bak.*
 **/*~

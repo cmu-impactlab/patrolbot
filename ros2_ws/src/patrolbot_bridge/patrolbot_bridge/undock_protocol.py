@@ -1,4 +1,5 @@
-"""Strict parser and formatter for the SBC-owned UNDOCK operation.
+"""
+Strict parser and formatter for the SBC-owned UNDOCK operation.
 
 Mirrors hardware/patrolbot_hw_server/protocol.cpp. Pure and ROS-free so it can
 be unit tested without a robot, a socket or an rclpy context.
@@ -120,7 +121,8 @@ def valid_request_id(value: str) -> bool:
 def format_undock_request(
         request_id: str, clearance_m: float, speed_mps: float,
         timeout_s: float, validation_mode: bool) -> bytes:
-    """Format an idempotent UNDOCK request.
+    """
+    Format an idempotent UNDOCK request.
 
     Values are sent as given. The SBC rejects anything outside its hard caps
     rather than clamping it, so a bad goal fails loudly instead of quietly
@@ -141,7 +143,8 @@ def format_undock_request(
 
 
 def format_undock_cancel(target_request_id: str) -> bytes:
-    """Format a cancellation naming the operation being cancelled.
+    """
+    Format a cancellation naming the operation being cancelled.
 
     The payload is the target operation's id, not a new request id. The SBC
     dispatches this outside its request tracker, because the tracker keys on the

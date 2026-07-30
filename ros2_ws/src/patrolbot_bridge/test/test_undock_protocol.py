@@ -1,4 +1,5 @@
-"""Offline tests for the SBC-owned UNDOCK wire contract.
+"""
+Offline tests for the SBC-owned UNDOCK wire contract.
 
 These run without ROS, a socket or a robot. The frames below are byte-for-byte
 what hardware/patrolbot_hw_server/protocol.cpp emits; tests/protocol_test.cpp

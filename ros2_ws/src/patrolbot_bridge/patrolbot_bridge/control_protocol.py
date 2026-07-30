@@ -57,7 +57,8 @@ def format_request(command: str, request_id: str) -> bytes:
 
 
 def motor_enable_allowed(dock_state: str, estop_pressed: bool) -> bool:
-    """Permit a motor enable only where dock contact is impossible.
+    """
+    Permit a motor enable only where dock contact is impossible.
 
     MOTOR_ENABLE is a decoupled maintenance command: it never releases charging
     and never authorizes motion. There is no post-release window and no

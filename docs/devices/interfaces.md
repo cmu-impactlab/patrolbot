@@ -17,7 +17,7 @@ The **only** device wired to the Pi, and the operator's manual-override interfac
 | **Hardware** | Logitech gamepad in **Xinput** mode (X/D switch on **X**) |
 | **Host machine** | **Pi 5** (USB, main runtime) |
 | **Connection** | USB → Linux `joydev` → `/dev/input/js*` |
-| **ROS interface** | `joy_node` → `/joy` (`sensor_msgs/Joy`) → `p3dxJoyTeleop` → `input/joy` |
+| **ROS interface** | `joy_node` → `/joy` (`sensor_msgs/Joy`) → `patrolbot_joy_teleop` → `input/joy` |
 | **Update rate** | event-driven (on input change) |
 
 ### Controls

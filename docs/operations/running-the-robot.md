@@ -107,13 +107,17 @@ operation's job, not this one's.
 
 Contact separation is an exclusive SBC-owned operation exposed as an action:
 
-| Interface | Purpose |
-|---|---|
-| `/patrolbot/undock` (action) | Guarded undock |
-| `/patrolbot/hardware_undock` (action) | Hardware-level undock |
-| `/patrolbot/charge_release` (service) | Release charging contacts only |
-| `/patrolbot/dock_reset` (service) | Clear the SBC's `FAULT_STOPPED` dock state |
-| `/patrolbot/initialize_dock_pose` (service) | Seed localization from the surveyed dock pose |
+| Interface | Server | Purpose |
+|---|---|---|
+| `/patrolbot/undock` (action) | `patrolbot_dock_manager` | Guarded undock — the operator entry point |
+| `/patrolbot/initialize_dock_pose` (service) | `patrolbot_dock_manager` | Seed localization from the surveyed dock pose |
+| `/patrolbot/hardware_undock` (action) | `patrolbot_bridge` | Lower-level hardware undock |
+| `/patrolbot/charge_release` (service) | `patrolbot_bridge` | Release charging contacts only |
+| `/patrolbot/motor_enable` (service) | `patrolbot_bridge` | Enable motors |
+| `/patrolbot/dock_reset` (service) | `patrolbot_bridge` | Clear the SBC's `FAULT_STOPPED` dock state |
+
+Use `/patrolbot/undock` for normal operation. `/patrolbot/hardware_undock` is the layer beneath
+it and bypasses the dock manager's guards.
 
 An undock refuses with `HARDWARE_PROFILE_UNCOMMISSIONED` unless `undock_profile.conf` supplies
 a measured profile for this dock. That refusal is designed behavior.

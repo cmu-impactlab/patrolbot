@@ -17,7 +17,10 @@ Every velocity command reaches the motors through the same chain. Nothing bypass
 
 ```mermaid
 flowchart LR
-    NAV["Nav2 controller"] -->|/cmd_vel_nav| VS["velocity_smoother"]
+    CTRL["controller_server"] -->|input/nav_controller p5| NMUX["nav_command_mux"]
+    BEH["behavior_server"] -->|input/nav_behavior p7| NMUX
+    DOCK["docking (no publisher)"] -.->|input/docking p9| NMUX
+    NMUX -->|/cmd_vel_nav| VS["velocity_smoother"]
     VS -->|/cmd_vel_smoothed| CM["collision_monitor"]
     CM -->|input/navi p5| MUX["cmd_vel_mux"]
     JOY["joy teleop"] -->|input/joy p8| MUX
@@ -32,15 +35,44 @@ flowchart LR
     ESTOP["hardware E-stop"] -.->|"cuts motor power"| M
 ```
 
-In words: Nav2's output passes through the collision monitor, which republishes it to the mux
-as the lowest-priority input. The mux selects one source by priority. The selected command is
-smoothed, published on `/cmd_vel`, forwarded by the bridge as a `DRIVE` line over TCP, and
-executed by the SBC. The hardware E-stop cuts motor power downstream of all of it.
+In words: Nav2's internal sources are arbitrated by a first mux, smoothed, and checked by the
+collision monitor, which republishes the survivor as the *lowest-priority* input to the second
+mux. That second mux picks one source overall. The winner is smoothed again, published on
+`/cmd_vel`, forwarded by the bridge as a `DRIVE` line over TCP, and executed by the SBC. The
+hardware E-stop cuts motor power downstream of all of it.
 
-## Priority mux
+## Two muxes, not one
 
-`cmd_vel_mux` selects exactly one input. Higher priority wins; a source that stops publishing
-releases its claim after its timeout.
+This is the part that most often causes confusion. `nav_command_mux` arbitrates *within* Nav2;
+`cmd_vel_mux` arbitrates *between* Nav2, manual control, and safety.
+
+!!! note "Package name versus node name"
+    Both are instances of the `twist_mux` **package**. Older text on this site refers to "the
+    twist_mux" — that means the node now named `cmd_vel_mux`. When reading parameters or node
+    output, use the node names on this page.
+
+### `nav_command_mux` — inside Nav2
+
+Runs in the navigation container and publishes `/cmd_vel_nav`. All inputs have a 0.25 s timeout.
+
+| Input topic | Priority | Source |
+|---|---|---|
+| `input/docking` | 9 | Docking — **no publisher** |
+| `input/nav_behavior` | 7 | `behavior_server` (spin, back up, wait) |
+| `input/nav_controller` | 5 | `controller_server` (path following) |
+
+Everything leaving this mux still passes through the collision monitor before reaching the
+second mux. A docking publisher would therefore outrank normal path following but would **not**
+escape collision monitoring — unlike Nav2's own `docking_server`, which writes straight to the
+base and is deliberately absent from the graph.
+
+`/input/docking` has **zero publishers** and **MUST** remain publisher-free unless a publisher
+has been reviewed against this chain.
+
+### `cmd_vel_mux` — the main arbiter
+
+Runs in the bringup container and publishes `/cmd_vel_out`. Higher priority wins; a source that
+stops publishing releases its claim after its timeout.
 
 | Input topic | Priority | Timeout (s) | Source |
 |---|---|---|---|
@@ -48,19 +80,16 @@ releases its claim after its timeout.
 | `input/teleop` | 8 | 1.0 | Teleop |
 | `input/joy` | 8 | 0.5 | Joystick |
 | `input/switch` | 6 | 1.0 | Mode switching |
-| `input/navi` | 5 | 1.0 | Nav2, via the collision monitor |
+| `input/navi` | 5 | 1.0 | All of Nav2, via the collision monitor |
 
 Two consequences matter operationally:
 
-- **The joystick outranks Nav2.** Picking up the controller takes ownership mid-goal.
+- **The joystick outranks all of Nav2.** Picking up the controller takes ownership mid-goal,
+  regardless of which Nav2 source was driving.
 - **The watchdog outranks everything.** When it publishes a stop, nothing else can drive.
 
 The joystick's 0.5 s timeout sits just above the teleop receiver's 0.4 s watchdog, so once its
 final zero lands, manual ownership releases promptly without reviving a prior Nav2 goal.
-
-`/input/docking` exists as a mux input with **zero publishers**. It **MUST** remain
-publisher-free unless a publisher has been reviewed against this chain — see
-[Limitations](../reference/limitations.md).
 
 ## Collision monitor
 

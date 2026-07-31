@@ -47,9 +47,15 @@ flowchart LR
 (`diagnostic_msgs/DiagnosticArray`), `/patrolbot/base_state`
 (`patrolbot_interfaces/BaseState`), TF `odom→base_link` (50 Hz).
 **Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`).
-**Services:** `/patrolbot/charge_release` and `/patrolbot/motor_enable`.
-**Parameters:** none declared; the SBC endpoint (`10.0.0.1:7272`), `RECV_TIMEOUT=3.0`, and
-`SCAN_RANGE_MIN=0.25` are module constants.
+**Services:** `/patrolbot/charge_release` (`patrolbot_interfaces/srv/ChargeRelease`),
+`/patrolbot/motor_enable` (`patrolbot_interfaces/srv/MotorEnable`), `/patrolbot/dock_reset`
+(`patrolbot_interfaces/srv/DockReset`).
+**Action:** `/patrolbot/hardware_undock` (`patrolbot_interfaces/action/HardwareUndock`).
+**Parameters:** declared — `server_ip` (`10.0.0.1`), `server_port` (`7272`), `connect_timeout`
+(5.0 s), `receive_timeout` (3.0 s), `reconnect_delay` (3.0 s), `control_timeout` (6.0 s),
+`bumpers_mapped`, `front_bumper_mask`, `rear_bumper_mask`,
+`publish_unfiltered_scan_candidate`, `unfiltered_scan_topic`. `SCAN_RANGE_MIN = 0.25` remains a
+module constant. See [Configuration](../reference/configuration.md#bridge-parameters).
 **Lifecycle:** plain (non-lifecycle) node. A background thread owns the socket; a 50 Hz timer
 publishes TF; the main thread spins callbacks.
 
@@ -137,7 +143,7 @@ nothing to act on; navigation is unaffected.
 | Field | Value |
 |---|---|
 | **Host** | Raspberry Pi |
-| **Executable** | `patrolbot_joy_teleop.py` (package `patrolbot_navigation`), node name `p3dxJoyTeleop` |
+| **Executable** | `patrolbot_joy_teleop.py` (package `patrolbot_navigation`), node name `patrolbot_joy_teleop` |
 | **Purpose** | Converts the Xinput gamepad into an acceleration-ramped `Twist` with an RB deadman and joy-loss watchdog. |
 
 **Subscribers:** `/joy` (`sensor_msgs/Joy`).
@@ -189,9 +195,18 @@ launch restart-loops, so executable permissions are safety-relevant.
 
 **Subscribers:** `/patrolbot/base_state`, `/sonar`, `/odom`, `/amcl_pose`, and Nav2 action-status
 topics. **Publisher:** `/patrolbot/dock_readiness`; `/initialpose` only during an authorized dock
-pose request. **Service:** `/patrolbot/initialize_dock_pose`. **Action:** `/patrolbot/undock`.
-The active `dock_pose_configured=false` and uncommissioned bumper mapping keep physical undock
-unavailable. See [Actions](actions.md#patrolbot-undock).
+pose request. **Service:** `/patrolbot/initialize_dock_pose`
+(`patrolbot_interfaces/srv/InitializeDockPose`). **Action:** `/patrolbot/undock`
+(`patrolbot_interfaces/action/Undock`).
+
+The lower-level `/patrolbot/hardware_undock` action and `/patrolbot/dock_reset` service belong
+to [`patrolbot_bridge`](#patrolbot_bridge), not to this node.
+
+The deployed configuration has `dock_pose_configured: true` (the dock pose has been surveyed)
+and `bumpers_mapped: true` (the bumper bit mapping is established: front `0x7e00`, rear
+`0x007e`). An undock is still refused with `HARDWARE_PROFILE_UNCOMMISSIONED` unless
+`undock_profile.conf` supplies a measured, site-specific hardware profile. See
+[Actions](actions.md#patrolbot-undock) and [Limitations](../reference/limitations.md).
 
 ---
 
@@ -215,6 +230,7 @@ managers patched with `bond_timeout: 0.0`.
 | `behavior_server` | Recovery behaviors: spin, backup, drive_on_heading, wait | Action servers per behavior |
 | `waypoint_follower` | Multi-waypoint following | Action `follow_waypoints` |
 | `smoother_server` | Path smoothing (`simple_smoother`) | Action `smooth_path` |
+| `route_server` | Route-graph planning (Jazzy) | Actions `compute_route`, `compute_and_track_route`; pub `/route_graph` |
 | `lifecycle_manager_*` | Bring the above through configure/activate | Service `*/change_state`, `bond_timeout: 0.0` |
 
 The generic `docking_server` is intentionally absent from this list and from the live graph. Its
@@ -242,8 +258,10 @@ is the direct reason `collision_monitor` runs with `base_shift_correction: False
 | `teleop_velocity_smoother` | Pi |
 | `lifecycle_manager_script` | Pi |
 | `joy_node` | Pi |
-| `p3dxJoyTeleop` | Pi |
+| `patrolbot_joy_teleop` | Pi |
 | `patrolbot_safety_watchdog` | Pi |
 | `patrolbot_dock_manager` | Pi |
+| `patrolbot_web_bridge` | Pi |
 | `laser_static_tf` | Pi |
+| `nav_command_mux` | Pi |
 | all `nav2_container` nodes | Pi |

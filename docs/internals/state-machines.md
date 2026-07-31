@@ -150,7 +150,7 @@ stateDiagram-v2
         Default: collision_monitor → input/navi (prio 5)
     end note
     note right of Joystick
-        Override: p3dxJoyTeleop → input/joy (prio 8)
+        Override: patrolbot_joy_teleop → input/joy (prio 8)
     end note
 ```
 

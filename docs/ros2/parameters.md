@@ -139,7 +139,7 @@ a 0.25 s timeout. `/input/docking` intentionally has no publisher.
 |---|---|---|---|---|
 | safety_controller | `input/safety_controller` | 10 | 0.2 s | **yes** (`patrolbot_safety_watchdog.py`) |
 | teleop | `input/teleop` | 8 | 1.0 s | no publisher |
-| **joy** | `input/joy` | 8 | 0.5 s | **yes** (`p3dxJoyTeleop`) |
+| **joy** | `input/joy` | 8 | 0.5 s | **yes** (`patrolbot_joy_teleop`) |
 | switch | `input/switch` | 6 | 1.0 s | no publisher |
 | **navigation** | `input/navi` | 5 | 1.0 s | **yes** (`collision_monitor`) |
 

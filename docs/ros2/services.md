@@ -37,9 +37,10 @@ second hardware action.
 | **Server** | `patrolbot_dock_manager` |
 | **Purpose** | Publish the configured, operator-authorized dock pose and return only after AMCL convergence |
 
-The service remains fail-closed while `dock_pose_configured=false`; the active configuration does
-not contain a surveyed pose. It replaced the unsafe assumption that every restart happened at map
-origin.
+The service is fail-closed: with `dock_pose_configured: false` it rejects rather than publish a
+guessed pose. The deployed configuration has `dock_pose_configured: true` and a surveyed pose,
+so the service publishes it and returns once AMCL converges. It replaced the unsafe assumption
+that every restart happened at map origin.
 
 ### Velocity-smoother lifecycle transition
 

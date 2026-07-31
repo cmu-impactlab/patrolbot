@@ -143,6 +143,20 @@ without a physical measurement of the envelope and the laser height.
 
 ## Mux priorities
 
+There are two muxes. `nav_command_mux` arbitrates within Nav2 and publishes `/cmd_vel_nav`;
+`cmd_vel_mux` arbitrates between Nav2, manual control, and safety, and publishes
+`/cmd_vel_out`.
+
+`nav_command_mux` — all timeouts 0.25 s:
+
+| Input | Priority |
+|---|---|
+| `input/docking` | 9 |
+| `input/nav_behavior` | 7 |
+| `input/nav_controller` | 5 |
+
+`cmd_vel_mux`:
+
 | Input | Priority | Timeout |
 |---|---|---|
 | `input/safety_controller` | 10 | 0.2 s |
@@ -152,6 +166,12 @@ without a physical measurement of the envelope and the laser height.
 | `input/navi` | 5 | 1.0 s |
 
 See [Safety Chain](../safety/safety-chain.md) for what these priorities mean in practice.
+
+!!! warning "`scripts/twist_mux.yaml` is not the running configuration"
+    `patrolbot_navigation/scripts/twist_mux.yaml` declares a `twist_mux` node with priorities
+    100 and 50 on `/cmd_vel_joy` and `/cmd_vel_nav`. No such node runs, and neither topic is a
+    mux input. It matches neither deployed mux and **MUST NOT** be used as a reference for
+    current priorities.
 
 ## Velocity smoothers
 

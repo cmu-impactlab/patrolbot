@@ -67,9 +67,10 @@ operations.
 
 AMCL no longer assumes that every restart occurred at map origin. A valid pose
 must come from an operator-authorized interface, or from
-`/patrolbot/initialize_dock_pose` after a real dock pose has been surveyed and
-configured. The current `dock_pose_configured=false` makes the dock initializer
-reject rather than publish a guessed pose.
+`/patrolbot/initialize_dock_pose`, which publishes the surveyed dock pose and
+returns once AMCL converges. The dock pose is surveyed and configured
+(`dock_pose_configured: true`); were it not, the initializer would reject
+rather than publish a guessed pose.
 
 Do not send a navigation goal while localization is invalid.
 

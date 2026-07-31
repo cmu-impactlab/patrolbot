@@ -1,91 +1,140 @@
 ---
 title: Release Process
-description: How to cut a known-good PatrolBot release — versioning the packages, the pre-release hygiene checklist, tagging, and capturing a reproducible robot state.
+description: How to cut a CalVer PatrolBot release — what a release pins, the version stamps it applies, the verification it requires, and the changelog entry it produces.
 ---
 
 # Release Process
 
-PatrolBot is a single-robot research platform, not a distributed package, so "release" means
-**capturing a known-good, reproducible state of the whole robot** — the SBC and selected main Pi
-runtime — and tagging it.
-This page describes a lightweight, honest process for that.
+PatrolBot is a single-robot platform, not a distributed package. A release therefore means
+**capturing a known-good, reproducible state of the whole robot** — both machines, the image,
+the map, and the configuration — under one version.
 
-## What a release is here
-
-A release pins, together:
-
-- The monorepo commit and immutable Pi 5 image revision containing `patrolbot_bridge`,
-  `patrolbot_navigation`, and `patrolbot-launch`.
-- The Pi 5 Compose configuration and image digest.
-- The SBC `patrolbot_server` source + the binary build date.
-- The active map and the matching costmap resolution.
-- The SBC systemd units and Pi 5 Compose state.
+The key words **MUST**, **MUST NOT**, and **SHOULD** are to be interpreted as described in
+[RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ## Versioning
 
-Package manifests currently read `0.0.0`/`0.0.1`. For a real release, bump them deliberately and
-consistently:
+Releases use [CalVer](https://calver.org/) in `YYYY.MM` form — `2026.08`. A second release in
+the same month takes an incrementing suffix: `2026.08.1`, `2026.08.2`.
 
-| Package | Action |
+CalVer rather than SemVer because nothing consumes PatrolBot as a dependency. There is no
+downstream to break, so a "major" bump would carry no information; what a reader of a release
+actually wants to know is *when this robot state was current*.
+
+ROS package versions in `package.xml` follow their own upstream expectations and are **NOT**
+governed by this scheme. Do not try to keep them in step with the release version.
+
+## What a release pins
+
+A release fixes all of the following together. Most of it is not in git, which is why it must be
+recorded explicitly.
+
+| Element | Recorded as |
 |---|---|
-| `patrolbot_bridge` | set a real version in `package.xml` + `setup.py` (currently `0.0.0`) |
-| `patrolbot_navigation` | bump from `0.0.1` |
-| `patrolbot-launch` | set from `0.0.0` |
-| `patrolbot_hw_server` | tag the SBC repo / record the binary build date |
+| Monorepo state | Commit SHA of the tagged release commit |
+| Pi runtime image | Image tag and digest, plus `org.opencontainers.image.revision` |
+| Source-tree provenance | `io.patrolbot.source-tree-sha256` image label |
+| Compose stack | Service set, image tags from `docker/.env` |
+| SBC server | `patrolbot_server` source snapshot and binary build date |
+| Active map | Map file and its resolution, with the matching costmap resolution |
+| Undock profile | Whether `undock_profile.conf` is commissioned for this dock |
 
-## Pre-release hygiene checklist
+The SBC binary and the undock profile are the two elements most often forgotten. Neither lives
+in the monorepo, and a release that omits them is not reproducible.
 
-A release is the natural time to close these:
-
-- [ ] Fix scaffold-default package metadata and missing manifest dependencies
-      (`ubuntu@todo.todo`/TODO values in the Python `setup.py` files and
-      `joao@todo.todo`/TODO values in `rosaria2/package.xml`).
-- [ ] Remove [dead launch experiments](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
-- [ ] Confirm current fixed facts are still true: `roll=π`, `second_map` at `0.075 m/px`, RPP
-      controller, and Pi 5 Docker deployment.
-- [ ] Confirm the Pi 5 bringup container launches `ros2 launch patrolbot-launch bringup.xml`.
-- [ ] `colcon test` clean; resilience matrix green.
-
-## Cutting the release
+## Cutting a release
 
 ```mermaid
 flowchart LR
-    A["hygiene checklist"] --> B["bump versions"]
-    B --> C["restart services / containers"]
-    C --> D["full resilience + nav test"]
-    D --> E["tag each repo"]
-    E --> F["record SBC binary + map + units"]
-    F --> G["update docs / changelog"]
+    A["verify deployed state"] --> B["run the test set"]
+    B --> C["tag the release commit"]
+    C --> D["record the environment"]
+    D --> E["write the changelog entry"]
 ```
 
-1. Complete the hygiene checklist and bump versions.
-2. Ensure the package build, service commands, and Docker image (if used) match the source being
-   released.
-3. Run the full [test set](../development/testing.md): lint, a real navigate-to-goal, and the
-   freeze/resume resilience matrix.
-4. **Tag** the monorepo release commit and record the deployed SBC source snapshot.
-5. **Record the environment** that isn't in git: the SBC binary build date, the active map file +
-   its resolution, the SBC unit contents, and the Pi 5 Compose/image state.
-6. Update this site and any changelog.
+### 1. Verify the deployed state
 
-## Capturing reproducible state
+On the Pi:
 
-Because key runtime facts live outside git (the SBC binary, Docker image, active map, and service
-units), a release note should explicitly capture them:
+```bash
+cd ~/patrolbot-repo && ./docker/status.sh
+```
+
+All containers **MUST** report `running` and `healthy`, and the reported revision and
+source-tree digest **MUST** match the commit being released. A mismatch means the robot is not
+running the code you are about to tag.
+
+### 2. Run the test set
+
+```bash
+colcon test
+```
+
+Lint **MUST** be clean. Beyond that, run the checks from [Testing](../development/testing.md):
+a real navigate-to-goal and the freeze/resume resilience matrix. The resilience matrix matters
+more than usual here, because the failures it covers — reconnect TF gaps, empty-container
+bringup — are exactly the ones that survive a green lint.
+
+### 3. Confirm the load-bearing configuration
+
+The settings in [Configuration](../reference/configuration.md) marked **MUST NOT change**
+**MUST** be verified as still set correctly. A release is a natural point for someone to have
+"tidied" one of them.
+
+At minimum: `base_shift_correction: False`, `use_collision_detection: false`,
+`source_timeout: 0.5`, `transform_tolerance: 1.0`, and `bond_timeout: 0.0`.
+
+### 4. Tag
+
+Tag the monorepo release commit with the CalVer version:
+
+```bash
+git tag 2026.08
+git push origin 2026.08
+```
+
+### 5. Record the environment
+
+Capture the elements that are not in git. This block belongs in the tag annotation or the
+release note:
 
 ```text
-Release vX.Y.Z
-- Monorepo @ <commit>; Pi 5 image @ <tag/digest> with org.opencontainers.image.revision=<commit>
-- Pi 5 bringup command: ros2 launch patrolbot-launch bringup.xml
-- SBC patrolbot_server built <date> from <commit/snapshot>
-- Active map: second_map.{pgm,yaml} @ 0.075 m/px; global_costmap resolution 0.2
-- SBC systemd units: <list and state>
-- Pi 5 Docker image / Compose state: <tag, digest, health>
-- Discovery server: disabled unless deliberately re-enabled
+Release 2026.08
+- Monorepo @ <commit>
+- Pi image @ <tag> / <digest>, org.opencontainers.image.revision=<commit>
+- Source-tree digest: io.patrolbot.source-tree-sha256=<digest>
+- Compose services: bringup, bridge, navigation, web-bridge
+- SBC patrolbot_server built <date> from <snapshot>
+- Active map: <file> @ <resolution> m/px; global costmap resolution <value>
+- Undock profile: commissioned | uncommissioned
 ```
 
-## Documentation releases
+### 6. Write the changelog entry
+
+Add a `## YYYY.MM` section to [Changelog](../changelog.md) describing what changed **in the
+system**. Entries state behavior, configuration, or documented facts that are now different.
+
+A changelog entry **MUST NOT** describe work in progress, and **MUST NOT** frame release
+readiness in terms of outstanding items. If something is not in the release, it simply is not
+mentioned.
+
+## Package metadata
+
+Some packages carry scaffold-default metadata — `patrolbot_bridge` has a placeholder maintainer
+and description, `patrolbot-launch` has placeholder maintainer, description, and license values
+with a manifest declaring only `ros2launch`, and `rosaria2` carries legacy placeholder values.
+
+None of this affects runtime behavior. Correcting it is ordinary housekeeping and **SHOULD NOT**
+block a release.
+
+## Documentation
 
 The docs site deploys continuously from `main` (see
-[Pull Request Process](pull-request-process.md#merge-and-deploy)); there is no separate docs release
-step. Keep the docs honest at all times rather than batching doc updates into a release.
+[Pull Request Process](pull-request-process.md#merge-and-deploy)); there is no separate
+documentation release step. Documentation is kept correct continuously rather than batched into
+a release — see [Documentation Standards](documentation-standards.md).
+
+The changelog is the one documentation artefact tied to the release, because it is the record of
+what a given version *is*.
+
+<!-- SPDX-License-Identifier: Apache-2.0 -->

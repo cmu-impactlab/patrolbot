@@ -109,6 +109,12 @@ nav:
       - Interfaces: devices/interfaces.md
   - Safety:
       - Safety Chain: safety/safety-chain.md
+  - Operations:
+      - Running the Robot: operations/running-the-robot.md
+  - Troubleshooting:
+      - Symptoms: troubleshooting/symptoms.md
+  - Maintenance:
+      - Upkeep: maintenance/upkeep.md
   - Packages:
       - Package Overview: packages/package-overview.md
       - patrolbot_bridge: packages/patrolbot_bridge.md
@@ -140,6 +146,9 @@ nav:
       - Pull Request Process: contributing/pull-request-process.md
       - Release Process: contributing/release-process.md
   - Reference:
+      - Configuration: reference/configuration.md
+      - Wire Protocol: reference/wire-protocol.md
       - Limitations: reference/limitations.md
   - Glossary: glossary.md
   - FAQ: faq.md
+  - Changelog: changelog.md

@@ -8,6 +8,11 @@
 **/.claude/
 **/.codex/
 
+# Audit records: local working copy, deliberately not published.
+# The docs site must stand alone without these (see
+# docs/contributing/documentation-standards.md).
+/audits/
+
 /misc/
 # Live SSHFS mount points
 /.remote/

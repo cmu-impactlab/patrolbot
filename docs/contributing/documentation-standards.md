@@ -171,7 +171,7 @@ are required by this standard.
 | ROS 2 Reference | Reference | Nodes, topics, services, actions, parameters, launch system |
 | Devices | Reference | Sensors, actuators, controllers, interfaces |
 | Packages | Reference | Per-package pages for every package in `ros2_ws/src/` and the SBC server |
-| **Safety** *(new)* | Reference + Explanation | E-stop chain and recovery, velocity mux priorities, collision monitor, bumper policy, speed limits, the full command path from source to motor |
+| **Safety** *(new)* | Reference + Explanation | [Safety Chain](../safety/safety-chain.md): E-stop and recovery, mux priorities, collision monitor, watchdog, both velocity smoothers, the full command path from source to motor |
 | **Operations** *(new)* | How-to | Startup and shutdown, docking and charging, undocking, teleop, running a patrol, monitoring a live robot |
 | **Troubleshooting** *(new)* | How-to | Symptom → cause → resolution, organised by what the operator observes |
 | **Maintenance** *(new)* | How-to | Battery care, RTC, backup rotation policy, image and log rotation |

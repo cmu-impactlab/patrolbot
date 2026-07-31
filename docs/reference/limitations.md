@@ -49,19 +49,29 @@ its own guarded undock action instead.
 docking velocity authority over the mux, so it **MUST** remain publisher-free unless the
 publisher has been reviewed against the safety chain.
 
-## The robot senses obstacles in one horizontal plane
+## Planning sees one horizontal plane; the rear is sonar-only
 
-Obstacle avoidance is driven by a single fixed-height SICK laser plane. Consequences:
+Two different sensor sets protect the robot, and they do not cover the same things.
 
-- Anything below the plane — low kerbs, cables, feet, castors, open drawers near the floor —
-  is invisible to the costmaps and to the collision monitor.
-- Anything above the plane that overhangs it — table edges, shelf lips, wall-mounted fixtures
-  — is equally invisible.
-- Sonar is published on `/sonar` for display and diagnostics. It is **not** an input to the
-  costmaps or to the collision monitor, so a sonar return does not stop the robot.
+| Protection | Source | Covers |
+|---|---|---|
+| Costmaps (global and local) | `/scan` only | Path planning and the inflation layer |
+| `front_velocity_stop` polygon | `/scan`, `min_points: 8` | Forward and rotating motion |
+| `rear_velocity_stop` polygon | `/sonar`, `min_points: 1` | Reverse motion |
 
-The collision monitor's `front_velocity_stop` and `rear_velocity_stop` polygons act on laser
-returns only. PatrolBot **MUST NOT** be operated near low obstacles without a human watching.
+Consequences:
+
+- **Nav2 never plans around anything sonar sees.** Sonar is a collision-monitor source only, not
+  a costmap observation source. It can stop the robot; it cannot shape a path.
+- **Anything outside the laser plane is invisible to planning.** Low kerbs, cables, feet,
+  castors, and open drawers pass under it; table edges, shelf lips, and wall fixtures overhang
+  it. The costmaps will happily plan straight through all of them.
+- **Reverse protection is four sparse transducers.** `min_points: 1` means one credible echo
+  stops reverse motion — deliberately twitchy, because the alternative is not stopping. Sonar
+  cannot resolve narrow or sound-absorbing obstacles, so a clear rear polygon is not proof the
+  path behind is clear.
+
+PatrolBot **MUST NOT** be operated near low obstacles without a human watching.
 
 ## E-stop recovery is physical
 

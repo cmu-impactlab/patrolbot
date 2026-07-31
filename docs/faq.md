@@ -109,5 +109,6 @@ Short answers with links to the full story.
 
 **What can't the robot do?**
 : It senses obstacles in a single laser plane, so low and overhanging objects are invisible to
-  it; sonar is display-only and does not stop the robot. Undocking refuses without a measured
-  hardware profile, and E-stop recovery is physical. See [Limitations](reference/limitations.md).
+  it, and Nav2 never plans around anything sonar sees. Rear protection is four sparse sonar
+  transducers. Undocking refuses without a measured hardware profile, and E-stop recovery is
+  physical. See [Limitations](reference/limitations.md).

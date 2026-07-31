@@ -107,6 +107,8 @@ nav:
       - Actuators: devices/actuators.md
       - Controllers: devices/controllers.md
       - Interfaces: devices/interfaces.md
+  - Safety:
+      - Safety Chain: safety/safety-chain.md
   - Packages:
       - Package Overview: packages/package-overview.md
       - patrolbot_bridge: packages/patrolbot_bridge.md

@@ -58,7 +58,9 @@ The primary perception sensor: localization and obstacle avoidance both depend o
 | **Update rate** | ~4–5 Hz (every 5th nav frame) |
 | **Calibration** | geometry from ARIA `patrolbot-sh.p`; the SBC computes each valid echo as a point in `base_link` |
 
-The sonar feeds **visualization/monitoring**, not the costmaps — obstacle avoidance is laser-based.
+The sonar does **not** feed the costmaps — path planning is laser-only. It is, however, the
+observation source for the collision monitor's `rear_velocity_stop` polygon, so a single sonar
+return (`min_points: 1`) halts reverse motion. Sonar can stop the robot; it cannot shape a path.
 The ARIA param file defines a generic 16-position ring, but the robot physically has 4 rear sensors
 and the 12 unpopulated entries sit at max range. The SBC publishes only valid echoes
 (`getRange() < 4335 mm`), so `/sonar` width is the live detection count, often 0-2.

@@ -83,13 +83,4 @@ seam in detail.
 | Look up a node, topic, or parameter | [ROS 2 Reference](ros2/nodes.md) |
 | Understand the sensors and the base | [Devices](devices/device-overview.md) |
 | Diagnose a problem | [Debugging](development/debugging.md) |
-| Review current open work | [Known Gaps](known-gaps.md) |
-
-!!! tip "Documentation status — updated 2026-07-16"
-    Both runtime computers were reachable during this audit. The SBC services and live
-    `ODOM|LASER` stream were verified, and the Pi 5 containers were healthy at revision
-    `fa14b9b5cedfd56beaffca746e1c37256d67d1f0`. Pi 5 `eth0` was live at
-    `10.0.0.2/24`; the SBC socket, `/odom`, `/scan`, both lifecycle nodes, and both
-    required TF links were verified. Joystick control and commanded movement were
-    validated on 2026-07-16. See [Known Gaps](known-gaps.md) for current code and
-    packaging work.
+| Understand what the system cannot do | [Limitations](reference/limitations.md) |

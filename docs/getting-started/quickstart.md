@@ -73,14 +73,17 @@ reject rather than publish a guessed pose.
 
 Do not send a navigation goal while localization is invalid.
 
-## 5. Motion commissioning
+## 5. Before commanding motion
 
-Before any normal goal or manual motion, complete the open audit gates in
-[Known Gaps](../known-gaps.md): E-stop behavior, joystick/deadman, bumper mapping,
-rear sonar and low-obstacle validation, measured footprint/laser geometry, and
-successful explicit motor enable.
+The robot senses obstacles in a single laser plane and cannot see anything below or above it,
+so first motion **MUST** be supervised with a hand on the E-stop. Read
+[Limitations](../reference/limitations.md) before commanding anything.
 
-Any proposed velocity test must first state the exact:
+Motors do not enable themselves. A `DRIVE` line cannot enable them: motor power requires the
+E-stop to be released and an explicit enable, and after an E-stop trip a physical `PWR ON` at
+the robot is the only way back.
+
+Any proposed velocity test **MUST** state the exact:
 
 - publication topic and source;
 - linear and angular magnitude;

@@ -72,7 +72,6 @@ ROS-interface tables there cross-reference the [ROS 2 reference](../ros2/nodes.m
 
 ## Metadata caveat
 
-Some source-only metadata remains unfinished. `patrolbot_bridge` still carries a placeholder
-maintainer and package description, while `rosaria2` retains legacy placeholder metadata. See
-[Release Process](../contributing/release-process.md) and
-[Known Gaps](../known-gaps.md#code-hygiene).
+Some source-only metadata is scaffold-default. `patrolbot_bridge` carries a placeholder
+maintainer and package description, and `rosaria2` carries legacy placeholder metadata. Neither
+affects runtime behavior. See [Release Process](../contributing/release-process.md).

@@ -16,8 +16,8 @@ working against a **live robot**.
    touches the SBC↔Pi seam in some way.
 2. Know [where code lives](../internals/repository-structure.md): the monorepo is
    canonical and the Pi 5 is a deployment target.
-3. Skim [Known Gaps](../known-gaps.md) so you don't "fix" something that is intentionally the way it
-   is (or re-introduce a bug a comment is preventing).
+3. Skim [Limitations](../reference/limitations.md) so you don't "fix" something that is
+   intentionally the way it is (or re-introduce a bug a comment is preventing).
 
 ## Ground rules
 
@@ -27,7 +27,7 @@ working against a **live robot**.
 | **Don't run `rosaria2` alongside the bridge.** | TF and cmd_vel conflicts — see [rosaria2](../packages/rosaria2.md). |
 | **Keep `base_shift_correction: False`, `bond_timeout: 0.0`, `MAGICK_THREAD_LIMIT=1`.** | Each prevents a specific crash/OOM. Don't remove "defaults that look removable." |
 | **Restart the right service or container after changes.** | Otherwise the running robot keeps the old launch/params/scripts. |
-| **Keep docs in sync.** | Doc drift is why [Known Gaps](../known-gaps.md) exists. |
+| **Keep docs in sync.** | Docs describe the deployed system; drift makes them actively misleading. See [Documentation Standards](documentation-standards.md). |
 
 ## Workflow
 
@@ -51,13 +51,13 @@ flowchart LR
 
 ## Good first contributions
 
-The lowest-risk, highest-value tasks, several drawn straight from [Known Gaps](../known-gaps.md):
+The lowest-risk, highest-value kinds of change:
 
-- Fix scaffold-default package metadata and missing runtime dependencies in the manifests.
+- Add pytest coverage for the bridge's `_parse_telemetry` / `_parse_aux` — they are pure string
+  functions and need no hardware.
 - Remove the [dead launch experiments](../internals/legacy-components.md#known-dead-code--cleanup-candidates).
-- Add pytest coverage for the bridge's `_parse_telemetry` / `_parse_aux` (pure string functions).
-- Clean up stale comments and dead files around the package-name launch path.
-- Keep the Pi 5 Docker deployment docs current.
+- Fix scaffold-default package metadata and missing runtime dependencies in the manifests.
+- Correct documentation that no longer matches the deployed system.
 
 ## Things that need hardware
 

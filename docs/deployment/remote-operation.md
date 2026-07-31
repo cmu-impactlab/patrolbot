@@ -8,8 +8,8 @@ description: Safe remote observation and the loopback-only ROS 2 command boundar
 PatrolBot's ROS 2 graph is deliberately **not exposed to the LAN or VPN**. Every
 runtime container uses `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, so raw RViz or
 ROS CLI processes on an operator laptop cannot discover topics, services, or
-actions. This closes the unauthenticated DDS command path identified by
-PB-AUDIT-017.
+actions. This closes what would otherwise be an unauthenticated DDS command path
+reachable from any host on the LAN.
 
 ## Supported observation path
 
@@ -50,11 +50,11 @@ as a convenience workaround.
 - Velocity publication requires the operator to be told the exact topic,
   magnitude, direction, duration/distance, safety bounds, and stop conditions,
   followed by explicit approval.
-- Current physical audit gates still prohibit normal autonomous operation.
 
 If richer remote visualization is needed later, use an authenticated,
-allowlisted bridge and separately review its command permissions. Do not expose
-the raw ROS graph to the campus LAN.
+allowlisted bridge and separately review its command permissions. The raw ROS
+graph **MUST NOT** be exposed to the campus LAN.
 
 See [Network Setup](network-setup.md) for the underlying topology and
-[Known Gaps](../known-gaps.md) for the physical commissioning state.
+[Limitations](../reference/limitations.md) for what the containment boundary
+means in practice.

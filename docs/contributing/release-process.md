@@ -35,8 +35,7 @@ consistently:
 
 ## Pre-release hygiene checklist
 
-Several of these are open items in [Known Gaps](../known-gaps.md) — a release is the natural time to
-close them:
+A release is the natural time to close these:
 
 - [ ] Fix scaffold-default package metadata and missing manifest dependencies
       (`ubuntu@todo.todo`/TODO values in the Python `setup.py` files and
@@ -89,5 +88,4 @@ Release vX.Y.Z
 
 The docs site deploys continuously from `main` (see
 [Pull Request Process](pull-request-process.md#merge-and-deploy)); there is no separate docs release
-step. Keep the docs honest at all times rather than batching doc updates into a release — the whole
-point of [Known Gaps](../known-gaps.md) is that the site states what is verified and what isn't.
+step. Keep the docs honest at all times rather than batching doc updates into a release.

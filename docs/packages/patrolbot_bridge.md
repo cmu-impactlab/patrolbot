@@ -27,8 +27,8 @@ SBC client.
 ## Dependencies
 
 `rclpy`, `sensor_msgs`, `geometry_msgs`, `nav_msgs`, `std_msgs`, `diagnostic_msgs`,
-`patrolbot_interfaces`, `tf2_ros`. Python package metadata still carries a scaffold-default
-maintainer; see [Known Gaps](../known-gaps.md#code-hygiene).
+`patrolbot_interfaces`, `tf2_ros`. The Python package metadata carries a scaffold-default
+maintainer.
 
 ## Public interfaces
 

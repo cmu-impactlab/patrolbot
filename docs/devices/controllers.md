@@ -84,6 +84,3 @@ The *commands* this controller executes are produced entirely on the Pi by the
 forwarded as `DRIVE` lines (see [Actuators](actuators.md)). The base controller is otherwise a
 black box configured by the ARIA parameter file `patrolbot-sh.p`.
 
-!!! info "SBC-side detail live-audited"
-    The ARIA calls and deployed `patrolbot_server.cpp` were checked over live SSH
-    on 2026-07-15.

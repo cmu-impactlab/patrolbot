@@ -75,7 +75,9 @@ map resolution, the launch mode). When you change a structural fact:
 2. Update the architecture knowledge base (`SKILLS/*.md`) if you maintain it.
 3. Update this site under [`docs/`](../index.md).
 
-The [Known Gaps](../known-gaps.md) page exists largely because of past drift — don't add to it.
+Drift is the failure mode this project actually suffers from: the laser TF, the map resolution,
+and the launch mode each went stale in the docs while the robot moved on. See
+[Documentation Standards](../contributing/documentation-standards.md).
 
 ## Git hygiene
 

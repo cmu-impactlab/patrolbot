@@ -217,8 +217,10 @@ managers patched with `bond_timeout: 0.0`.
 | `smoother_server` | Path smoothing (`simple_smoother`) | Action `smooth_path` |
 | `lifecycle_manager_*` | Bring the above through configure/activate | Service `*/change_state`, `bond_timeout: 0.0` |
 
-The generic `docking_server` is intentionally absent from this list and the live graph; its direct
-velocity path failed PB-AUDIT-001 containment.
+The generic `docking_server` is intentionally absent from this list and from the live graph. Its
+direct velocity path writes straight to the base, bypassing the priority mux and the safety
+chain, so PatrolBot uses its own guarded undock action instead. See
+[Limitations](../reference/limitations.md).
 
 **Lifecycle:** see [State Machines](../internals/state-machines.md) for the lifecycle transition
 diagram. **Failure mode:** because all share one process, an uncaught exception in any one

@@ -25,9 +25,9 @@ hands a single `/cmd_vel` to the bridge.
 
 ## Dependencies
 
-`twist_mux`, `nav2_velocity_smoother`, `rclpy`, `ros2launch`. (Python package metadata carries
-scaffold-default maintainer/description/license values, while the package manifest declares only
-`ros2launch`; see [Known Gaps](../known-gaps.md#code-hygiene).)
+`twist_mux`, `nav2_velocity_smoother`, `rclpy`, `ros2launch`. The Python package metadata carries
+scaffold-default maintainer, description, and license values, and the package manifest declares
+only `ros2launch`.
 
 ## Package layout (active files)
 

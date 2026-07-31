@@ -171,4 +171,4 @@ a restart of only `patrolbot-server.service`.
 
 - The protocol in full: [Communication Architecture](../architecture/communication-architecture.md).
 - The Pi end: [`patrolbot_bridge`](patrolbot_bridge.md).
-- Current open verification items: [Known Gaps](../known-gaps.md).
+- What the SBC half cannot do: [Limitations](../reference/limitations.md).

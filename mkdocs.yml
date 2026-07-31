@@ -134,8 +134,10 @@ nav:
       - Legacy Components: internals/legacy-components.md
   - Contributing:
       - Contributing: contributing/contributing.md
+      - Documentation Standards: contributing/documentation-standards.md
       - Pull Request Process: contributing/pull-request-process.md
       - Release Process: contributing/release-process.md
-  - Known Gaps: known-gaps.md
+  - Reference:
+      - Limitations: reference/limitations.md
   - Glossary: glossary.md
   - FAQ: faq.md

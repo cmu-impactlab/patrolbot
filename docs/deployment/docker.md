@@ -111,10 +111,13 @@ docker compose --env-file docker/.env -f docker/docker-compose.yml \
   up -d --no-deps bringup bridge navigation
 ```
 
-PB-AUDIT cutover bundles are retained under `/home/ubuntu/patrolbot-backups/` on the Pi and in the
-off-host ignored `backups/` directory. Verify each bundle's `SHA256SUMS` from the copied files
-before relying on it. Do not prune the old image/source backup until its replacement has passed the
-later physical campaign.
+Deployment snapshots are retained on the Pi under `/home/ubuntu/backups/`, in timestamped
+directories named `<UTC-timestamp>-<slug>`, and off-host in the ignored `backups/` directory.
+The Pi keeps the **two newest** snapshots; older ones are rotated away, so `~/backups/` is not
+an archive.
+
+The outgoing snapshot **MUST NOT** be pruned until its replacement has been confirmed working
+on the robot — it is the only cheap revert path.
 
 After any network or deployment change, verify `/odom`, `/scan`, `/sonar`, `/battery`,
 `/diagnostics`, `odom → base_link`, and `base_link → laser_frame`. Joystick and

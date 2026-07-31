@@ -107,7 +107,7 @@ Short answers with links to the full story.
 : No — it's the legacy direct-ARIA driver, kept as a fallback. Don't run it alongside the bridge.
   See [rosaria2](packages/rosaria2.md).
 
-**What work remains open?**
-: The current open items are package metadata, missing manifest dependencies, and
-  dead launch references. Joystick control and commanded movement were validated on
-  2026-07-16. See [Known Gaps](known-gaps.md).
+**What can't the robot do?**
+: It senses obstacles in a single laser plane, so low and overhanging objects are invisible to
+  it; sonar is display-only and does not stop the robot. Undocking refuses without a measured
+  hardware profile, and E-stop recovery is physical. See [Limitations](reference/limitations.md).

@@ -27,7 +27,8 @@ robust, and does it leave the docs accurate. This page is the checklist.
 - [ ] Load-bearing config preserved: `base_shift_correction: False`, `bond_timeout: 0.0`,
       `use_composition: True`, `MAGICK_THREAD_LIMIT/OMP_NUM_THREADS=1` (unless the PR's purpose is to
       change one, with justification).
-- [ ] Docs and READMEs updated; no new entries needed in [Known Gaps](../known-gaps.md).
+- [ ] Docs and READMEs updated to match the change, per
+      [Documentation Standards](documentation-standards.md).
 
 ## Reviewer checklist
 
@@ -62,4 +63,5 @@ robust, and does it leave the docs accurate. This page is the checklist.
 ## Commit and PR style
 
 Write plain, descriptive commit messages and PR descriptions, as a team member would. State what
-changed and why; reference the issue or the [Known Gaps](../known-gaps.md) item it addresses.
+changed and why, and reference the issue it addresses. Documentation commits follow
+[Conventional Commits](documentation-standards.md#commits).

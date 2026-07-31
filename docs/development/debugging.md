@@ -118,5 +118,5 @@ These come from RViz on the operator laptop, not the robot:
   own scan-display TF queue. (The same message from a Nav2 node is also usually benign under TF
   timing pressure.)
 
-See [Known Gaps](../known-gaps.md) for issues that are tracked but not yet resolved, and
-[Profiling](profiling.md) for performance investigation.
+See [Limitations](../reference/limitations.md) for behavior that looks like a fault but is
+by design, and [Profiling](profiling.md) for performance investigation.

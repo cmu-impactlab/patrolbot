@@ -76,9 +76,10 @@ server while the bridge is active.
 | Discovery | `LOCALHOST` (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) | every Compose service |
 
 The host-network containers still discover each other through loopback, but a laptop on the LAN
-cannot discover or publish to the robot's ROS graph. This is the PB-AUDIT-017 containment boundary.
-Do not restore `SUBNET` merely to make RViz convenient; use SSH/container-local read-only commands
-or a separately reviewed authenticated bridge.
+cannot discover or publish to the robot's ROS graph. This is a deliberate containment boundary:
+discovery **MUST NOT** be widened to `SUBNET` merely to make RViz convenient, because doing so
+exposes an unauthenticated command path to every host on the LAN. Use SSH or container-local
+read-only commands, or a separately reviewed authenticated bridge.
 
 ```bash
 # Read-only status over the management channel:

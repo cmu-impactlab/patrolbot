@@ -107,6 +107,8 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
 - **"No valid trajectories" / goal aborts.** Historically caused by `local_costmap` updating at
   1 Hz while the controller ran at 5 Hz → "Costmap timed out waiting for update". Fixed by raising
   `local_costmap update_frequency` to 5.0. See [Debugging](../development/debugging.md).
-- **Goal rejected immediately.** Navigation half not yet active (see warning above).
+- **Goal rejected immediately.** The Nav2 lifecycle nodes are not active, or the robot has no
+  pose because `/odom` has gone silent. A silent `/odom` means the SBC link is down — see
+  [Limitations](../reference/limitations.md).
 - **Robot "boxed in".** Laser shows obstacles within the footprint; the `collision_monitor`
   stop-box halts motion. Inspect `/scan` from the Pi 5 `patrolbot-bridge` container.

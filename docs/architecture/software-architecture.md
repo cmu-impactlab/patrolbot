@@ -224,4 +224,4 @@ out its loss without operator intervention:
 
 The one case software cannot mask is a **physical SBC reboot**, which resets ARIA odometry to
 `0,0,0`; localization must remain invalid until an operator deliberately supplies a fresh pose.
-See [Known Gaps](../known-gaps.md) and [Debugging](../development/debugging.md).
+See [Limitations](../reference/limitations.md) and [Debugging](../development/debugging.md).

@@ -20,6 +20,9 @@ if(BUILD_TESTING)
     test_collision_monitor_integration
     test/test_collision_monitor_integration.py
     TIMEOUT 90)
+  ament_add_pytest_test(
+    test_reverse_safety_rules
+    test/test_reverse_safety_rules.py)
 endif()
 
 # Install directories so ROS 2 can find them
@@ -38,11 +41,13 @@ install(PROGRAMS
   scripts/patrolbot_joy_teleop.py
   scripts/patrolbot_safety_watchdog.py
   scripts/validate_physical_calibration.py
+  scripts/verify_reverse_safety.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(FILES
   scripts/joystick_policy.py
+  scripts/reverse_safety_rules.py
   scripts/safety_policy.py
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -1,0 +1,56 @@
+# Rear sonar transducer geometry — MEASURED 2026-07-29 on this robot.
+#
+# PB-AUDIT-004. The bridge republishes the SBC's AUX:SONAR field as a
+# real-detections-only PointCloud2 in base_link. Each emitted point is computed
+# on the SBC as
+#
+#     p = sensor_origin + range * sensor_direction
+#
+# so every credible point must lie ON the ray of one live transducer. This file
+# records the mounts that make that check possible; it is the Pi-side mirror of
+# `rear_sonar_indices` in hardware/patrolbot_hw_server/undock_profile.conf and
+# is asserted equal to it by test_safety_contract.py.
+#
+# ONLY THREE OF SIXTEEN SONAR REPORT ON THIS ROBOT. Over a 300 s capture,
+# indices 0-10, 14 and 15 never updated their reading timestamp once (range
+# constant 5000 mm). Do not add a dead index here: the SBC requires every
+# listed unit to be fresh, so listing a dead one refuses every undock.
+#
+# KNOWN GAP, carried forward: the rear-RIGHT quadrant is unsensed because 9
+# (-125 deg) and 10 (-150 deg) are both dead. 11 and 12 cover the swept width of
+# a STRAIGHT reverse, which is the only motion the undock performs; any future
+# manoeuvre that arcs rearward is blind on that side.
+#
+# Sonar is rear-only. It is not forward coverage, and it must never be treated
+# as a substitute for /scan in front.
+rear_sonar_geometry:
+  frame_id: base_link
+
+  # The SBC drops any reading at or beyond this range before it is emitted, so
+  # no published point may exceed it. This robot reports 5000 mm for "no echo",
+  # which is above the cutoff and is therefore filtered out as intended.
+  max_range_m: 4.335
+
+  # Distance a published point may sit off its transducer's ray before the
+  # emitted geometry is considered inconsistent with the measured mounts. The
+  # points are float32 round-trips of an exact ray computation, so the real
+  # residual is micrometres; 0.01 m is a deliberately loose bound that still
+  # separates the units from each other by an order of magnitude.
+  ray_tolerance_m: 0.01
+
+  # index: ARIA sonar index, as used by rear_sonar_indices on the SBC.
+  # x_m/y_m: transducer origin in base_link.
+  # theta_deg: outward pointing direction in base_link.
+  units:
+    - index: 11        # straight back, right of centre
+      x_m: -0.263
+      y_m: -0.046
+      theta_deg: -170.0
+    - index: 12        # straight back, left of centre
+      x_m: -0.263
+      y_m: 0.046
+      theta_deg: 170.0
+    - index: 13        # rear-left diagonal
+      x_m: -0.232
+      y_m: 0.134
+      theta_deg: 150.0

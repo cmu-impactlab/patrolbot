@@ -623,6 +623,52 @@ class SafetyContractTest(unittest.TestCase):
                         expected = 'reverse'
                     self.assertEqual(selected, expected)
 
+    def test_rear_sonar_geometry_mirrors_the_sbc_profile(self):
+        """PB-AUDIT-004. The Pi validates published sonar points against the
+        transducers the SBC gates undocking on. Two copies of one measurement
+        drifting apart would make the validation meaningless, so they are
+        pinned to each other here."""
+        geometry = yaml.safe_load(
+            (PACKAGE_ROOT / 'config' /
+             'rear_sonar_geometry.yaml').read_text(encoding='utf-8')
+        )['rear_sonar_geometry']
+        profile = UNDOCK_PROFILE_FILE.read_text(encoding='utf-8')
+        indices = re.search(
+            r'^rear_sonar_indices\s*=\s*(.+)$', profile, re.MULTILINE).group(1)
+        self.assertEqual(
+            [unit['index'] for unit in geometry['units']],
+            [int(value) for value in indices.split(',')])
+        self.assertEqual(geometry['frame_id'], 'base_link')
+        # The SBC drops readings at or beyond this range before emitting them.
+        self.assertEqual(geometry['max_range_m'], 4.335)
+        self.assertIn('range >= 4335.0', SERVER_FILE.read_text(encoding='utf-8'))
+        # base_link is what the bridge stamps the cloud with.
+        self.assertIn(
+            "msg.header.frame_id = 'base_link'",
+            BRIDGE_FILE.read_text(encoding='utf-8'))
+
+    def test_reverse_safety_verifier_cannot_command_anything(self):
+        """It runs against a live, motor-enabled robot; it must be incapable of
+        motion by construction, not by intent."""
+        verifier = (
+            PACKAGE_ROOT / 'scripts' /
+            'verify_reverse_safety.py').read_text(encoding='utf-8')
+        rules = (
+            PACKAGE_ROOT / 'scripts' /
+            'reverse_safety_rules.py').read_text(encoding='utf-8')
+        for forbidden in (
+                'create_publisher(', 'ActionClient(', 'set_parameters',
+                'send_goal', 'create_client('):
+            self.assertNotIn(forbidden, verifier)
+        # The rules module stays ROS-free so it can be tested offline.
+        self.assertNotIn('import rclpy', rules)
+        # One name per request. A batch containing any name the node cannot
+        # serve comes back with an empty value list, which silently reports
+        # every other parameter in that batch as missing -- indistinguishable
+        # from the misconfiguration this tool exists to detect.
+        self.assertIn('get_parameters([name])', verifier)
+        self.assertIn('OPTIONAL_COLLISION_MONITOR_PARAMETERS', verifier)
+
     def test_recovery_trees_back_up_before_spin(self):
         tree_dir = PACKAGE_ROOT / 'config' / 'behavior_trees'
         for path in tree_dir.glob('*.xml'):

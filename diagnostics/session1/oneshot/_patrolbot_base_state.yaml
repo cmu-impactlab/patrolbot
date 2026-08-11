@@ -1,0 +1,31 @@
+header:
+  stamp:
+    sec: 1786456240
+    nanosec: 854183482
+  frame_id: base_link
+session_generation: 3
+link_connected: true
+telemetry_age: 0.0343560092151165
+hardware_state_valid: true
+charge_state: 3
+charge_state_valid: true
+motors_enabled: true
+estop_pressed: false
+flags: 1029
+fault_flags: 0
+stall_value: 4096
+bumpers_valid: true
+front_bumper_pressed: true
+rear_bumper_pressed: false
+dock_state: DOCKED_CONFIRMED
+dock_state_valid: true
+dock_phase: 6
+dock_phase_name: HANDOFF_READY
+undock_active: false
+undock_release_attempts: 0
+minimum_rear_range: 4.330999851226807
+rear_sonar_usable: true
+redock_inhibited: true
+redock_inhibit_remaining: 0.0
+undock_profile_commissioned: true
+---

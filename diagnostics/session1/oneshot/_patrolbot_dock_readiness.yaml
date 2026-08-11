@@ -1,0 +1,37 @@
+header:
+  stamp:
+    sec: 1786456237
+    nanosec: 290685885
+  frame_id: base_link
+ready_for_undock: true
+link_connected: true
+hardware_state_valid: true
+charge_state_valid: true
+motors_enabled: true
+estop_pressed: false
+bumpers_valid: true
+sonar_fresh: true
+rear_clear: true
+odom_fresh: true
+stationary: true
+localization_fresh: true
+localization_valid: true
+dock_pose_valid: true
+command_path_valid: true
+navigation_idle: true
+session_generation: 3
+charge_state: 3
+fault_flags: 0
+base_state_age: 0.015797879546880722
+sonar_age: 0.19973964989185333
+odom_age: 0.07546263933181763
+localization_age: 0.3664076626300812
+manager_state: IDLE
+blocking_reason: ready
+dock_state: DOCKED_CONFIRMED
+physically_clear: false
+automatic_docking_allowed: false
+redock_inhibited: true
+redock_inhibit_remaining: 0.0
+undock_profile_commissioned: true
+---

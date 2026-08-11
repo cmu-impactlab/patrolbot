@@ -1,0 +1,72 @@
+/amcl:
+  ros__parameters:
+    /bond_disable_heartbeat_timeout: true
+    alpha1: 0.1
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.1
+    alpha5: 0.2
+    always_reset_initial_pose: false
+    autostart_node: false
+    base_frame_id: base_link
+    beam_skip_distance: 0.5
+    beam_skip_error_threshold: 0.9
+    beam_skip_threshold: 0.3
+    bond_heartbeat_period: 0.1
+    do_beamskip: true
+    first_map_only: false
+    freespace_downsampling: false
+    global_frame_id: map
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      yaw: 0.0
+      z: 0.0
+    lambda_short: 0.1
+    laser_likelihood_max_dist: 2.0
+    laser_max_range: -1.0
+    laser_min_range: -1.0
+    laser_model_type: likelihood_field
+    map_topic: map
+    max_beams: 60
+    max_particles: 1500
+    min_particles: 500
+    odom_frame_id: odom
+    pf_err: 0.05
+    pf_z: 0.99
+    qos_overrides:
+      /tf:
+        publisher:
+          depth: 100
+          durability: volatile
+          history: keep_last
+          reliability: reliable
+        subscription:
+          depth: 100
+          durability: volatile
+          history: keep_last
+          reliability: reliable
+      /tf_static:
+        subscription:
+          depth: 100
+          history: keep_last
+          reliability: reliable
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
+    resample_interval: 1
+    robot_model_type: nav2_amcl::DifferentialMotionModel
+    save_pose_rate: 0.5
+    scan_topic: scan
+    set_initial_pose: false
+    sigma_hit: 0.2
+    start_type_description_service: true
+    tf_broadcast: true
+    transform_tolerance: 1.0
+    update_min_a: 0.1
+    update_min_d: 0.1
+    use_sim_time: false
+    z_hit: 0.7
+    z_max: 0.05
+    z_rand: 0.2
+    z_short: 0.05
+

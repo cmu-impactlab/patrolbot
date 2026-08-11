@@ -856,6 +856,40 @@ int main(int argc, char** argv) {
   ArLog::log(ArLog::Normal,
              "Sonar enabled. Motors were NOT enabled at startup.");
 
+  // ARIA already asks the base for its uARCS CONFIG packet during connection
+  // negotiation and parses it, but nothing has ever read the result. It carries
+  // the odometry calibration constants and the gyro configuration, none of which
+  // are recorded anywhere. Log them once; this reads memory ARIA already holds
+  // and issues no new command to the base.
+  {
+    const ArRobotConfigPacketReader* config = robot.getOrigRobotConfig();
+    int waitedMs = 0;
+    bool arrived = false;
+    while (config != NULL && waitedMs < 3000) {
+      robot.lock();
+      arrived = config->hasPacketArrived();
+      robot.unlock();
+      if (arrived) break;
+      ArUtil::sleep(100);
+      waitedMs += 100;
+    }
+    if (arrived) {
+      robot.lock();
+      ArLog::log(ArLog::Normal,
+                 "uARCS CONFIG: TicksMM=%d RevCount=%d DriftFactor=%d "
+                 "HasGyro=%d GyroType=%d GyroFW=%d GyroCW=%d GyroCCW=%d",
+                 config->getTicksMM(), config->getRevCount(),
+                 config->getDriftFactor(), config->getHasGyro() ? 1 : 0,
+                 config->getGyroType(), config->getGyroFWVersion(),
+                 config->getGyroCW(), config->getGyroCCW());
+      robot.unlock();
+    } else {
+      ArLog::log(ArLog::Terse,
+                 "uARCS CONFIG: packet did not arrive within 3000 ms; "
+                 "calibration constants unknown.");
+    }
+  }
+
   const patrolbot::UndockHardwareProfile profile = loadProfile(kProfilePath);
 
   ArLaserConnector laserConnector(&parser, &robot, &robotConnector);

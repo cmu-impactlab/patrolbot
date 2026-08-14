@@ -247,17 +247,20 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('mobile_base_nodelet_manager', mobile_base)
         self.assertIn('exec="twist_mux"', mobile_base)
 
-    def test_dds_discovery_is_localhost_only_in_every_container(self):
+    def test_dds_discovery_matches_one_yaml_policy_in_every_container(self):
         compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
+        expected = compose['x-patrolbot-config']['ros_discovery_range']
+        self.assertIn(expected, ('LOCALHOST', 'SUBNET'))
         self.assertEqual(
             compose['x-common']['environment'][
-                'ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
-        for service in ('bringup', 'bridge', 'navigation'):
+                'ROS_AUTOMATIC_DISCOVERY_RANGE'], expected)
+        for service in ('bringup', 'bridge', 'web-bridge', 'gimbal',
+                        'navigation'):
             self.assertEqual(
                 compose['services'][service]['environment'][
-                    'ROS_AUTOMATIC_DISCOVERY_RANGE'], 'LOCALHOST')
+                    'ROS_AUTOMATIC_DISCOVERY_RANGE'], expected)
         status = STATUS_FILE.read_text(encoding='utf-8')
-        self.assertIn('expected LOCALHOST in every container', status)
+        self.assertIn('consistent LOCALHOST or SUBNET policy', status)
 
     def test_optional_dashboard_profile_does_not_block_core_compose(self):
         compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
@@ -268,6 +271,9 @@ class SafetyContractTest(unittest.TestCase):
         self.assertEqual(
             web_bridge['environment']['WEB_BRIDGE_TOKEN'],
             '${WEB_BRIDGE_TOKEN:-}')
+        self.assertEqual(
+            web_bridge['environment']['WEB_BRIDGE_ENABLE_COMMANDS'],
+            '${WEB_BRIDGE_ENABLE_COMMANDS:-0}')
         command = web_bridge['command'][0]
         self.assertIn(
             '$${WEB_BRIDGE_SERVER_URL:?set WEB_BRIDGE_SERVER_URL', command)

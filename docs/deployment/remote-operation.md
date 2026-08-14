@@ -1,15 +1,18 @@
 ---
 title: Remote Operation
-description: Safe remote observation and the loopback-only ROS 2 command boundary.
+description: Remote observation with the configurable ROS 2 LAN discovery policy.
 ---
 
 # Remote Operation
 
-PatrolBot's ROS 2 graph is deliberately **not exposed to the LAN or VPN**. Every
-runtime container uses `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, so raw RViz or
-ROS CLI processes on an operator laptop cannot discover topics, services, or
-actions. This closes what would otherwise be an unauthenticated DDS command path
-reachable from any host on the LAN.
+PatrolBot currently uses `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`, selected by the
+single `x-patrolbot-config.ros_discovery_range` scalar in
+`docker/docker-compose.yml`. Raw RViz and ROS CLI processes on the same
+multicast-capable LAN can discover the full graph.
+
+This is not read-only exposure. Raw DDS has no authentication or authorization,
+so LAN participants can also discover publishers, command topics, services, and
+actions. Set the YAML scalar to `LOCALHOST` to restore Pi-only discovery.
 
 ## Supported observation path
 
@@ -26,21 +29,21 @@ does not open another SBC connection. Its command capability is a distinct,
 explicit mode and must be reviewed independently; telemetry availability does
 not imply permission to send a goal or initial pose.
 
-## Why LAN RViz no longer discovers the robot
+## LAN RViz discovery
 
 ```mermaid
 flowchart LR
     subgraph PI["Pi host namespace"]
         CORE["bringup + bridge + navigation"]
-        CORE <-->|"loopback DDS"| APP["optional reviewed app bridge"]
+        CORE <-->|"host-network DDS"| APP["optional reviewed app bridge"]
     end
-    LAP["LAN/VPN laptop\nRViz or ROS CLI"] -. "DDS discovery blocked" .-> CORE
+    LAP["LAN laptop\nRViz or ROS CLI"] <-->|"SUBNET DDS"| CORE
     LAP -->|"SSH management"| PI
 ```
 
-This is expected policy, not a transport fault. The old Fast DDS Discovery
-Server experiment remains disabled, and `SUBNET` discovery must not be restored
-as a convenience workaround.
+The VM/laptop must use `ROS_DOMAIN_ID=0`, compatible ROS 2 types, and a network
+that passes multicast. The old Fast DDS Discovery Server experiment remains
+disabled, so routed VPN discovery is not implied by `SUBNET`.
 
 ## Command boundary
 
@@ -51,9 +54,8 @@ as a convenience workaround.
   magnitude, direction, duration/distance, safety bounds, and stop conditions,
   followed by explicit approval.
 
-If richer remote visualization is needed later, use an authenticated,
-allowlisted bridge and separately review its command permissions. The raw ROS
-graph **MUST NOT** be exposed to the campus LAN.
+Prefer the authenticated dashboard when raw DDS is unnecessary. If `SUBNET` is
+enabled, treat the management LAN as part of the robot command trust boundary.
 
 See [Network Setup](network-setup.md) for the underlying topology and
 [Limitations](../reference/limitations.md) for what the containment boundary

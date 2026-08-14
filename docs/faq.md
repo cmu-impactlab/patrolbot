@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Frequently asked questions about PatrolBot — the two-machine split, why RViz shows nothing, why a change didn't take effect, the laser orientation, and more.
+description: Frequently asked questions about PatrolBot — the two-machine split, LAN RViz discovery, deployment updates, the laser orientation, and more.
 ---
 
 # FAQ
@@ -30,8 +30,9 @@ Short answers with links to the full story.
 ## "It's not working"
 
 **RViz shows nothing / "Frame map does not exist."**
-: Raw DDS is intentionally loopback-only, so laptop RViz sees nothing on both LAN and VPN. For a
-  local visualization path, verify `/scan` and provide a pose only through an authorized
+: The current `SUBNET` YAML policy permits same-LAN discovery. Check
+  `ROS_DOMAIN_ID=0`, matching interfaces, and multicast; routed VPNs may still
+  block discovery. Verify `/scan` and provide a pose only through an authorized
   interface. See [Remote Operation](deployment/remote-operation.md) and
   [Debugging](development/debugging.md#frame-map-does-not-exist--blank-map-in-rviz).
 

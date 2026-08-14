@@ -151,9 +151,11 @@ monitor's `front_velocity_stop` polygon.
 
 ## Monitoring
 
-`ros2` CLI and RViz on a laptop will see **nothing**: every container sets
-`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` deliberately. Observe over SSH, or through the
-dashboard served by `patrolbot-web-bridge`.
+With the current `SUBNET` YAML policy, `ros2` CLI and RViz on the same
+multicast-capable LAN can discover the full graph using `ROS_DOMAIN_ID=0`.
+This exposure includes unauthenticated command endpoints. SSH and the dashboard
+remain available, and changing the one Compose scalar to `LOCALHOST` restores
+Pi-only discovery.
 
 ```bash
 docker logs -f patrolbot-bridge

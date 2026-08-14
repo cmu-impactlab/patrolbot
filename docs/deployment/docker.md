@@ -20,7 +20,17 @@ socket and fresh stationary telemetry were also verified live.
 | `navigation` | `patrolbot-navigation` | Nav2 + joystick + safety watchdog + static TF |
 
 All services share one image, host networking, `ROS_DOMAIN_ID=0`, Fast DDS, and
-`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`.
+one discovery policy defined at the top of `docker/docker-compose.yml`:
+
+```yaml
+x-patrolbot-config:
+  ros_discovery_range: &ros_discovery_range SUBNET
+```
+
+Set that one scalar to `SUBNET` to expose the full ROS graph to the LAN, or
+`LOCALHOST` to confine discovery to the Pi. Every ROS service references the
+same YAML anchor. `SUBNET` also exposes unauthenticated command topics,
+services, and actions; it is not a read-only visualization mode.
 Source is bind-mounted read-only from `PATROLBOT_ROOT`. The legacy `rosaria2`
 package is versioned but deliberately excluded from the image.
 

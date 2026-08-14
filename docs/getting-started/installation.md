@@ -16,7 +16,7 @@ day-one run-through is on [Quickstart](quickstart.md).
 |---|---|
 | **Raspberry Pi 5 main driver** | Ubuntu 24.04.4 LTS (`aarch64`), Docker + Compose |
 | **SBC** | C++ toolchain (`g++`, `make`), **ARIA/AriaCoda** at `/usr/local/Aria`, `socat` |
-| **Operator laptop** (optional) | SSH client or reviewed dashboard client; raw ROS 2 DDS is not exposed |
+| **Operator laptop** (optional) | SSH/dashboard client, or ROS 2 Jazzy-compatible RViz/CLI when YAML discovery is `SUBNET` |
 
 The SBC and main Pi 5 are already provisioned. You generally
 do **not** reinstall the OS or ROS; you build/deploy the PatrolBot packages on top.
@@ -48,12 +48,12 @@ with a plain `Makefile` (no ROS, no colcon). See
 |---|---|---|
 | Pi 5 | `robot-pi2` / `ubuntu@patrolbot-ros2` | Main Docker driver |
 | SBC | `robot-sbc` / `ros@172.20.87.231` | Hardware server; Pi runtime endpoint is `10.0.0.1:7272` |
-| Pi 5 and operator | management network | SSH or reviewed application bridge; raw ROS 2 DDS is loopback-only |
+| Pi 5 and operator | management network | SSH/dashboard, plus raw ROS 2 DDS when the Compose YAML policy is `SUBNET` |
 
 !!! note "Operator access"
-    Every runtime container uses loopback-only ROS 2 discovery. LAN/VPN RViz does not discover the
-    graph by design. Use SSH for observation or a separately reviewed application bridge — see
-    [Remote Operation](../deployment/remote-operation.md).
+    One scalar in `docker/docker-compose.yml` selects `SUBNET` or `LOCALHOST` for every runtime
+    container. `SUBNET` exposes the complete unauthenticated graph to the LAN; `LOCALHOST`
+    confines it to the Pi. See [Remote Operation](../deployment/remote-operation.md).
 
 ## Documentation toolchain (this site)
 

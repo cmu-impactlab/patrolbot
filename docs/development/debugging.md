@@ -35,13 +35,14 @@ flowchart TB
     A["map frame missing"] --> C{amcl publishing map→odom?}
     C -->|no| D{/scan flowing + initial pose set?}
     D -->|no| FIX2["Wait for /scan; use an authorized local pose interface"]
-    C -->|yes, but laptop sees nothing| FIX3["See Remote Operation — DDS is loopback-only"]
+    C -->|yes, but laptop sees nothing| FIX3["Check domain 0, SUBNET policy, and multicast"]
 ```
 
 - `amcl` needs `/scan` flowing **and** an authorized initial pose. Forced map-origin startup is
   intentionally disabled.
 - Verify: `ros2 topic echo /tf | grep -A1 'frame_id: map'`.
-- If a LAN/VPN laptop sees nothing, loopback-only DDS is working as intended — see
+- If a LAN laptop sees nothing while the Compose policy is `SUBNET`, check
+  `ROS_DOMAIN_ID=0`, interface compatibility, and multicast — see
   [Remote Operation](../deployment/remote-operation.md).
 
 ### Nav2 Goal aborts: "No valid trajectories" / "Costmap timed out"

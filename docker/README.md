@@ -99,13 +99,15 @@ docker compose up -d
 ```
 
 Pi 5 repository snapshots created during deployment refreshes live under
-`~/backups/patrolbot-repo-rollbacks/`. They are rollback aids, not active
-runtime state. After supervised SBC-on acceptance passes, they may be removed to
-free space:
+`~/backups/`, one timestamped directory per snapshot. That is the **only**
+backup location in the home directory — do not create sibling `patrolbot-backups/`
+or `patrolbot-repo-rollbacks/` trees. They are rollback aids, not active runtime
+state. Keep the two newest snapshots and prune the rest once supervised SBC-on
+acceptance passes:
 
 ```bash
-du -sh ~/backups/patrolbot-repo-rollbacks
-rm -rf ~/backups/patrolbot-repo-rollbacks
+du -sh ~/backups/*
+ls -1dt ~/backups/*/ | tail -n +3 | xargs -r rm -rf   # keep the 2 newest
 ```
 
 Do not run Docker and the old bare-metal services simultaneously. Joystick and

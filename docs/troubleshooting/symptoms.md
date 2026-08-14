@@ -124,11 +124,10 @@ It is cleared only by an explicit `/patrolbot/dock_reset`. Nothing clears it aut
 
 ## RViz or `ros2` CLI on a laptop sees nothing
 
-Working as configured. Every container sets `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`, so no
-process outside the Pi can discover the graph.
-
-Discovery **MUST NOT** be widened to `SUBNET` to fix this — that exposes an unauthenticated
-command path to the whole LAN. Observe over SSH or through the dashboard.
+Check that the Compose YAML discovery scalar is `SUBNET`, the client uses
+`ROS_DOMAIN_ID=0`, and the client network carries multicast. The current
+`SUBNET` policy exposes the full unauthenticated graph, including command
+endpoints. If the scalar is `LOCALHOST`, an empty external graph is expected.
 
 ## The robot reports front bumper contact while docked
 

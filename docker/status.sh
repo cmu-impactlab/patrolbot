@@ -48,13 +48,20 @@ if [[ -n "$image_source_digest" && \
 fi
 
 discovery_ok=true
+discovery_expected=""
 for container in "${CONTAINERS[@]}"; do
   discovery_range=$(docker inspect "$container" \
     --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
     | sed -n 's/^ROS_AUTOMATIC_DISCOVERY_RANGE=//p' | head -n 1)
   printf '  %-24s %s\n' "$container discovery" \
     "${discovery_range:-unset}"
-  [[ "$discovery_range" == LOCALHOST ]] || discovery_ok=false
+  if [[ "$discovery_range" != LOCALHOST && "$discovery_range" != SUBNET ]]; then
+    discovery_ok=false
+  elif [[ -z "$discovery_expected" ]]; then
+    discovery_expected=$discovery_range
+  elif [[ "$discovery_range" != "$discovery_expected" ]]; then
+    discovery_ok=false
+  fi
 done
 
 bridge_publication_mode=$(docker inspect patrolbot-bridge \
@@ -210,9 +217,12 @@ else
 fi
 
 if [[ "$discovery_ok" != true ]]; then
-  printf '  %-24s invalid (expected LOCALHOST in every container)\n' \
+  printf '  %-24s invalid (expected one consistent LOCALHOST or SUBNET policy)\n' \
     "DDS discovery scope"
   ready=false
+elif [[ "$discovery_expected" == SUBNET ]]; then
+  printf '  %-24s SUBNET (full LAN graph; unauthenticated)\n' \
+    "DDS discovery scope"
 else
   printf '  %-24s LOCALHOST only\n' "DDS discovery scope"
 fi

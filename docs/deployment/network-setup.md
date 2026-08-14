@@ -1,6 +1,6 @@
 ---
 title: Network Setup
-description: PatrolBot's dedicated SBC link and loopback-confined ROS 2 graph.
+description: PatrolBot's dedicated SBC link and configurable ROS 2 LAN discovery policy.
 ---
 
 # Network Setup
@@ -10,8 +10,8 @@ see the robot" confusion:
 
 1. **SBC ↔ Pi:** a dedicated Ethernet link (`10.0.0.1/24` SBC,
    `10.0.0.2/24` Pi) carrying a single TCP socket on port 7272.
-2. **Pi-internal ROS 2:** Fast DDS discovery is confined to loopback. External operator access is
-   through SSH or a separately reviewed application bridge, not raw LAN DDS.
+2. **ROS 2 DDS:** Fast DDS discovery is controlled by one Compose YAML setting. The current
+   `SUBNET` policy exposes the complete ROS graph to the management LAN.
 
 ```mermaid
 flowchart LR
@@ -21,11 +21,11 @@ flowchart LR
         SBC <-->|"TCP :7272"| PI
     end
     subgraph PIHOST["Pi host namespace"]
-        ROS["ROS 2 containers\nLOCALHOST discovery"]
-        PI <-->|"loopback DDS"| ROS
+        ROS["ROS 2 containers\nSUBNET discovery"]
+        PI <-->|"host-network DDS"| ROS
     end
-    OP["Operator"] -->|"SSH or reviewed app bridge"| PI
-    LAN["Campus LAN DDS participant"] -. "not discoverable" .-> ROS
+    OP["Operator"] -->|"SSH, dashboard, or raw DDS"| PI
+    LAN["Management LAN DDS participant"] <-->|"topics, services, actions"| ROS
 ```
 
 ## The SBC ↔ Pi link
@@ -67,19 +67,25 @@ window, then validate with `ip -4 addr show eth0`, `ip route get 10.0.0.1`,
 test. Do not open a separate probe connection to the single-client hardware
 server while the bridge is active.
 
-## ROS 2 discovery (Pi-internal only)
+## ROS 2 discovery policy
 
 | Setting | Value | Where |
 |---|---|---|
 | `ROS_DOMAIN_ID` | `0` | set by Compose/launch on Pi 5 |
 | Middleware | FastDDS | default |
-| Discovery | `LOCALHOST` (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) | every Compose service |
+| Discovery | `SUBNET` (`ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET`) | one YAML anchor used by every Compose service |
 
-The host-network containers still discover each other through loopback, but a laptop on the LAN
-cannot discover or publish to the robot's ROS graph. This is a deliberate containment boundary:
-discovery **MUST NOT** be widened to `SUBNET` merely to make RViz convenient, because doing so
-exposes an unauthenticated command path to every host on the LAN. Use SSH or container-local
-read-only commands, or a separately reviewed authenticated bridge.
+Change only the scalar at the top of `docker/docker-compose.yml`:
+
+```yaml
+x-patrolbot-config:
+  ros_discovery_range: &ros_discovery_range SUBNET  # or LOCALHOST
+```
+
+`SUBNET` lets LAN RViz and ROS CLI discover the robot, but it also lets every
+DDS participant discover and publish to command topics and call actions and
+services. There is no authentication, authorization, or read-only boundary in
+raw DDS. Use `LOCALHOST` whenever that exposure is not explicitly required.
 
 ```bash
 # Read-only status over the management channel:
@@ -88,9 +94,9 @@ ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'
 
 ## Remote visualization
 
-Raw RViz discovery is unavailable on both the LAN and VPN by deliberate policy. This is not a
-robot-health symptom. Any future remote visualization design must preserve authenticated command
-boundaries and must not silently reopen DDS command topics to the campus network.
+With the current `SUBNET` policy, RViz and ROS CLI work on the same multicast-capable LAN using
+`ROS_DOMAIN_ID=0`. Routed VPNs generally do not carry multicast and may still require a reviewed
+bridge or discovery-server design.
 
 The previous FastDDS Discovery Server experiment for VPN RViz was reverted on 2026-06-29. The unit
 file and old XML profiles may still exist as backups, but they are **not the current runtime state**:
@@ -99,9 +105,9 @@ file and old XML profiles may still exist as backups, but they are **not the cur
 |---|---|
 | `patrolbot-discovery.service` | on disk but disabled |
 | `FASTRTPS_DEFAULT_PROFILES_FILE` in ROS 2 services | not set |
-| Current discovery mode | loopback-only (`LOCALHOST`) |
+| Current discovery mode | LAN multicast (`SUBNET`) |
 
-Treat VPN RViz as a future re-enable project, not as a configured feature.
+The old discovery-server experiment is still not part of the current design.
 
 ## Firewall / ports summary
 
@@ -109,11 +115,12 @@ Treat VPN RViz as a future re-enable project, not as a configured feature.
 |---|---|---|
 | 7000 | SBC | socat → base serial (localhost use by ARIA) |
 | 7272 | SBC | telemetry server (Pi connects) |
-| DDS/RTPS | Pi loopback only | communication among host-network robot containers |
+| DDS/RTPS | Pi and management LAN | unauthenticated ROS graph discovery and transport |
 
 ## Checklist
 
 - [ ] Pi `eth0` has `10.0.0.2/24` and can reach `10.0.0.1:7272`.
-- [ ] Core containers use `ROS_DOMAIN_ID=0` and `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`.
-- [ ] No LAN participant can discover `/cmd_vel`, action servers, or `/initialpose` directly.
-- [ ] Any future visualization bridge is separately authenticated and reviewed before commands are enabled.
+- [ ] Core containers use `ROS_DOMAIN_ID=0` and one consistent discovery policy.
+- [ ] When set to `SUBNET`, the operator accepts that `/cmd_vel`, action servers, and
+      `/initialpose` are directly discoverable from the LAN.
+- [ ] Set the YAML scalar back to `LOCALHOST` when raw LAN DDS is no longer required.

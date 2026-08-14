@@ -54,10 +54,10 @@ Expected stationary invariants include:
 
 ## 3. Operator access
 
-Raw DDS discovery is loopback-only. A laptop on the LAN or VPN will not discover
-the ROS graph with RViz, even when the robot is healthy. Use SSH for observation
-or the separately reviewed dashboard bridge. See
-[Remote Operation](../deployment/remote-operation.md).
+The current Compose YAML policy is `SUBNET`, so a laptop on the same
+multicast-capable LAN can discover the full graph with `ROS_DOMAIN_ID=0`.
+This includes unauthenticated command topics, services, and actions—not only
+telemetry. See [Remote Operation](../deployment/remote-operation.md).
 
 Dashboard telemetry does not itself authorize commands. Initial pose, goals,
 charge release, motor enable, and velocity are separate state-changing
@@ -101,7 +101,7 @@ publication. Dock/undock and guarded reverse remain separate later phases.
 | Symptom | Go to |
 |---|---|
 | Status reports stale scan/odom or no SBC session | [Debugging](../development/debugging.md) |
-| LAN RViz sees nothing | [Remote Operation](../deployment/remote-operation.md) — expected with loopback-only DDS |
+| LAN RViz sees nothing | verify domain `0`, compatible interfaces, multicast, and the Compose YAML discovery toggle |
 | Localization invalid | inspect telemetry and provide an authorized pose; never restore forced origin |
 | Motors disabled | inspect charging, E-stop, faults, and physical readiness; `DRIVE` cannot enable motors |
 | A deployment change did not take effect | [Updates](../deployment/updates.md) |

@@ -102,15 +102,15 @@ The legacy `rosaria2` package publishes the same transforms and consumes the sam
 topics as `patrolbot_bridge`. Running both produces conflicting TF and duplicated velocity
 commands. Exactly one **MUST** be running; the deployed configuration uses the bridge.
 
-## Remote visualization is deliberately restricted
+## Raw LAN DDS is not access-controlled
 
-Every runtime container sets `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`. Containers on the Pi
-discover each other over loopback, but no process outside the Pi can discover or publish to the
-robot's ROS graph. RViz or `ros2` CLI on a laptop will see nothing.
+The current Compose policy sets `ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET` for every
+runtime container. RViz and ROS CLI on the multicast-capable LAN can discover
+the graph, but DDS does not distinguish observation from control: command
+topics, services, actions, and `/initialpose` are exposed too.
 
-This is a containment boundary, not a misconfiguration. Discovery **MUST NOT** be widened to
-`SUBNET` for convenience — doing so exposes an unauthenticated command path to every host on
-the LAN. Read-only observation goes over SSH; richer visualization requires an authenticated,
-allowlisted bridge whose command permissions have been reviewed separately.
+The one `x-patrolbot-config.ros_discovery_range` scalar in
+`docker/docker-compose.yml` switches every service between `SUBNET` and
+`LOCALHOST`. Set it to `LOCALHOST` whenever raw LAN discovery is unnecessary.
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->

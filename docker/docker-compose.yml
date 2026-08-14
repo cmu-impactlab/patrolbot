@@ -1,5 +1,11 @@
 name: patrolbot
 
+# One-line ROS 2 LAN exposure policy for every service below.
+#   LOCALHOST = Pi/container-local discovery only (safer default)
+#   SUBNET    = expose the full unauthenticated ROS graph to the LAN
+x-patrolbot-config:
+  ros_discovery_range: &ros_discovery_range SUBNET
+
 x-common: &common
   image: ${PATROLBOT_IMAGE:?set PATROLBOT_IMAGE in docker/.env or pass --env-file docker/.env}
   network_mode: host
@@ -12,10 +18,7 @@ x-common: &common
   environment:
     ROS_DOMAIN_ID: "0"
     RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-    # ROS 2 Jazzy discovery stays inside the Pi network namespace. The three
-    # host-network containers still discover each other via loopback, while an
-    # unauthenticated Wi-Fi participant can no longer discover command topics.
-    ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+    ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
   healthcheck:
     test: ["CMD", "/usr/local/bin/patrolbot-healthcheck"]
     interval: 30s
@@ -35,7 +38,7 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: bringup
     command: ["ros2", "launch", "patrolbot-launch", "bringup.xml"]
     volumes:
@@ -48,7 +51,7 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       # Keep DDS network I/O out of the bridge's sensor publisher workers. Fast
       # DDS defaults to synchronous publication, which can block publish() on a
       # stalled DDS reader and starve both /odom and /scan.
@@ -81,13 +84,14 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: web-bridge
       # Keep the opt-in profile from making unrelated core-stack Compose
       # operations require dashboard secrets. The shell command below enforces
       # both values only when this profile is actually started.
       WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:-}"
       WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:-}"
+      WEB_BRIDGE_ENABLE_COMMANDS: "${WEB_BRIDGE_ENABLE_COMMANDS:-0}"
     # The shared healthcheck script knows the ROS roles, not this bridge.
     healthcheck:
       disable: true
@@ -115,7 +119,7 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: gimbal
     # The shared healthcheck script knows the navigation roles, not this one.
     healthcheck:
@@ -152,7 +156,7 @@ services:
     environment:
       ROS_DOMAIN_ID: "0"
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
-      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: navigation
     command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
     volumes:

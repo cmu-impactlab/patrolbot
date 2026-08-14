@@ -39,13 +39,31 @@ For an existing bind-mounted file, restart only `bringup`, `bridge`, or
 
 ## Updating the SBC server
 
-!!! danger "The SBC source tree is not necessarily the source of its running binary"
-    Verified 2026-07-29: the live binary contains strings that exist only in the repo-HEAD
-    source, while `/home/ros/patrolbot_hw_server/*.cpp` is an older revision. **Running `make`
-    in place would silently rebuild the older behaviour**, with no error and no version change.
-    Always overwrite the SBC source from the repository first, and always build in an isolated
-    staging directory. The baseline for the current binary is captured under
-    `backups/20260728T234115Z-sbc-owned-undock/sbc-running-baseline/`.
+!!! danger "Treat the executable, not the source tree, as the rollback artifact"
+    The SBC source tree and its running binary are related only by whoever last ran `make`.
+    A build in place can silently produce different behaviour with no error and no version
+    change. Always overwrite the SBC source from the repository into an isolated staging
+    directory, build there, and keep the **binary** as the thing you can roll back to.
+
+!!! note "Source-tree divergence status — re-verified 2026-08-07"
+    The 2026-07-29 divergence (SBC `.cpp` files older than repo HEAD) is **no longer present**.
+    Comparing the captured SBC tree in `backups/20260806T135835Z-sbc-running-binary/sbc/source/`
+    against `hardware/patrolbot_hw_server/` at HEAD: `Makefile`, `patrolbot_server.cpp`,
+    `protocol.{cpp,hpp}`, `undock.{cpp,hpp}`, `undock_profile.conf` and
+    `patrolbot_commission_probe.cpp` are byte-identical. `hardware/` has not changed since that
+    capture, so the SBC sources still match HEAD.
+
+    Two corrections to the older record. The marker string `Dock-turn authorization armed`
+    is absent from the running binary's dumped strings *and* from repo HEAD, so it no longer
+    discriminates between revisions — do not use it as a divergence test. And the current
+    baseline binary is `sha256 d59a9981…` (built 2026-07-29 15:34, `MainPID 1344`), which
+    matches neither the `97655f94…` nor the `fba73511…` cited in earlier notes. The current,
+    authoritative baseline is `backups/20260806T135835Z-sbc-running-binary/`, which carries the
+    executable, its sources, `ldd`, symbols, strings and a `SHA256SUMS` manifest.
+
+    Still unverified: that `make -B` in staging reproduces a binary equivalent to the running
+    one. That check needs the SBC reachable and is the reason the staged-build discipline below
+    is mandatory rather than advisory. `test_motors.cpp` exists on the SBC but not in the repo.
 
 ### 1. Capture the rollback artifact (the binary, not the source)
 

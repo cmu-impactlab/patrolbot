@@ -131,8 +131,9 @@ constraints explain several conservative software choices:
 ## Network and power
 
 - **SBC ↔ Pi:** dedicated Ethernet (`10.0.0.1` ↔ `10.0.0.2`), TCP only.
-  ROS 2 DDS is loopback-only on the Pi; operators use SSH or a separately reviewed application
-  bridge (see [Remote Operation](../deployment/remote-operation.md)).
+  ROS 2 DDS discovery is selected centrally in Compose; the current `SUBNET` policy exposes the
+  complete unauthenticated graph to the management LAN (see
+  [Remote Operation](../deployment/remote-operation.md)).
 - **Gamepad:** USB on the Pi, in **Xinput** mode (the X/D switch must be on X).
 - **Power:** the base battery powers the chassis and onboard electronics. A **physical SBC reboot
   resets wheel odometry to zero** — localization must remain invalid until the operator supplies

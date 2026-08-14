@@ -194,15 +194,20 @@ class FakeSbc:
                 self.undock_active = True
                 self.dock_state = 'DEPARTING'
             for index in range(self.undock_events):
+                distance = 0.1 * (index + 1)
+                # Checked and sent under the same lock. _finish_undock clears
+                # the active request while holding it and only then writes the
+                # terminal frame, so a cancel can neither slip a terminal frame
+                # between this check and this send, nor lose the race and let
+                # an event trail the terminal. The terminal is always last.
                 with self._lock:
                     if self._active_undock != request_id:
-                        # A cancel landed and already sent the terminal frame.
                         return
-                distance = 0.1 * (index + 1)
-                self._send(connection, (
-                    f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:{distance:.4f}:'
-                    f'0.0000:0.0000:3:1:99.0000:0:DEPARTING\n'
-                ).encode('ascii'))
+                    self._send(connection, (
+                        f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:'
+                        f'{distance:.4f}:'
+                        f'0.0000:0.0000:3:1:99.0000:0:DEPARTING\n'
+                    ).encode('ascii'))
                 time.sleep(0.05)
         except OSError:
             return
@@ -564,3 +569,43 @@ def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
     # It must resume when telemetry does, rather than latching off for good.
     fake.telemetry_paused = False
     assert wait_until(lambda: len(seen) > settled), 'never resumed'
+
+
+def test_the_transform_leads_the_scan_out_of_a_telemetry_gap(harness):
+    """After a gap the first scan must not outrun its transform.
+
+    /odom and /scan are published from the telemetry worker the moment a frame
+    arrives, while TF came only from a 50 Hz timer on a different thread. With
+    the transform withdrawn during the gap, the first scan after a reconnect
+    could reach the costmap message filter up to a full timer period before any
+    transform covered it -- the precise ordering this node publishes TF at
+    50 Hz to avoid.
+    """
+    fake, bridge, client_node, _executor = harness
+    from sensor_msgs.msg import LaserScan
+    from tf2_msgs.msg import TFMessage
+
+    events = []
+    client_node.create_subscription(
+        TFMessage, '/tf',
+        lambda msg: events.extend(
+            'tf' for t in msg.transforms if t.child_frame_id == 'base_link'),
+        50)
+    # /scan is published with sensor QoS; a default RELIABLE subscription is
+    # silently incompatible and receives nothing.
+    from rclpy.qos import qos_profile_sensor_data
+    client_node.create_subscription(
+        LaserScan, '/scan', lambda _msg: events.append('scan'),
+        qos_profile_sensor_data)
+    assert wait_until(lambda: 'tf' in events and 'scan' in events)
+
+    fake.telemetry_paused = True
+    time.sleep(bridge.get_parameter('odom_tf_timeout').value + 0.3)
+    events.clear()
+    time.sleep(0.2)
+    assert events == [], 'still publishing during the gap'
+
+    fake.telemetry_paused = False
+    assert wait_until(lambda: 'scan' in events), 'no scan after the gap'
+    assert events[0] == 'tf', (
+        f'first frame out of the gap was {events[0]!r}, not the transform')

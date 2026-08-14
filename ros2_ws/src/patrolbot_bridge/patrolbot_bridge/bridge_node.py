@@ -248,6 +248,7 @@ class PatrolBotBridge(Node):
         self._odom_tf_timeout = float(
             self.get_parameter('odom_tf_timeout').value)
         self._odom_tf_stale = False
+        self._tf_send_lock = threading.Lock()
 
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
@@ -312,11 +313,20 @@ class PatrolBotBridge(Node):
             return
         if self._odom_tf_stale:
             self._odom_tf_stale = False
-            self.get_logger().info('odom->base_link resumed; SBC pose is fresh again.')
+            self.get_logger().info(
+                'odom->base_link resumed; SBC pose is fresh again.')
 
+        self._broadcast_odom_tf(x, y, th)
+
+    def _broadcast_odom_tf(self, x, y, th):
+        """Send one odom->base_link, stamped now.
+
+        Called from the 50 Hz timer in the spin thread and, on the first pose
+        after a gap, from the telemetry worker. The lock is what keeps those
+        two from interleaving into an out-of-order pair of transforms.
+        """
         q = get_quaternion_from_euler(th)
         t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'odom'
         t.child_frame_id = 'base_link'
         t.transform.translation.x = x
@@ -326,7 +336,9 @@ class PatrolBotBridge(Node):
         t.transform.rotation.y = q[1]
         t.transform.rotation.z = q[2]
         t.transform.rotation.w = q[3]
-        self.tf_broadcaster.sendTransform(t)
+        with self._tf_send_lock:
+            t.header.stamp = self.get_clock().now().to_msg()
+            self.tf_broadcaster.sendTransform(t)
 
     # ------------------------------------------------------------------
     # Connection management — background thread
@@ -534,11 +546,31 @@ class PatrolBotBridge(Node):
             vx = float(odom_fields[3])
             vth = float(odom_fields[4])
 
+            now = time.monotonic()
             with self._pose_lock:
+                # Was odom->base_link absent immediately before this pose --
+                # either never published, or withdrawn as stale?
+                tf_was_absent = (
+                    not self._pose_received or
+                    now - self._pose_at > self._odom_tf_timeout)
                 self._px, self._py, self._pth = x, y, th
                 self._vx, self._vth = vx, vth
                 self._pose_received = True
-                self._pose_at = time.monotonic()
+                self._pose_at = now
+
+            if tf_was_absent:
+                # Publish the transform here rather than waiting up to 20 ms
+                # for the next timer tick. /scan below is stamped from the same
+                # instant as /odom, so leaving it to the timer would let the
+                # first scan after a reconnect reach the costmap message filter
+                # with no transform covering it -- exactly the ordering this
+                # node publishes TF at 50 Hz to avoid. The timer keeps the
+                # transform alive from here on; this only leads it back in.
+                if self._odom_tf_stale:
+                    self._odom_tf_stale = False
+                    self.get_logger().info(
+                        'odom->base_link resumed; SBC pose is fresh again.')
+                self._broadcast_odom_tf(x, y, th)
 
             q = get_quaternion_from_euler(th)
             stamp = self.get_clock().now().to_msg()
@@ -558,8 +590,10 @@ class PatrolBotBridge(Node):
             odom_msg.twist.twist.angular.z = vth
             self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
 
-            # /scan — TF timer has been publishing 50 Hz in parallel, so the
-            # TF buffer already has entries before this scan is processed.
+            # /scan — the TF buffer already covers this scan: the timer has
+            # been publishing at 50 Hz in parallel during normal operation, and
+            # after a gap the block above has just re-broadcast the transform
+            # ahead of this publish.
             # Returns below SCAN_RANGE_MIN are dropped to +inf (invalid): the SICK
             # grazes the robot's own frame near -75 deg (~0.15 m, fixed self-
             # occlusion), which otherwise paints a permanent phantom obstacle

@@ -1,0 +1,17 @@
+# /amcl_pose pose.covariance, captured 2026-08-14T23:2x UTC+3 from the live docked robot
+# Command: ros2 topic echo /amcl_pose --once --field pose.covariance (inside patrolbot-bridge)
+# Containers up 3 days on patrolbot:lan-dds-dabeb879-20260811t133349z.
+# Diagonal: cov[0]=-7.861393e-10 (NEGATIVE), cov[7]=1.860600e-07, cov[35]=4.660659e-07
+# /patrolbot/dock_readiness at the same time: localization_valid: true,
+# blocking_reason: ready, dock_state: DOCKED_CONFIRMED.
+
+[-7.86139276e-10 -1.67516314e-09  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00 -1.67516314e-09  1.86059999e-07
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  0.00000000e+00
+  0.00000000e+00  0.00000000e+00  0.00000000e+00  4.66065943e-07]
+---

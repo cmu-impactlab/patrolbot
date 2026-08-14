@@ -126,6 +126,12 @@ class PatrolBotBridge(Node):
         self.declare_parameter('receive_timeout', 3.0)
         self.declare_parameter('reconnect_delay', 3.0)
         self.declare_parameter('control_timeout', 6.0)
+        # How stale the last SBC pose may get before odom->base_link is
+        # withdrawn. /odom arrives at ~22.7 Hz, so 0.5 s is about eleven
+        # missed samples: long enough not to flicker on a scheduling hiccup,
+        # and inside Nav2's transform_tolerance of 1.0 s so consumers see the
+        # transform disappear before they would have accepted a stale one.
+        self.declare_parameter('odom_tf_timeout', 0.5)
         self.server_ip = str(self.get_parameter('server_ip').value)
         self.server_port = int(self.get_parameter('server_port').value)
         self.CONNECT_TIMEOUT = float(
@@ -239,6 +245,9 @@ class PatrolBotBridge(Node):
         self._vx, self._vth = 0.0, 0.0
         self._pose_received = False
         self._pose_at = 0.0
+        self._odom_tf_timeout = float(
+            self.get_parameter('odom_tf_timeout').value)
+        self._odom_tf_stale = False
 
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
@@ -273,10 +282,37 @@ class PatrolBotBridge(Node):
     # ------------------------------------------------------------------
 
     def _tf_timer(self):
+        """Broadcast odom->base_link, but only while the pose is still real.
+
+        This timer runs at 50 Hz off the node's own clock, independent of the
+        SBC link, and it stamps each transform with `now`. Left ungated it
+        therefore republishes the last pose it ever saw, permanently fresh by
+        its header and increasingly wrong in fact, for as long as the node
+        lives. Every consumer that guards on TF age -- the costmaps, the
+        collision monitor, AMCL -- is satisfied by that stamp and told the
+        robot's position is current when nothing is measuring it.
+
+        Withdrawing the transform instead turns a silent wrong answer into a
+        TF lookup failure, which is a failure those consumers already know how
+        to handle.
+        """
         with self._pose_lock:
             if not self._pose_received:
                 return
+            age = time.monotonic() - self._pose_at
             x, y, th = self._px, self._py, self._pth
+
+        if age > self._odom_tf_timeout:
+            if not self._odom_tf_stale:
+                self._odom_tf_stale = True
+                self.get_logger().warning(
+                    f'odom->base_link withdrawn: no SBC pose for {age:.2f} s '
+                    f'(limit {self._odom_tf_timeout:.2f} s). Consumers will '
+                    f'report TF lookup failures until telemetry resumes.')
+            return
+        if self._odom_tf_stale:
+            self._odom_tf_stale = False
+            self.get_logger().info('odom->base_link resumed; SBC pose is fresh again.')
 
         q = get_quaternion_from_euler(th)
         t = TransformStamped()

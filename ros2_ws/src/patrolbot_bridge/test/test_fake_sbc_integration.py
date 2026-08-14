@@ -41,6 +41,14 @@ class FakeSbc:
         self.received = []
         self.malformed_ids = set()
         self.advertise_undock = advertise_undock
+        # Stops the telemetry stream while leaving the socket open: the SBC
+        # gone quiet, rather than the connection dropping.
+        self.telemetry_paused = False
+        # The undock scripts now run off the receive loop, so two threads write
+        # to the same socket. sendall is not atomic, and an interleaved write
+        # would split a protocol line down the middle.
+        self._send_lock = threading.Lock()
+        self._scripts = []
         # Dock observer state, mirrored into the AUX DOCK= section.
         self.dock_state = 'DOCKED_CONFIRMED'
         self.dock_phase = 0
@@ -73,7 +81,8 @@ class FakeSbc:
                 self._connection = connection
             try:
                 features = 'UNDOCK' if self.advertise_undock else ''
-                connection.sendall(
+                self._send(
+                    connection,
                     f'HELLO:PROTOCOL=2:FEATURES={features}\n'.encode('ascii'))
             except OSError:
                 pass
@@ -81,9 +90,9 @@ class FakeSbc:
             next_telemetry = 0.0
             while self.running:
                 now = time.monotonic()
-                if now >= next_telemetry:
+                if now >= next_telemetry and not self.telemetry_paused:
                     try:
-                        connection.sendall(self._telemetry())
+                        self._send(connection, self._telemetry())
                     except OSError:
                         break
                     next_telemetry = now + 0.05
@@ -135,40 +144,64 @@ class FakeSbc:
         elif verb == 'MOTOR_ENABLE' and len(fields) == 2:
             with self._lock:
                 self.motors_enabled = True
-            connection.sendall((
+            self._send(connection, (
                 f'ACK:MOTOR_ENABLE:{fields[1]}:ACCEPTED\n'
                 f'RESULT:MOTOR_ENABLE:{fields[1]}:OK:0:motors_enabled:0:1:0\n'
             ).encode('ascii'))
         elif verb == 'UNDOCK' and len(fields) == 6:
-            self._start_undock(connection, fields[1])
+            # Scripted off the receive loop. Both undock scripts sleep between
+            # frames, and running them inline froze this loop -- and so the
+            # telemetry stream -- for the whole operation, which meant the
+            # DOCK section carrying undock_active=1 was never sent while the
+            # undock was active. The real SBC keeps reporting throughout.
+            self._spawn(self._start_undock, connection, fields[1])
         elif verb == 'UNDOCK_CANCEL' and len(fields) == 2:
-            self._cancel_undock(connection, fields[1])
+            self._spawn(self._cancel_undock, connection, fields[1])
+
+    def _spawn(self, target, *args):
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        with self._lock:
+            self._scripts.append(thread)
+        thread.start()
+
+    def _send(self, connection, payload):
+        """Serialise writes so two threads cannot split a protocol line."""
+        with self._send_lock:
+            connection.sendall(payload)
 
     def _reply_charge_release(self, connection, request_id):
         if request_id in self.malformed_ids:
-            connection.sendall(b'RESULT:malformed\n')
+            self._send(connection, b'RESULT:malformed\n')
             return
         with self._lock:
             self.charge_state = 0
             self.motors_enabled = False
-        connection.sendall((
+        self._send(connection, (
             f'ACK:CHARGE_RELEASE:{request_id}:ACCEPTED\n'
             f'RESULT:CHARGE_RELEASE:{request_id}:OK:0:released:0:0:1\n'
         ).encode('ascii'))
 
     def _start_undock(self, connection, request_id):
-        connection.sendall(
-            f'ACK:UNDOCK:{request_id}:ACCEPTED\n'.encode('ascii'))
-        with self._lock:
-            self._active_undock = request_id
-            self.undock_active = True
-            self.dock_state = 'DEPARTING'
-        for index in range(self.undock_events):
-            distance = 0.1 * (index + 1)
-            connection.sendall((
-                f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:{distance:.4f}:'
-                f'0.0000:0.0000:3:1:99.0000:0:DEPARTING\n').encode('ascii'))
-            time.sleep(0.05)
+        # Runs on its own thread now, so it can outlive the socket when a test
+        # drops the connection or tears the harness down mid-undock. A closed
+        # peer is a normal end to the script, not an error.
+        try:
+            self._send(
+                connection,
+                f'ACK:UNDOCK:{request_id}:ACCEPTED\n'.encode('ascii'))
+            with self._lock:
+                self._active_undock = request_id
+                self.undock_active = True
+                self.dock_state = 'DEPARTING'
+            for index in range(self.undock_events):
+                distance = 0.1 * (index + 1)
+                self._send(connection, (
+                    f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:{distance:.4f}:'
+                    f'0.0000:0.0000:3:1:99.0000:0:DEPARTING\n'
+                ).encode('ascii'))
+                time.sleep(0.05)
+        except OSError:
+            return
         if self.undock_stall:
             # Never emits a terminal frame: exercises the bridge backstop.
             return
@@ -178,7 +211,8 @@ class FakeSbc:
                             else 'rear_path_blocked')
 
     def _cancel_undock(self, connection, target_id):
-        connection.sendall(
+        self._send(
+            connection,
             f'ACK:UNDOCK_CANCEL:{target_id}:ACCEPTED\n'.encode('ascii'))
         with self._lock:
             active = self._active_undock
@@ -199,7 +233,7 @@ class FakeSbc:
             phase = 6 if success else 7
             phase_name = 'HANDOFF_READY' if success else 'STOPPING'
         try:
-            connection.sendall((
+            self._send(connection, (
                 f'UNDOCK_RESULT:{request_id}:{"OK" if success else "ERROR"}:'
                 f'{code}:{message}:{phase}:{phase_name}:0.5300:0.0010:0.0020:'
                 f'3:{int(success)}:0:99.0000:1:'
@@ -229,6 +263,10 @@ class FakeSbc:
         except OSError:
             pass
         self._thread.join(timeout=2.0)
+        with self._lock:
+            scripts = list(self._scripts)
+        for script in scripts:
+            script.join(timeout=2.0)
 
 
 def wait_until(predicate, timeout=3.0):
@@ -481,3 +519,38 @@ def test_hardware_undock_is_refused_by_a_server_without_the_feature(
     assert not send_future.result().accepted
     assert not any(
         line.startswith('UNDOCK:') for _session, line in fake.received)
+
+
+def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
+    """A dead SBC link must remove odom->base_link, not re-stamp the last pose.
+
+    The TF timer runs at 50 Hz off its own clock and re-stamps whatever pose it
+    last saw, so an SBC outage produced a transform that was always perfectly
+    fresh by its header and increasingly wrong in fact. Every consumer that
+    checks TF age -- the costmaps, the collision monitor, AMCL -- was told the
+    robot's position was current. Dropping the transform makes them report a
+    lookup failure instead, which is the failure they know how to handle.
+    """
+    fake, bridge, client_node, _executor = harness
+    from tf2_msgs.msg import TFMessage
+
+    seen = []
+    client_node.create_subscription(
+        TFMessage, '/tf',
+        lambda msg: seen.extend(
+            t for t in msg.transforms if t.child_frame_id == 'base_link'),
+        10)
+    assert wait_until(lambda: len(seen) > 0), 'no odom->base_link to begin with'
+
+    # The SBC goes quiet with the socket still open. The last pose is now
+    # frozen, but the TF timer keeps ticking off its own clock.
+    fake.telemetry_paused = True
+    timeout = bridge.get_parameter('odom_tf_timeout').value
+    time.sleep(timeout + 0.3)
+    settled = len(seen)
+    time.sleep(0.5)   # 25 TF ticks at 50 Hz
+    assert len(seen) == settled, 'kept broadcasting a stale pose'
+
+    # It must resume when telemetry does, rather than latching off for good.
+    fake.telemetry_paused = False
+    assert wait_until(lambda: len(seen) > settled), 'never resumed'

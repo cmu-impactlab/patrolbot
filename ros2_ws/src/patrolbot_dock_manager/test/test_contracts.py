@@ -19,6 +19,7 @@ from patrolbot_dock_manager.contracts import (
     HARD_MAX_DISTANCE,
     HARD_MAX_SPEED,
     localization_position_limit,
+    planar_covariance_usable,
     precheck_failures,
     resume_failures,
     SafetySnapshot,
@@ -305,3 +306,50 @@ def test_docked_allowance_still_refuses_a_diverged_estimate():
     # Particle spread after a genuine loss of localization, at the dock.
     assert 4.0 > localization_position_limit(
         GENERAL_LIMIT, DOCKED_LIMIT, True, True)
+
+
+# The planar covariance diagonal sampled from the live robot on 2026-08-11 and
+# again on 2026-08-14. AMCL had frozen: every /amcl_pose sample was identical
+# and cov[0] was negative, which is not a covariance at all. The dock gate
+# reported localization_valid: true against it, because it only ever tested the
+# variances against an upper bound.
+FROZEN_FILTER_XX = -7.861393e-10
+FROZEN_FILTER_YY = 1.860600e-07
+FROZEN_FILTER_YAW = 4.660659e-07
+
+
+def test_a_negative_variance_is_not_a_covariance():
+    """The exact live sample that the old upper-bound-only gate accepted."""
+    assert not planar_covariance_usable(
+        FROZEN_FILTER_XX, FROZEN_FILTER_YY, FROZEN_FILTER_YAW)
+
+
+def test_every_planar_entry_is_checked_independently():
+    for xx, yy, yaw in (
+            (-1e-9, 0.01, 0.01),
+            (0.01, -1e-9, 0.01),
+            (0.01, 0.01, -1e-9)):
+        assert not planar_covariance_usable(xx, yy, yaw)
+
+
+def test_zero_variance_claims_certainty_no_filter_can_have():
+    assert not planar_covariance_usable(0.0, 0.01, 0.01)
+    assert not planar_covariance_usable(0.01, 0.0, 0.01)
+    assert not planar_covariance_usable(0.01, 0.01, 0.0)
+
+
+def test_non_finite_variance_is_refused():
+    for bad in (float('nan'), float('inf'), float('-inf')):
+        assert not planar_covariance_usable(bad, 0.01, 0.01)
+        assert not planar_covariance_usable(0.01, bad, 0.01)
+        assert not planar_covariance_usable(0.01, 0.01, bad)
+
+
+def test_a_healthy_filter_still_passes():
+    """Must not become a second variance limit — magnitude is not its job."""
+    assert planar_covariance_usable(0.01, 0.01, 0.01)
+    # The measured docked approach-axis variance: loose, but a real covariance.
+    assert planar_covariance_usable(DOCKED_X_VARIANCE, 0.001, 0.0003)
+    # A genuinely diverged filter is still *valid*; the limit refuses it, and
+    # that separation is deliberate.
+    assert planar_covariance_usable(9.0, 9.0, 3.0)

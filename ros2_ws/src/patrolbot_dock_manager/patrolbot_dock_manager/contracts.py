@@ -145,6 +145,47 @@ def localization_position_limit(
     return float(limit)
 
 
+def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
+    """Whether AMCL's planar variances describe a covariance at all.
+
+    Separate from `localization_position_limit`, and deliberately so: that
+    function asks whether the filter is *confident enough*, this one asks
+    whether its answer is *arithmetically meaningful*. A gate that only tests
+    an upper bound conflates the two, and a degenerate filter then passes it
+    the most easily of all — the smaller and more nonsensical the number, the
+    more comfortably it sits under the limit.
+
+    That is not hypothetical. Sampled from the docked robot on 2026-08-11, and
+    unchanged on 2026-08-14:
+
+        cov[0]  (xx)  = -7.861393e-10   <- negative
+        cov[7]  (yy)  =  1.860600e-07
+        cov[35] (yaw) =  4.660659e-07
+
+    Every /amcl_pose sample over 60 s was byte-identical, so the filter was
+    frozen rather than merely overconfident, and it had not self-recovered.
+    `/patrolbot/dock_readiness` reported `localization_valid: true` and
+    `ready_for_undock: true` against that — i.e. the robot would have been
+    cleared to reverse off the charger on a pose estimate no filter was
+    maintaining.
+
+    Only the three planar entries are checked. A 2-D filter leaves z, roll and
+    pitch at exactly zero as a matter of course, so testing those would refuse
+    every healthy AMCL pose there has ever been.
+
+    Zero is refused along with the negatives: a variance of exactly zero claims
+    perfect certainty, which a particle filter cannot honestly produce, and it
+    is the value a never-populated matrix carries.
+    """
+    for value in (xx, yy, yaw_yaw):
+        value = float(value)
+        # NaN fails both comparisons; the infinities are caught by the same
+        # test that rejects them as a magnitude.
+        if not value > 0.0 or value == float('inf'):
+            return False
+    return True
+
+
 def precheck_failures(
         state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
     """Validate the Pi-side gates before asking the SBC to undock.

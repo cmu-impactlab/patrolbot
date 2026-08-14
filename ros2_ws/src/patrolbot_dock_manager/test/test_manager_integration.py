@@ -86,6 +86,8 @@ class FakeWorld(Node):
         # Scripted AMCL output. The defaults are a tight fix at the configured
         # dock pose; tests move them to exercise the docked variance allowance.
         self.position_variance = 0.01
+        self.cross_variance = 0.01
+        self.yaw_variance = 0.01
         self.pose_x = 0.0
         self.pose_y = 0.0
 
@@ -274,8 +276,8 @@ class FakeWorld(Node):
             pose.pose.pose.position.y = self.pose_y
             pose.pose.pose.orientation.w = 1.0
             pose.pose.covariance[0] = self.position_variance
-            pose.pose.covariance[7] = 0.01
-            pose.pose.covariance[35] = 0.01
+            pose.pose.covariance[7] = self.cross_variance
+            pose.pose.covariance[35] = self.yaw_variance
             self.pose_pub.publish(pose)
 
     def destroy_node(self):
@@ -575,6 +577,31 @@ def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
     # capture tolerance: the allowance must not apply any more.
     world.pose_x = 5.0
     assert wait_until(lambda: not manager._snapshot().localization_valid)
+
+
+def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
+    """The live 2026-08-11 defect, end to end through the published gate.
+
+    A negative variance is far *below* every limit, so the upper-bound test
+    admitted it and `ready_for_undock` went true on a filter that had stopped
+    updating. The robot would have been cleared to reverse off the charger.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+    world.position_variance = -7.861393e-10
+    world.cross_variance = 1.860600e-07
+    world.yaw_variance = 4.660659e-07
+    assert wait_until(lambda: not manager._snapshot().localization_valid)
+    assert not precheck_ready(manager)
+
+    # And it recovers when AMCL does, rather than latching off.
+    world.position_variance = 0.01
+    world.cross_variance = 0.01
+    world.yaw_variance = 0.01
+    assert wait_until(lambda: manager._snapshot().localization_valid)
 
 
 def precheck_ready(manager):

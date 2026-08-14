@@ -29,6 +29,7 @@ from patrolbot_dock_manager.contracts import (
     dock_pose_initialization_failures,
     DOCK_UNKNOWN,
     localization_position_limit,
+    planar_covariance_usable,
     precheck_failures,
     resume_failures,
     SafetySnapshot,
@@ -902,6 +903,14 @@ class DockManager(Node):
             pose.pose.pose.orientation.z, pose.pose.pose.orientation.w,
             covariance[0], covariance[7], covariance[35])
         if not all(math.isfinite(value) for value in values):
+            return False, False
+        # Before asking whether the filter is confident enough, ask whether it
+        # is reporting a covariance at all. The limit test below is an upper
+        # bound only, so a degenerate diagonal passes it the most easily of
+        # all. Observed live on the docked robot with cov[0] negative and the
+        # gate reporting ready_for_undock: true.
+        if not planar_covariance_usable(
+                covariance[0], covariance[7], covariance[35]):
             return False, False
         configured = bool(self.get_parameter('dock_pose_configured').value)
         at_dock = False

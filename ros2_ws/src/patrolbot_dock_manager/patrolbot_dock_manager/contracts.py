@@ -155,15 +155,20 @@ def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
     the most easily of all — the smaller and more nonsensical the number, the
     more comfortably it sits under the limit.
 
-    That is not hypothetical. Sampled from the docked robot on 2026-08-11, and
-    unchanged on 2026-08-14:
+    That is not hypothetical. Two independent captures from the docked robot,
+    three days and a container restart apart:
 
-        cov[0]  (xx)  = -7.861393e-10   <- negative
-        cov[7]  (yy)  =  1.860600e-07
-        cov[35] (yaw) =  4.660659e-07
+        2026-08-11              2026-08-14
+        cov[0]  (xx)  =  8.253264e-10    -7.861393e-10  <- negative
+        cov[7]  (yy)  = -6.219768e-10     1.860600e-07
+        cov[35] (yaw) = -6.128431e-14     4.660659e-07
 
-    Every /amcl_pose sample over 60 s was byte-identical, so the filter was
-    frozen rather than merely overconfident, and it had not self-recovered.
+    Note which entries are negative: they are not the same ones. This is a
+    recurring degenerate condition rather than one stuck sample, and it is why
+    all three entries are tested rather than whichever one happened to be
+    caught first. On 2026-08-11 all 188 /amcl_pose samples over 60 s were
+    byte-identical, so the filter was frozen rather than merely overconfident,
+    and it had not self-recovered.
     `/patrolbot/dock_readiness` reported `localization_valid: true` and
     `ready_for_undock: true` against that — i.e. the robot would have been
     cleared to reverse off the charger on a pose estimate no filter was

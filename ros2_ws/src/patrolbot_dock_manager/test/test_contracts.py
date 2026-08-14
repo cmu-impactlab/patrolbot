@@ -308,20 +308,24 @@ def test_docked_allowance_still_refuses_a_diverged_estimate():
         GENERAL_LIMIT, DOCKED_LIMIT, True, True)
 
 
-# The planar covariance diagonal sampled from the live robot on 2026-08-11 and
-# again on 2026-08-14. AMCL had frozen: every /amcl_pose sample was identical
-# and cov[0] was negative, which is not a covariance at all. The dock gate
-# reported localization_valid: true against it, because it only ever tested the
-# variances against an upper bound.
-FROZEN_FILTER_XX = -7.861393e-10
-FROZEN_FILTER_YY = 1.860600e-07
-FROZEN_FILTER_YAW = 4.660659e-07
+# Two independent planar diagonals captured from the live docked robot, three
+# days and a container restart apart. Both are degenerate, but not in the same
+# entries -- so this is a recurring condition rather than one stuck sample. The
+# dock gate reported localization_valid: true against both, because it only
+# ever tested the variances against an upper bound, which a negative number
+# passes more easily than a real one.
+DEGENERATE_LIVE_DIAGONALS = (
+    # 2026-08-11: 188 of 188 samples over 60 s, all byte-identical.
+    (8.253264e-10, -6.219768e-10, -6.128431e-14),
+    # 2026-08-14, after a container restart.
+    (-7.861393e-10, 1.860600e-07, 4.660659e-07),
+)
 
 
-def test_a_negative_variance_is_not_a_covariance():
-    """The exact live sample that the old upper-bound-only gate accepted."""
-    assert not planar_covariance_usable(
-        FROZEN_FILTER_XX, FROZEN_FILTER_YY, FROZEN_FILTER_YAW)
+@pytest.mark.parametrize('xx,yy,yaw', DEGENERATE_LIVE_DIAGONALS)
+def test_a_negative_variance_is_not_a_covariance(xx, yy, yaw):
+    """The exact live samples that the old upper-bound-only gate accepted."""
+    assert not planar_covariance_usable(xx, yy, yaw)
 
 
 def test_every_planar_entry_is_checked_independently():

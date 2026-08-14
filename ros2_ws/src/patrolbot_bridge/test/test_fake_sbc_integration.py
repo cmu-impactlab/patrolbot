@@ -194,6 +194,10 @@ class FakeSbc:
                 self.undock_active = True
                 self.dock_state = 'DEPARTING'
             for index in range(self.undock_events):
+                with self._lock:
+                    if self._active_undock != request_id:
+                        # A cancel landed and already sent the terminal frame.
+                        return
                 distance = 0.1 * (index + 1)
                 self._send(connection, (
                     f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:{distance:.4f}:'
@@ -224,6 +228,12 @@ class FakeSbc:
 
     def _finish_undock(self, connection, request_id, success, code, message):
         with self._lock:
+            if self._active_undock != request_id:
+                # Exactly one terminal frame per request, as the real SBC
+                # emits. The event script and a cancel run on separate threads
+                # and would otherwise both report an outcome for the same id --
+                # and disagree about it.
+                return
             self._active_undock = None
             self.undock_active = False
             self.dock_state = (

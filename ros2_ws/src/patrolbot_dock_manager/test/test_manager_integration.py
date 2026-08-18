@@ -1,4 +1,5 @@
-"""Isolated ROS integration tests for the undock orchestrator.
+"""
+Isolated ROS integration tests for the undock orchestrator.
 
 The fake world provides a HardwareUndock server standing in for the SBC. The
 manager under test never commands motion for contact separation, so what these
@@ -16,7 +17,7 @@ from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.dock_manager import DockManager
 from patrolbot_interfaces.action import HardwareUndock, Undock
-from patrolbot_interfaces.msg import BaseState
+from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
 import pytest
 import rclpy
@@ -295,10 +296,9 @@ def wait_until(predicate, timeout=5.0):
     return False
 
 
-@pytest.fixture
-def harness():
+def _build_harness(extra_parameter_overrides=()):
     rclpy.init()
-    manager = DockManager(parameter_overrides=[
+    parameter_overrides = [
         Parameter('dock_pose_configured', value=True),
         Parameter('dock_pose_x', value=0.0),
         Parameter('dock_pose_y', value=0.0),
@@ -312,7 +312,9 @@ def harness():
         Parameter('post_undock_localization_timeout', value=0.75),
         Parameter('handoff_timeout', value=0.75),
         Parameter('dock_pose_initialization_timeout', value=1.0),
-    ])
+    ]
+    parameter_overrides.extend(extra_parameter_overrides)
+    manager = DockManager(parameter_overrides=parameter_overrides)
     world = FakeWorld()
     nodes = [
         world,
@@ -353,6 +355,20 @@ def harness():
         node.destroy_node()
     spin_thread.join(timeout=2.0)
     rclpy.shutdown()
+
+
+@pytest.fixture
+def harness():
+    """Run the manager against the shared default fake world."""
+    yield from _build_harness()
+
+
+@pytest.fixture
+def harness_with_degenerate_override():
+    """Run the same fake world with the supervised override enabled."""
+    yield from _build_harness([
+        Parameter('allow_degenerate_localization', value=True),
+    ])
 
 
 def wait_future(future, timeout=6.0):
@@ -535,7 +551,8 @@ def test_readiness_separates_undock_readiness_from_docking_inhibition(harness):
 
 
 def test_docked_localization_is_refreshed_while_idle(harness):
-    """PB-AUDIT-026: a stationary AMCL must still be asked, or readiness lies.
+    """
+    PB-AUDIT-026: a stationary AMCL must still be asked, or readiness lies.
 
     Without this the docked pose is permanently older than `sensor_timeout` and
     idle readiness reports "localization invalid" — the blocker the operator saw
@@ -580,7 +597,8 @@ def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
 
 
 def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
-    """The live 2026-08-11 defect, end to end through the published gate.
+    """
+    The live 2026-08-11 defect, end to end through the published gate.
 
     A negative variance is far *below* every limit, so the upper-bound test
     admitted it and `ready_for_undock` went true on a filter that had stopped
@@ -607,3 +625,114 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
 def precheck_ready(manager):
     from patrolbot_dock_manager.contracts import precheck_failures
     return precheck_failures(manager._snapshot()) == []
+
+
+# The live degenerate diagonal, captured from the docked robot 2026-08-14 and
+# already pinned by test_a_frozen_filter_is_refused_however_small_its_variance.
+DEGENERATE = (-7.861393e-10, 1.860600e-07, 4.660659e-07)
+
+
+def _drive_degenerate(world):
+    """Put the fake AMCL into the exact live degenerate state."""
+    world.position_variance, world.cross_variance, world.yaw_variance = (
+        DEGENERATE)
+
+
+def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
+    """
+    The override must never be the default.
+
+    It admits a filter that has stopped updating, so the safe state has to be
+    the one you get by not knowing the parameter exists. A default flip here
+    would silently undo the whole guard on every robot that never sets it.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+    _drive_degenerate(world)
+    assert wait_until(lambda: not manager._snapshot().localization_valid)
+    assert not precheck_ready(manager)
+
+
+def test_the_override_admits_a_degenerate_covariance_when_enabled(
+        harness_with_degenerate_override):
+    """
+    With the override on, the live degenerate diagonal no longer blocks undock.
+
+    The operator is on site and wants to move the robot off the charger while
+    AMCL is in its recurring degenerate state. This does not fix the filter and
+    is not meant to: it converts a hard refusal into a supervised decision.
+    """
+    manager, world, _client_node = harness_with_degenerate_override
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+    _drive_degenerate(world)
+    # The fake publishes at 25 Hz, and the manager starts from a *healthy*
+    # pose. Asserting validity the instant after driving the world degenerate
+    # would be satisfied by the pre-degenerate sample and prove nothing, so
+    # wait out the propagation and then require validity to HOLD. The
+    # companion default-off test drives the same world state and shows the
+    # snapshot going invalid well inside this window.
+    time.sleep(0.6)
+    for _ in range(10):
+        assert manager._snapshot().localization_valid, (
+            'override did not admit the degenerate covariance')
+        time.sleep(0.05)
+    assert precheck_ready(manager)
+
+
+def test_the_override_still_refuses_a_covariance_that_is_not_a_number(
+        harness_with_degenerate_override):
+    """
+    Overriding "degenerate" must not also override "garbage".
+
+    A negative variance is a real number the rest of the gate can still reason
+    about; NaN and inf are not. They poison every comparison downstream —
+    every `<` against a limit is False for NaN, so a non-finite pose would sail
+    through the very checks that are supposed to bound it. This boundary stays
+    fail-closed no matter what the override says.
+    """
+    manager, world, _client_node = harness_with_degenerate_override
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+    for bad in (float('nan'), float('inf'), float('-inf')):
+        world.position_variance = bad
+        world.cross_variance = 0.01
+        world.yaw_variance = 0.01
+        assert wait_until(
+            lambda: not manager._snapshot().localization_valid), (
+            f'a {bad} variance was admitted by the override')
+        world.position_variance = 0.01
+        assert wait_until(lambda: manager._snapshot().localization_valid)
+
+
+def test_an_engaged_override_is_visible_in_the_published_readiness(
+        harness_with_degenerate_override):
+    """
+    The operator has to be able to see that the gate was overridden.
+
+    `ready_for_undock: true` means something different when it was reached by
+    suppressing a guard, and the difference must not be invisible to whoever
+    reads the dashboard. This is reported in `blocking_reason`, which is a
+    string that already exists — adding a message field would change the
+    DockReadiness interface hash and detach the dashboard (PB-AUDIT-025).
+    """
+    manager, world, client_node = harness_with_degenerate_override
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+
+    seen = []
+    client_node.create_subscription(
+        DockReadiness, '/patrolbot/dock_readiness',
+        lambda msg: seen.append(msg), 10)
+
+    _drive_degenerate(world)
+    assert wait_until(
+        lambda: bool(seen) and 'override' in seen[-1].blocking_reason.lower()), (
+        'an engaged override left no trace in the published readiness')

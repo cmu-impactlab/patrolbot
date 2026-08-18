@@ -1,4 +1,5 @@
-"""Fail-closed, cancelable PatrolBot undock orchestrator.
+"""
+Fail-closed, cancelable PatrolBot undock orchestrator.
 
 Contact separation is not performed here. The SBC owns charger release, motor
 enable, reverse velocity, encoder displacement, charge-state recovery, stall
@@ -96,6 +97,9 @@ class DockManager(Node):
         self.declare_parameter('dock_position_tolerance', 0.25)
         self.declare_parameter('dock_yaw_tolerance', 0.35)
         self.declare_parameter('max_position_variance', 0.25)
+        # A frozen filter remains a refusal unless an on-site operator makes
+        # the exceptional decision to accept its finite covariance values.
+        self.declare_parameter('allow_degenerate_localization', False)
         # Seated on the charger, AMCL's position variance along the approach
         # axis never comes down: the dock fills the laser's near field and the
         # scan cannot constrain that one direction. Measured 0.57-0.63 over 70
@@ -300,6 +304,10 @@ class DockManager(Node):
         message.localization_age = float(pose_age)
         message.manager_state = state_name
         message.blocking_reason = '; '.join(failures) if failures else 'ready'
+        if snapshot.degenerate_localization_override_engaged:
+            message.blocking_reason += (
+                '; safety gate override: degenerate localization covariance '
+                'accepted')
         # Undock readiness and docking inhibition are different facts with
         # different causes. After a successful undock the robot is not ready to
         # undock (it is already clear) and not allowed to dock (the inhibition
@@ -569,7 +577,8 @@ class DockManager(Node):
         return mapping.get(code, Undock.Result.MOTION_FAILED)
 
     def _run_hardware_undock(self, goal_handle, correlation_id):
-        """Request the SBC operation and relay its progress.
+        """
+        Request the SBC operation and relay its progress.
 
         Returns (ok, reason, result). The Pi does not monitor the reverse: the
         SBC evaluates rear sonar, bumpers, stall, displacement and charge state
@@ -631,7 +640,8 @@ class DockManager(Node):
 
     def _wait_for_handoff(
             self, goal_handle, expected_session, timeout, correlation_id):
-        """Wait for the published state to agree that Nav2 may take control.
+        """
+        Wait for the published state to agree that Nav2 may take control.
 
         Returns (ok, reason). The SBC's terminal frame is authoritative and has
         already been checked; this confirms the same thing through the
@@ -700,7 +710,8 @@ class DockManager(Node):
         return False
 
     def _docked_localization_refresh(self):
-        """Keep a docked robot's AMCL pose fresh enough to judge readiness.
+        """
+        Keep a docked robot's AMCL pose fresh enough to judge readiness.
 
         Runs only while the SBC reports mated plates and no undock goal is in
         flight; an active goal drives its own forced refreshes, and a robot that
@@ -727,7 +738,8 @@ class DockManager(Node):
 
     def _run_spin(
             self, goal_handle, expected_session, target_yaw, correlation_id):
-        """Turn away from the dock through Nav2, on the full safety chain.
+        """
+        Turn away from the dock through Nav2, on the full safety chain.
 
         Deliberately not an SBC manoeuvre: the SBC is blind to the costmap, the
         laser and the collision monitor, and a 180 degree in-place turn is a
@@ -837,6 +849,8 @@ class DockManager(Node):
 
         localization_valid, dock_pose_valid = self._localization_health(
             pose, docked=self._dock_contact_confirmed())
+        degenerate_override_engaged = (
+            self._degenerate_localization_override_engaged(pose))
         stationary = False
         if odom is not None:
             stationary = (
@@ -862,6 +876,8 @@ class DockManager(Node):
             localization_fresh=pose_age <= timeout,
             localization_valid=localization_valid and pose_age <= timeout,
             dock_pose_valid=dock_pose_valid and pose_age <= timeout,
+            degenerate_localization_override_engaged=(
+                degenerate_override_engaged),
             command_path_valid=self._path_valid,
             navigation_idle=navigation_idle,
             # Mirrored from the SBC. Absent or stale telemetry reads as UNKNOWN
@@ -879,7 +895,8 @@ class DockManager(Node):
         )
 
     def _dock_contact_confirmed(self):
-        """Report whether the SBC's own dock observer sees mated plates.
+        """
+        Report whether the SBC's own dock observer sees mated plates.
 
         Fail-closed on purpose: missing or stale `BaseState` reads as not
         docked, so the docked variance allowance below can never be granted on
@@ -909,9 +926,17 @@ class DockManager(Node):
         # bound only, so a degenerate diagonal passes it the most easily of
         # all. Observed live on the docked robot with cov[0] negative and the
         # gate reporting ready_for_undock: true.
-        if not planar_covariance_usable(
-                covariance[0], covariance[7], covariance[35]):
+        degenerate = not planar_covariance_usable(
+            covariance[0], covariance[7], covariance[35])
+        override_engaged = (
+            self._degenerate_localization_override_engaged(pose))
+        if degenerate and not override_engaged:
             return False, False
+        if override_engaged:
+            self.get_logger().warning(
+                'SAFETY GATE OVERRIDE: accepting a degenerate AMCL planar '
+                'covariance',
+                throttle_duration_sec=10.0)
         configured = bool(self.get_parameter('dock_pose_configured').value)
         at_dock = False
         if configured:
@@ -947,6 +972,22 @@ class DockManager(Node):
         if not configured:
             return valid, False
         return valid, bool(valid and at_dock)
+
+    def _degenerate_localization_override_engaged(self, pose):
+        if (pose is None or not self.get_parameter(
+                'allow_degenerate_localization').value):
+            return False
+        covariance = pose.pose.covariance
+        values = (
+            pose.pose.pose.position.x, pose.pose.pose.position.y,
+            pose.pose.pose.orientation.z, pose.pose.pose.orientation.w,
+            covariance[0], covariance[7], covariance[35])
+        # A non-finite sample never reaches the overridable gate, so describing
+        # the override as engaged for it would make readiness telemetry lie.
+        return bool(
+            all(math.isfinite(value) for value in values) and
+            not planar_covariance_usable(
+                covariance[0], covariance[7], covariance[35]))
 
     @staticmethod
     def _yaw(quaternion):

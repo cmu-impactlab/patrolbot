@@ -1,4 +1,5 @@
-"""Pure safety contracts shared by the dock manager and offline tests.
+"""
+Pure safety contracts shared by the dock manager and offline tests.
 
 Physical separation from the dock is owned by the SBC. Everything here is a
 Pi-side concern: whether it is sensible to ask for that operation at all, and
@@ -78,6 +79,9 @@ class SafetySnapshot:
     localization_fresh: bool = False
     localization_valid: bool = False
     dock_pose_valid: bool = False
+    # Operators must be able to distinguish ordinary readiness from readiness
+    # reached by suppressing a safety refusal without changing the ROS type.
+    degenerate_localization_override_engaged: bool = False
     command_path_valid: bool = False
     navigation_idle: bool = False
     # SBC-owned dock ownership. Absent or stale telemetry reads as UNKNOWN.
@@ -118,7 +122,8 @@ def validate_goal(distance: float, speed: float, validation_mode: bool) -> List[
 def localization_position_limit(
         limit: float, docked_limit: float,
         dock_contact_confirmed: bool, at_dock_pose: bool) -> float:
-    """Which AMCL position-variance limit applies to the current pose.
+    """
+    Which AMCL position-variance limit applies to the current pose.
 
     PB-AUDIT-026. Seated on the charger, AMCL's variance along the approach axis
     is permanently loose — measured 0.57-0.63 while the cross-axis stayed at
@@ -146,7 +151,8 @@ def localization_position_limit(
 
 
 def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
-    """Whether AMCL's planar variances describe a covariance at all.
+    """
+    Whether AMCL's planar variances describe a covariance at all.
 
     Separate from `localization_position_limit`, and deliberately so: that
     function asks whether the filter is *confident enough*, this one asks
@@ -193,7 +199,8 @@ def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
 
 def precheck_failures(
         state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
-    """Validate the Pi-side gates before asking the SBC to undock.
+    """
+    Validate the Pi-side gates before asking the SBC to undock.
 
     Physical readiness is the SBC's call: it owns the bumpers, the rear sonar,
     the charger and the motors, and refuses the operation itself if any of them
@@ -235,7 +242,8 @@ def precheck_failures(
 
 
 def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
-    """Validate that Nav2 may take control after the SBC hands off.
+    """
+    Validate that Nav2 may take control after the SBC hands off.
 
     Called for a bounded convergence window after the hardware undock reports
     success. The SBC leaves the motors live at zero velocity precisely so this
@@ -267,7 +275,8 @@ def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
 
 
 def automatic_docking_allowed(state: SafetySnapshot) -> bool:
-    """Report whether a mission may send the robot back to the dock.
+    """
+    Report whether a mission may send the robot back to the dock.
 
     The SBC publishes the inhibition but has no autonomous dock operation, so
     nothing on the hardware side enforces it. This is the check that does.
@@ -283,7 +292,8 @@ def automatic_docking_allowed(state: SafetySnapshot) -> bool:
 
 
 def dock_pose_initialization_failures(state: SafetySnapshot) -> List[str]:
-    """Validate a zero-motion, operator-requested dock-pose initialization.
+    """
+    Validate a zero-motion, operator-requested dock-pose initialization.
 
     This deliberately does not require an existing localization estimate or a
     clear E-stop: those are the facts being recovered/physically clarified at

@@ -1,4 +1,5 @@
-"""Exhaustive fail-closed checks for the Pi-side undock safety contracts.
+"""
+Exhaustive fail-closed checks for the Pi-side undock safety contracts.
 
 Physical separation is the SBC's job, so what is tested here is the Pi's own
 responsibility: whether it is sensible to ask for the operation, whether Nav2

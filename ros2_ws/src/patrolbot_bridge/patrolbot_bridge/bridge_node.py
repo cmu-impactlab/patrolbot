@@ -19,6 +19,7 @@ from patrolbot_bridge.control_protocol import (
     parse_reply,
     valid_request_id,
 )
+from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.safety_telemetry import (
     battery_diagnostic,
     BATTERY_MIN_OPERATING_VOLTS,
@@ -132,6 +133,15 @@ class PatrolBotBridge(Node):
         # and inside Nav2's transform_tolerance of 1.0 s so consumers see the
         # transform disappear before they would have accepted a stale one.
         self.declare_parameter('odom_tf_timeout', 0.5)
+        # config/bridge_params.yaml records these as an operator MEASUREMENT
+        # (2026-08-18), not a tuning knob.
+        self.declare_parameter('odom_sigma_xy_per_m', 0.016)
+        self.declare_parameter('odom_sigma_yaw_per_rad', 0.014)
+        self.declare_parameter('odom_sigma_yaw_per_m', 0.004)
+        self.declare_parameter('odom_sigma_vx', 0.02)
+        self.declare_parameter('odom_sigma_vyaw', 0.02)
+        self.declare_parameter('odom_min_variance', 1.0e-6)
+        self.declare_parameter('odom_max_variance', 1.0)
         self.server_ip = str(self.get_parameter('server_ip').value)
         self.server_port = int(self.get_parameter('server_port').value)
         self.CONNECT_TIMEOUT = float(
@@ -247,6 +257,20 @@ class PatrolBotBridge(Node):
         self._pose_at = 0.0
         self._odom_tf_timeout = float(
             self.get_parameter('odom_tf_timeout').value)
+        self._odom_covariance = OdomCovariance(
+            sigma_xy_per_m=float(
+                self.get_parameter('odom_sigma_xy_per_m').value),
+            sigma_yaw_per_rad=float(
+                self.get_parameter('odom_sigma_yaw_per_rad').value),
+            sigma_yaw_per_m=float(
+                self.get_parameter('odom_sigma_yaw_per_m').value),
+            sigma_vx=float(self.get_parameter('odom_sigma_vx').value),
+            sigma_vyaw=float(self.get_parameter('odom_sigma_vyaw').value),
+            min_variance=float(
+                self.get_parameter('odom_min_variance').value),
+            max_variance=float(
+                self.get_parameter('odom_max_variance').value),
+        )
         self._odom_tf_stale = False
         self._tf_send_lock = threading.Lock()
 
@@ -283,7 +307,8 @@ class PatrolBotBridge(Node):
     # ------------------------------------------------------------------
 
     def _tf_timer(self):
-        """Broadcast odom->base_link, but only while the pose is still real.
+        """
+        Broadcast odom->base_link, but only while the pose is still real.
 
         This timer runs at 50 Hz off the node's own clock, independent of the
         SBC link, and it stamps each transform with `now`. Left ungated it
@@ -319,7 +344,8 @@ class PatrolBotBridge(Node):
         self._broadcast_odom_tf(x, y, th)
 
     def _broadcast_odom_tf(self, x, y, th):
-        """Send one odom->base_link, stamped now.
+        """
+        Send one odom->base_link, stamped now.
 
         Called from the 50 Hz timer in the spin thread and, on the first pose
         after a gap, from the telemetry worker. The lock is what keeps those
@@ -372,6 +398,8 @@ class PatrolBotBridge(Node):
                     # re-announces its capabilities on every accept.
                     self._server_hello = None
                     session = self._session_generation
+                with self._pose_lock:
+                    self._odom_covariance.reset()
                 self.get_logger().info('Connected to SBC server.')
                 self._receive_loop(sock)
             except Exception as e:
@@ -557,6 +585,9 @@ class PatrolBotBridge(Node):
                 self._vx, self._vth = vx, vth
                 self._pose_received = True
                 self._pose_at = now
+                self._odom_covariance.update(x, y, th)
+                pose_covariance = self._odom_covariance.pose_covariance()
+                twist_covariance = self._odom_covariance.twist_covariance()
 
             if tf_was_absent:
                 # Publish the transform here rather than waiting up to 20 ms
@@ -588,6 +619,8 @@ class PatrolBotBridge(Node):
             odom_msg.pose.pose.orientation.w = q[3]
             odom_msg.twist.twist.linear.x = vx
             odom_msg.twist.twist.angular.z = vth
+            odom_msg.pose.covariance = pose_covariance
+            odom_msg.twist.covariance = twist_covariance
             self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
 
             # /scan — the TF buffer already covers this scan: the timer has

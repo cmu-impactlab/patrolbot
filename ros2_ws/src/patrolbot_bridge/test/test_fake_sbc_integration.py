@@ -58,6 +58,9 @@ class FakeSbc:
         self.redock_inhibited = False
         # Scripted undock behaviour.
         self.undock_events = 3
+        # Reported ARIA pose. Settable so a test can drive the fake robot and
+        # watch what that does to the covariance on the wire.
+        self.odom_pose = (0.0, 0.0, 0.0)
         self.undock_should_succeed = True
         self.undock_stall = False
         self._active_undock = None
@@ -128,8 +131,9 @@ class FakeSbc:
                 f'{int(self.undock_active)},0,99.0,1,'
                 f'{int(self.redock_inhibited)},0,'
                 f'{int(self.profile_commissioned)}')
+            odom_x, odom_y, odom_th = self.odom_pose
         return (
-            'ODOM:0,0,0,0,0|LASER:1.0,1.0,1.0\n'
+            f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:1.0,1.0,1.0\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
             f'DOCK={dock}\n').encode('ascii')
@@ -537,7 +541,8 @@ def test_hardware_undock_is_refused_by_a_server_without_the_feature(
 
 
 def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
-    """A dead SBC link must remove odom->base_link, not re-stamp the last pose.
+    """
+    A dead SBC link must remove odom->base_link, not re-stamp the last pose.
 
     The TF timer runs at 50 Hz off its own clock and re-stamps whatever pose it
     last saw, so an SBC outage produced a transform that was always perfectly
@@ -572,7 +577,8 @@ def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
 
 
 def test_the_transform_leads_the_scan_out_of_a_telemetry_gap(harness):
-    """After a gap the first scan must not outrun its transform.
+    """
+    After a gap the first scan must not outrun its transform.
 
     /odom and /scan are published from the telemetry worker the moment a frame
     arrives, while TF came only from a 50 Hz timer on a different thread. With
@@ -609,3 +615,101 @@ def test_the_transform_leads_the_scan_out_of_a_telemetry_gap(harness):
     assert wait_until(lambda: 'scan' in events), 'no scan after the gap'
     assert events[0] == 'tf', (
         f'first frame out of the gap was {events[0]!r}, not the transform')
+
+
+def test_odom_publishes_a_usable_covariance_not_a_block_of_zeros(harness):
+    """
+    /odom carried 36 zeros in both blocks, which is worse than no answer.
+
+    Zero covariance is not "unknown": it asserts the wheel odometry is exact,
+    and the matrix is singular, so an estimator that weights the measurement
+    by inverting it cannot use the message at all. Everything downstream of
+    this bridge that wants to reason about odometry quality -- an EKF, a
+    localization health check -- needs real numbers on the wire.
+    """
+    fake, bridge, client_node, _executor = harness
+    from nav_msgs.msg import Odometry
+    from patrolbot_bridge.odom_covariance import UNOBSERVED_VARIANCE
+
+    seen = []
+    client_node.create_subscription(
+        Odometry, '/odom', lambda msg: seen.append(msg), 10)
+    assert wait_until(lambda: len(seen) > 0), 'no /odom at all'
+
+    pose = list(seen[-1].pose.covariance)
+    twist = list(seen[-1].twist.covariance)
+    assert len(pose) == 36 and len(twist) == 36
+
+    # x, y and yaw are measured, so they carry a real, positive variance.
+    for axis in (0, 7, 35):
+        assert pose[axis] > 0.0, f'pose diagonal {axis} still zero'
+        assert twist[axis] > 0.0, f'twist diagonal {axis} still zero'
+
+    # z, roll and pitch are not measured by a planar base, and must say so.
+    for axis in (14, 21, 28):
+        assert pose[axis] == UNOBSERVED_VARIANCE
+
+    # Nothing here estimates a cross-correlation, so none is claimed.
+    diagonal = {0, 7, 14, 21, 28, 35}
+    assert all(pose[i] == 0.0 for i in range(36) if i not in diagonal)
+
+
+def test_odom_pose_covariance_grows_as_the_robot_drives(harness):
+    """
+    Dead reckoning drifts, and the message has to admit it over time.
+
+    A constant covariance would claim the pose is as trustworthy at the far
+    end of a patrol as it was at the dock -- the one thing wheel odometry is
+    guaranteed not to be.
+    """
+    fake, bridge, client_node, _executor = harness
+    from nav_msgs.msg import Odometry
+
+    seen = []
+    client_node.create_subscription(
+        Odometry, '/odom', lambda msg: seen.append(msg), 50)
+    assert wait_until(lambda: len(seen) > 0)
+    at_rest = seen[-1].pose.covariance[0]
+
+    # Drive the fake robot forward in steps small enough to be real motion
+    # rather than a rejected discontinuity.
+    for step in range(1, 21):
+        fake.odom_pose = (0.05 * step, 0.0, 0.0)
+        time.sleep(0.05)
+
+    assert wait_until(lambda: seen[-1].pose.covariance[0] > at_rest), (
+        'covariance never grew despite a metre of driving')
+
+
+def test_odom_covariance_restarts_with_a_new_sbc_session(harness):
+    """
+    A reconnect starts a new dead-reckoning run from ARIA's origin.
+
+    Carrying the old session's accumulated drift into the new one would keep
+    charging the robot for distance it is no longer being told about.
+    """
+    fake, bridge, client_node, _executor = harness
+    from nav_msgs.msg import Odometry
+
+    seen = []
+    client_node.create_subscription(
+        Odometry, '/odom', lambda msg: seen.append(msg), 50)
+    assert wait_until(lambda: len(seen) > 0)
+
+    for step in range(1, 21):
+        fake.odom_pose = (0.05 * step, 0.0, 0.0)
+        time.sleep(0.05)
+    assert wait_until(lambda: seen[-1].pose.covariance[0] > 0.0)
+    driven = seen[-1].pose.covariance[0]
+
+    # Drop the link. The SBC comes back with its pose reset to the origin.
+    generation = bridge._session_generation
+    fake.drop_connection()
+    fake.odom_pose = (0.0, 0.0, 0.0)
+    assert wait_until(lambda: bridge._session_generation > generation,
+                      timeout=6.0), 'never reconnected'
+    seen.clear()
+    assert wait_until(lambda: len(seen) > 0, timeout=6.0)
+
+    assert seen[-1].pose.covariance[0] < driven, (
+        'kept the old session accumulated drift across a reconnect')

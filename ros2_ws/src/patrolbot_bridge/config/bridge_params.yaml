@@ -11,3 +11,36 @@ patrolbot_bridge:
     # until physical self-occlusion testing explicitly approves it.
     publish_unfiltered_scan_candidate: false
     unfiltered_scan_topic: "/scan_unfiltered_candidate"
+
+    # ------------------------------------------------------------------
+    # /odom covariance. Measured by the operator, 2026-08-18.
+    # ------------------------------------------------------------------
+    # /odom previously carried 36 zeros in both covariance blocks. That is not
+    # "unknown" -- it asserts the wheel odometry is exact, and a zero matrix is
+    # singular, so any estimator that weights the measurement by inverting it
+    # fails outright. These sigmas are what the bridge says instead.
+    #
+    # They are per-unit-of-motion, not absolute. Variance accumulates linearly
+    # in distance driven and angle turned, so the 1-sigma error after driving
+    # D metres is sigma_xy_per_m * sqrt(D).
+    #
+    # Measured: ~5 cm 1-sigma position error over 10 m, ~2 deg over a full
+    # in-place turn. Re-measure and update here after any change to the base's
+    # TicksMM/RevCount/DriftFactor calibration (currently 189/30127/32) or
+    # after a wheel or tyre change. Do not hand-tune these to make a downstream
+    # estimator behave -- they are a measurement, not a knob.
+    odom_sigma_xy_per_m: 0.016      # 1-sigma ~5 cm after 10 m
+    odom_sigma_yaw_per_rad: 0.014   # 1-sigma ~2 deg after one full turn
+    # Heading error bled in by driving straight: unequal wheel diameters turn a
+    # commanded straight line into a slow arc. This is AMCL's alpha4 term.
+    odom_sigma_yaw_per_m: 0.004
+    # Instantaneous velocity noise. Constant -- velocity is measured fresh each
+    # frame rather than integrated, so its error does not compound.
+    odom_sigma_vx: 0.02
+    odom_sigma_vyaw: 0.02
+    # Floor keeps the matrix invertible before the robot has moved at all.
+    odom_min_variance: 1.0e-6
+    # Ceiling matters because this robot runs for weeks between restarts;
+    # unbounded linear growth would reach magnitudes that wreck the
+    # conditioning of anything the value is multiplied into.
+    odom_max_variance: 1.0

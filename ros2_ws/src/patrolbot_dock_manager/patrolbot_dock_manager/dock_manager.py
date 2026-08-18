@@ -55,6 +55,17 @@ from sensor_msgs.msg import PointCloud2, PointField
 from std_srvs.srv import Empty
 
 
+# What counts as "not moving" when reading the /odom twist.
+STATIONARY_LINEAR_LIMIT = 0.005
+STATIONARY_ANGULAR_LIMIT = 0.01
+
+# FAULTFLAGS bits 7 and 8, encoder_degraded_warning and encoder_failure (see
+# patrolbot_bridge.safety_telemetry). Any parked-robot allowance is only as
+# trustworthy as the odometry underneath it, so a wheel that is not being
+# measured properly must void it instead of supplying convenient zeros.
+ENCODER_FAULT_MASK = (1 << 7) | (1 << 8)
+
+
 class DockManager(Node):
     """Own hardware release orchestration and guarded Nav2 reverse motion."""
 
@@ -72,6 +83,9 @@ class DockManager(Node):
         self._rear_clear = False
         self._odom = None
         self._odom_at = 0.0
+        # Monotonic time the robot was last observed moving. Zero means it has
+        # not been seen to move in this process's lifetime.
+        self._last_motion_at = 0.0
         self._localization = None
         self._localization_at = 0.0
         self._state_name = 'IDLE'
@@ -366,6 +380,17 @@ class DockManager(Node):
         with self._lock:
             self._odom = message
             self._odom_at = time.monotonic()
+            # Remember WHEN the robot was last seen moving, not merely whether
+            # the newest sample reads zero. A pose may only be trusted past its
+            # freshness timeout if nothing has moved since it was published,
+            # and the latest twist alone cannot establish that: a robot that
+            # drove away while AMCL was silent and then stopped reports zero
+            # velocity too, and would otherwise revalidate the pose it held
+            # before it moved.
+            if (abs(message.twist.twist.linear.x) > STATIONARY_LINEAR_LIMIT or
+                    abs(message.twist.twist.angular.z) >
+                    STATIONARY_ANGULAR_LIMIT):
+                self._last_motion_at = self._odom_at
 
     def _localization_callback(self, message):
         with self._lock:
@@ -839,6 +864,8 @@ class DockManager(Node):
             sonar_age = now - self._sonar_at if self._sonar_at else math.inf
             odom = self._odom
             odom_age = now - self._odom_at if self._odom_at else math.inf
+            last_motion_at = self._last_motion_at
+            localization_at = self._localization_at
             pose = self._localization
             pose_age = (
                 now - self._localization_at if self._localization_at else math.inf)
@@ -854,8 +881,44 @@ class DockManager(Node):
         stationary = False
         if odom is not None:
             stationary = (
-                abs(odom.twist.twist.linear.x) <= 0.005 and
-                abs(odom.twist.twist.angular.z) <= 0.01)
+                abs(odom.twist.twist.linear.x) <= STATIONARY_LINEAR_LIMIT and
+                abs(odom.twist.twist.angular.z) <= STATIONARY_ANGULAR_LIMIT)
+        # Elapsed time is only evidence that a pose has gone stale if the robot
+        # could have moved since it was published. AMCL publishes /amcl_pose
+        # only after update_min_d/update_min_a of motion, so a parked robot
+        # stops producing pose messages entirely and the age climbs without
+        # bound -- 102 s measured live on 2026-08-18 against a 0.5 s timeout.
+        # The robot knew exactly where it was; the message had gone stale, not
+        # the estimate, and navigation goals were refused over it.
+        #
+        # Every conjunct below is load-bearing:
+        #
+        #   stationary          the newest sample shows no motion;
+        #   odom_age            ...and odometry is actually still arriving,
+        #                       because a dead link leaves the last message
+        #                       reading zero velocity while the robot drives
+        #                       away;
+        #   _last_motion_at     ...and nothing has moved SINCE the pose was
+        #                       published. Without this, a robot that drove off
+        #                       while AMCL was silent and then stopped would
+        #                       revalidate the pose it held before it moved --
+        #                       the predicate would prove only "velocity is
+        #                       zero right now", never "this pose still
+        #                       describes the robot";
+        #   encoder faults      ...and the wheels are actually being measured.
+        #                       This allowance is only as good as the odometry
+        #                       it trusts, so a degraded or failed encoder must
+        #                       void it rather than silently supply the zeros
+        #                       that satisfy it.
+        fault_flags = base.fault_flags if base else 0
+        parked_since_the_pose = (
+            stationary and
+            odom_age <= timeout and
+            last_motion_at <= localization_at and
+            base is not None and
+            not fault_flags & ENCODER_FAULT_MASK)
+        pose_still_describes_the_robot = (
+            pose_age <= timeout or parked_since_the_pose)
         return SafetySnapshot(
             link_connected=bool(base and base.link_connected),
             hardware_state_valid=bool(
@@ -873,9 +936,17 @@ class DockManager(Node):
             rear_clear=rear_clear,
             odom_fresh=odom_age <= timeout,
             stationary=stationary,
+            # Raw, deliberately. Physical-motion consumers gate on this:
+            # precheck_failures and _wait_for_localization treat it as proof
+            # that a pose arrived recently, and _wait_for_localization's
+            # default newer_than=0.0 would otherwise accept an arbitrarily old
+            # pose as authorization for the 0.53 m hardware undock. The
+            # parked-robot allowance is a usability relaxation for consumers
+            # that are not about to move the robot, and must not reach this.
             localization_fresh=pose_age <= timeout,
-            localization_valid=localization_valid and pose_age <= timeout,
-            dock_pose_valid=dock_pose_valid and pose_age <= timeout,
+            localization_valid=(
+                localization_valid and pose_still_describes_the_robot),
+            dock_pose_valid=dock_pose_valid and pose_still_describes_the_robot,
             degenerate_localization_override_engaged=(
                 degenerate_override_engaged),
             command_path_valid=self._path_valid,

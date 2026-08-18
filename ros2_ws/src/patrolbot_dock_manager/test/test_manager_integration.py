@@ -77,6 +77,16 @@ class FakeWorld(Node):
         self._dock_state_clear_at = 0.0
         self._localization_resume_at = 0.0
         self.localization_enabled = True
+        # Odometry is its own stream, stoppable independently of /amcl_pose.
+        # A gate that infers "parked" must not be satisfiable by telemetry that
+        # has simply stopped arriving, and that is only testable if the two can
+        # be silenced separately.
+        self.odom_enabled = True
+        self.odom_linear_x = 0.0
+        self.odom_angular_z = 0.0
+        # FAULTFLAGS as the SBC reports them. Bits 7 and 8 are
+        # encoder_degraded_warning and encoder_failure.
+        self.fault_flags = 0
         self.hardware_completed_at = 0.0
         self.localization_resumed_at = 0.0
         self.spin_called_at = 0.0
@@ -230,7 +240,7 @@ class FakeWorld(Node):
         state.charge_state_valid = True
         state.motors_enabled = self.motors_enabled
         state.estop_pressed = False
-        state.fault_flags = 0
+        state.fault_flags = self.fault_flags
         state.bumpers_valid = True
         state.front_bumper_pressed = self.dock_state == 'DOCKED_CONFIRMED'
         state.rear_bumper_pressed = False
@@ -263,11 +273,14 @@ class FakeWorld(Node):
             cloud.is_dense = True
             self.sonar_pub.publish(cloud)
 
-        odom = Odometry()
-        odom.header.stamp = now
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'base_link'
-        self.odom_pub.publish(odom)
+        if self.odom_enabled:
+            odom = Odometry()
+            odom.header.stamp = now
+            odom.header.frame_id = 'odom'
+            odom.child_frame_id = 'base_link'
+            odom.twist.twist.linear.x = self.odom_linear_x
+            odom.twist.twist.angular.z = self.odom_angular_z
+            self.odom_pub.publish(odom)
 
         if self.localization_enabled:
             pose = PoseWithCovarianceStamped()
@@ -736,3 +749,223 @@ def test_an_engaged_override_is_visible_in_the_published_readiness(
     assert wait_until(
         lambda: bool(seen) and 'override' in seen[-1].blocking_reason.lower()), (
         'an engaged override left no trace in the published readiness')
+
+
+def test_a_parked_robot_keeps_a_usable_pose_past_the_freshness_timeout(harness):
+    """
+    Elapsed time is only evidence of staleness if the robot could have moved.
+
+    AMCL publishes /amcl_pose only after update_min_d/update_min_a of motion,
+    so a stationary robot stops producing pose messages entirely and the age
+    climbs without bound -- 102 s was observed live on 2026-08-18. The gate
+    then declared localization invalid and the dashboard refused to accept a
+    navigation goal, reporting that the robot did not know where it was.
+
+    It knew exactly where it was. Nothing had moved, so the last pose still
+    described the robot perfectly. What had gone stale was the message, not
+    the estimate.
+    """
+    manager, world, client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    # The measured age lives on the published message, not on the snapshot.
+    seen = []
+    client_node.create_subscription(
+        DockReadiness, '/patrolbot/dock_readiness',
+        lambda msg: seen.append(msg), 10)
+
+    # AMCL goes quiet, exactly as it does when the robot is not moving.
+    world.localization_enabled = False
+    time.sleep(timeout * 3)
+
+    assert manager._snapshot().stationary, (
+        'precondition: the fake robot is not moving')
+    assert wait_until(
+        lambda: bool(seen) and seen[-1].localization_age > timeout), (
+        'precondition: the pose must actually be older than the timeout')
+    assert seen[-1].localization_valid, (
+        'a parked robot was declared unlocalized purely because AMCL had '
+        'nothing new to say')
+
+
+def test_a_moving_robot_still_needs_a_fresh_pose(harness):
+    """
+    The allowance is for parked robots only, and must not leak to moving ones.
+
+    Once the wheels are turning the pose really is going stale, at a rate the
+    gate cannot bound. This is the case the 0.5 s timeout exists for, and it
+    has to keep working.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    world.localization_enabled = False
+    world.odom_linear_x = 0.20
+    time.sleep(timeout * 3)
+
+    snapshot = manager._snapshot()
+    assert not snapshot.stationary, 'precondition: the fake robot is moving'
+    assert not snapshot.localization_valid, (
+        'a moving robot kept a stale pose')
+
+
+def test_dead_odometry_cannot_make_a_robot_look_parked(harness):
+    """
+    The whole allowance rests on knowing the robot is stationary.
+
+    "Stationary" is read from /odom, so odometry that has simply stopped
+    arriving must never be mistaken for odometry reporting zero velocity. A
+    robot driving away behind a dead telemetry link is precisely the case that
+    would otherwise hold a stale pose valid forever -- the failure mode this
+    gate exists to prevent, reached through the fix for a different one.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    # Both streams stop: no new pose, and no odometry to prove it is parked.
+    world.localization_enabled = False
+    world.odom_enabled = False
+    time.sleep(timeout * 3)
+
+    snapshot = manager._snapshot()
+    assert not snapshot.odom_fresh, 'precondition: odometry is stale'
+    assert not snapshot.localization_valid, (
+        'a stale pose was held valid on the strength of stale odometry')
+
+
+def test_the_published_age_still_reports_the_real_number(harness):
+    """
+    The allowance must not disguise how old the pose actually is.
+
+    localization_age is what an operator reads to judge the situation, so it
+    stays the raw measurement even when the gate has decided the pose is still
+    usable. Hiding the age would trade one misleading readout for another.
+    """
+    manager, world, client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    seen = []
+    client_node.create_subscription(
+        DockReadiness, '/patrolbot/dock_readiness',
+        lambda msg: seen.append(msg), 10)
+
+    world.localization_enabled = False
+    time.sleep(timeout * 3)
+
+    assert wait_until(lambda: bool(seen) and seen[-1].localization_age > timeout)
+    assert seen[-1].localization_valid, 'precondition: still usable'
+
+
+def test_movement_after_a_pose_does_not_revalidate_it_once_the_robot_stops(
+        harness):
+    """
+    Zero velocity now is not evidence that an old pose still fits.
+
+    The first version of this allowance tested only the newest odometry sample.
+    That proves "the robot is not moving at this instant" and nothing more: a
+    robot that drove away while AMCL was silent and then parked reports zero
+    velocity too, and its pre-departure pose would spring back to valid the
+    moment the wheels stopped. The pose has to be backed by an unbroken absence
+    of motion since it was published, not by a single quiet sample.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    # AMCL goes silent, then the robot drives somewhere.
+    world.localization_enabled = False
+    world.odom_linear_x = 0.25
+    time.sleep(timeout * 3)
+    assert not manager._snapshot().localization_valid, (
+        'precondition: a moving robot with a stale pose is already invalid')
+
+    # It parks. The newest sample now reads zero, but the pose predates the
+    # drive and no longer describes where the robot is.
+    world.odom_linear_x = 0.0
+    time.sleep(timeout * 3)
+
+    assert manager._snapshot().stationary, 'precondition: it really did stop'
+    assert not manager._snapshot().localization_valid, (
+        'a pose from before the robot drove away was revalidated by it '
+        'stopping')
+
+
+def test_localization_fresh_stays_a_statement_about_age(harness):
+    """
+    Physical-motion consumers gate on this field, so it must not be relaxed.
+
+    precheck_failures and _wait_for_localization read localization_fresh as
+    proof that a pose actually arrived recently, and _wait_for_localization's
+    default newer_than=0.0 accepts any previously received pose once the
+    booleans go true. Folding the parked-robot allowance into this field would
+    therefore authorise the 0.53 m hardware undock on an arbitrarily old
+    estimate -- turning a dashboard usability fix into motion authorisation.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    world.localization_enabled = False
+    time.sleep(timeout * 3)
+
+    snapshot = manager._snapshot()
+    assert snapshot.localization_valid, (
+        'precondition: the parked allowance is in effect')
+    assert not snapshot.localization_fresh, (
+        'localization_fresh was relaxed; the undock precheck now accepts a '
+        'stale pose as authorisation to move')
+
+
+def test_the_undock_precheck_still_demands_a_genuinely_fresh_pose(harness):
+    """
+    The parked allowance must not reach the gate in front of physical motion.
+
+    Accepting a navigation goal is a UI decision. Reversing 0.53 m off a
+    charging dock is not, and it keeps the stricter contract.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(
+        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: precheck_ready(manager))
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    world.localization_enabled = False
+    time.sleep(timeout * 3)
+
+    assert manager._snapshot().localization_valid, (
+        'precondition: the parked allowance is in effect')
+    assert not precheck_ready(manager), (
+        'undock was cleared on a pose nothing had refreshed')
+
+
+def test_an_encoder_fault_voids_the_parked_allowance(harness):
+    """
+    The allowance is only as trustworthy as the odometry underneath it.
+
+    "Stationary" is a reading off the wheels. A degraded or failed encoder is
+    the case where that reading is exactly the thing that cannot be trusted,
+    and it reports zeros that satisfy the test perfectly. FAULTFLAGS bits 7 and
+    8 say so explicitly, so the allowance must stand down rather than accept
+    convenient numbers from a sensor the base has already disowned.
+    """
+    manager, world, _client_node = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    world.localization_enabled = False
+    time.sleep(timeout * 3)
+    assert manager._snapshot().localization_valid, (
+        'precondition: the parked allowance is in effect')
+
+    world.fault_flags = 1 << 8      # encoder_failure
+    assert wait_until(lambda: not manager._snapshot().localization_valid), (
+        'a failed encoder still propped up the parked allowance')
+
+    world.fault_flags = 1 << 7      # encoder_degraded_warning
+    time.sleep(timeout * 2)
+    assert not manager._snapshot().localization_valid, (
+        'a degraded encoder still propped up the parked allowance')

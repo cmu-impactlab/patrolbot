@@ -232,8 +232,15 @@ def precheck_failures(
         # Production undocking is refused by the SBC until rear-sonar indices,
         # E-stop semantics and fault masks have been physically validated.
         failures.append('SBC undock hardware profile is not commissioned')
-    if not state.localization_fresh or not state.localization_valid:
+    # Two different facts since the parked-robot allowance split them, and an
+    # operator acts on them differently. A stationary robot legitimately holds
+    # localization_valid true while localization_fresh goes false, because AMCL
+    # publishes nothing when nothing moves. Calling that "invalid" sends the
+    # reader hunting for a broken pose estimate that is in fact fine.
+    if not state.localization_valid:
         failures.append('localization invalid')
+    elif not state.localization_fresh:
+        failures.append('localization not refreshed since the robot last moved')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')
     if not state.navigation_idle:
@@ -265,8 +272,15 @@ def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
         failures.append('E-stop asserted')
     if not state.odom_fresh:
         failures.append('odometry stale')
-    if not state.localization_fresh or not state.localization_valid:
+    # Two different facts since the parked-robot allowance split them, and an
+    # operator acts on them differently. A stationary robot legitimately holds
+    # localization_valid true while localization_fresh goes false, because AMCL
+    # publishes nothing when nothing moves. Calling that "invalid" sends the
+    # reader hunting for a broken pose estimate that is in fact fine.
+    if not state.localization_valid:
         failures.append('localization invalid')
+    elif not state.localization_fresh:
+        failures.append('localization not refreshed since the robot last moved')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')
     if not state.navigation_idle:

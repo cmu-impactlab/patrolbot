@@ -358,3 +358,47 @@ def test_a_healthy_filter_still_passes():
     # A genuinely diverged filter is still *valid*; the limit refuses it, and
     # that separation is deliberate.
     assert planar_covariance_usable(9.0, 9.0, 3.0)
+
+
+def test_a_stale_but_valid_pose_is_not_reported_as_invalid():
+    """
+    Say which of the two localization terms actually failed.
+
+    Since the parked-robot allowance split freshness from validity, these are
+    different facts: a stationary robot legitimately holds `localization_valid`
+    true while `localization_fresh` goes false, because AMCL stops publishing
+    when nothing moves. Reporting that as "localization invalid" sends an
+    operator hunting for a broken pose estimate when the pose is fine and
+    merely un-refreshed -- observed live with localization_age at 99.8 s,
+    localization_valid true, and the dashboard still saying invalid.
+    """
+    stale = replace(
+        SAFE_DOCKED, localization_fresh=False, localization_valid=True)
+    failures = precheck_failures(stale)
+
+    assert failures != [], 'undock must still be refused on a stale pose'
+    assert 'localization invalid' not in failures
+    assert any('not refreshed' in failure for failure in failures), failures
+
+
+def test_a_genuinely_invalid_pose_still_reads_as_invalid():
+    """The unchanged half: a bad estimate is still reported as a bad estimate."""
+    for snapshot in (
+            replace(SAFE_DOCKED, localization_valid=False),
+            replace(
+                SAFE_DOCKED, localization_valid=False,
+                localization_fresh=False)):
+        assert 'localization invalid' in precheck_failures(snapshot)
+
+
+def test_the_handoff_gate_distinguishes_the_same_two_terms():
+    """resume_failures carries the identical wording bug, so it gets the fix."""
+    stale = replace(
+        SAFE_HANDOFF, localization_fresh=False, localization_valid=True)
+    failures = resume_failures(stale, 7)
+
+    assert failures != [], 'handoff must still be refused on a stale pose'
+    assert 'localization invalid' not in failures
+    assert any('not refreshed' in failure for failure in failures), failures
+    assert 'localization invalid' in resume_failures(
+        replace(SAFE_HANDOFF, localization_valid=False), 7)

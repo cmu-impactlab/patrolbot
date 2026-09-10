@@ -118,12 +118,40 @@ cd ~/patrolbot-repo
 docker compose -f docker/docker-compose.yml --env-file docker/.env down
 ```
 
+## Pi power and throttle state
+
+The Pi kernel logs under-voltage events, but the live throttle state is held in a firmware
+register that `vcgencmd` normally reads. `vcgencmd` reaches the VideoCore through `/dev/vcio`
+and is **not available to the `ubuntu` user** on this robot, so a read-only scan can see
+retained under-voltage log events while being unable to answer whether the Pi is throttling
+right now.
+
+The same information is world-readable through sysfs, so it needs neither `vcgencmd` nor root:
+
+```bash
+docker/pi-power-health.py          # human-readable report
+docker/pi-power-health.py --json   # one JSON object
+```
+
+It reads `/sys/devices/platform/soc/soc:firmware/get_throttled` (the firmware word — low nibble
+live, `0x1xxxx` nibble sticky since boot), the `rpi_volt` low-critical alarm under
+`/sys/class/hwmon`, and `cpu0/cpufreq`. Reads only; it changes nothing.
+
+- exit `0`, `OVERALL=clear` — no bit set now or since boot;
+- exit `1`, `OVERALL=finding` — a bit is set, and the output names which;
+- exit `2`, `OVERALL=unknown` — the firmware word could not be read.
+
+An unreadable source reports `unknown` and never `clear`. Under-voltage **SHOULD** be treated
+as a supply fault to be measured at the PSU and cable, not compensated for in software: a
+capped clock from an unstable supply masquerades as application, NVMe, or timing problems.
+
 ## Routine checks
 
 | Interval | Check |
 |---|---|
 | Each session | `./docker/status.sh` before commanding motion |
 | Each session | `/scan` at 20–25 Hz; both TF links present |
+| Each session | `./docker/pi-power-health.py` — no under-voltage or throttle bit set |
 | Weekly | `df -h /` and `docker system df` |
 | Weekly | `~/backups/` holds exactly the two newest snapshots |
 | On redeploy | Revision and source-tree digest match the intended build |

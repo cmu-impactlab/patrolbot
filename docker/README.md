@@ -87,6 +87,43 @@ sudo ln -sf /home/ubuntu/patrolbot-repo/docker/patrolbot-status /usr/local/bin/p
 patrolbot-status
 ```
 
+## Pi power and throttle state
+
+`pi-power-health.py` reports current **and** historical under-voltage and
+throttle state without `vcgencmd` and without root:
+
+```bash
+docker/pi-power-health.py          # human-readable report
+docker/pi-power-health.py --json   # one JSON object, for logging or a probe
+```
+
+`vcgencmd` ships in `raspi-utils` and reaches the VideoCore through `/dev/vcio`;
+it is not available to the `ubuntu` user on this robot, which is why a
+read-only scan can show retained under-voltage log events but no current
+throttle state. The firmware exposes the same 32-bit word world-readable at
+`/sys/devices/platform/soc/soc:firmware/get_throttled`, and the Pi's voltage
+monitor exposes an independent alarm flag through `rpi_volt` in
+`/sys/class/hwmon`. This script reads those two nodes plus `cpu0/cpufreq`, and
+performs reads only.
+
+The low nibble of the firmware word is live state; the `0x1xxxx` nibble is
+sticky since boot and survives until a power cycle, which is what makes the
+historical half of the question answerable at all.
+
+- exit `0`, `OVERALL=clear`: no bit set, now or since boot;
+- exit `1`, `OVERALL=finding`: at least one bit set, named in the output;
+- exit `2`, `OVERALL=unknown`: the firmware word could not be read.
+
+An unreadable source never reports "clear" — it reports `unknown`, because a
+false all-clear on a power question closes an investigation that should stay
+open.
+
+Tests are hardware-free and run anywhere:
+
+```bash
+python -m pytest docker/tests/test_pi_power_health.py -q
+```
+
 ## Rollback
 
 Keep the previous Compose directory and image tag until supervised hardware

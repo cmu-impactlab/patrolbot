@@ -57,6 +57,7 @@ LC_ALL=C find "${paths[@]}" -type f \
   ! -name 'patrolbot_commission_probe' \
   ! -path '*/tests/protocol_test' \
   ! -path '*/tests/undock_test' \
+  ! -path '*/tests/scan_timing_test' \
   -print0 \
   | LC_ALL=C sort -z \
   | while IFS= read -r -d '' file; do

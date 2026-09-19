@@ -3,10 +3,16 @@
 
 !docker/
 !docker/Dockerfile
+!docker/Dockerfile.nav2-fixes
+!docker/nav2-patches/
+!docker/nav2-patches/**
 !docker/docker-compose.yml
 !docker/healthcheck.py
 !docker/source-tree-digest.sh
 !docker/status.sh
+!docker/status_report.py
+!docker/nav2-log-health.py
+!docker/capture-nav-goal.sh
 
 !ros2_ws/
 !ros2_ws/src/
@@ -45,6 +51,8 @@
 **/log/**
 **/patrolbot_server
 **/tests/protocol_test
+**/tests/undock_test
+**/tests/scan_timing_test
 **/*.bak
 **/*.bak.*
 **/*~

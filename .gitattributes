@@ -1,0 +1,2 @@
+# Unified diff context lines deliberately contain a leading space.
+docker/nav2-patches/*.patch whitespace=-blank-at-eol

@@ -1,0 +1,151 @@
+diff --git a/nav2_costmap_2d/src/observation_buffer.cpp b/nav2_costmap_2d/src/observation_buffer.cpp
+--- a/nav2_costmap_2d/src/observation_buffer.cpp
++++ b/nav2_costmap_2d/src/observation_buffer.cpp
+@@ -41,13 +41,23 @@
+ #include <string>
+ #include <vector>
+ #include <chrono>
++#include <map>
++#include <mutex>
+ 
+ #include "tf2/convert.h"
+ #include "sensor_msgs/point_cloud2_iterator.hpp"
++#include "stale_warning_policy.hpp"
+ using namespace std::chrono_literals;
+ 
+ namespace nav2_costmap_2d
+ {
++namespace
++{
++std::mutex g_stale_policy_mutex;
++std::map<const ObservationBuffer *, patrolbot_nav2_patch::StaleWarningPolicy>
++  g_stale_policies;
++}
++
+ ObservationBuffer::ObservationBuffer(
+   const nav2_util::LifecycleNode::WeakPtr & parent,
+   std::string topic_name,
+@@ -74,10 +84,14 @@
+   clock_ = node->get_clock();
+   logger_ = node->get_logger();
+   last_updated_ = node->now();
++  std::lock_guard<std::mutex> guard(g_stale_policy_mutex);
++  g_stale_policies.emplace(this, patrolbot_nav2_patch::StaleWarningPolicy());
+ }
+ 
+ ObservationBuffer::~ObservationBuffer()
+ {
++  std::lock_guard<std::mutex> guard(g_stale_policy_mutex);
++  g_stale_policies.erase(this);
+ }
+ 
+ void ObservationBuffer::bufferCloud(const sensor_msgs::msg::PointCloud2 & cloud)
+@@ -217,14 +231,29 @@
+ 
+   bool current = (clock_->now() - last_updated_) <=
+     expected_update_rate_;
+-  if (!current) {
++  patrolbot_nav2_patch::StaleWarningEvent event;
++  std::size_t stale_checks;
++  {
++    std::lock_guard<std::mutex> guard(g_stale_policy_mutex);
++    auto & policy = g_stale_policies.at(this);
++    const auto result = policy.observe(
++      current, patrolbot_nav2_patch::StaleWarningPolicy::Clock::now());
++    event = result.event;
++    stale_checks = result.stale_checks;
++  }
++  if (event == patrolbot_nav2_patch::StaleWarningEvent::Stale) {
+     RCLCPP_WARN(
+       logger_,
+       "The %s observation buffer has not been updated for %.2f seconds, "
+-      "and it should be updated every %.2f seconds.",
++      "and it should be updated every %.2f seconds (stale checks: %zu).",
+       topic_name_.c_str(),
+       (clock_->now() - last_updated_).seconds(),
+-      expected_update_rate_.seconds());
++      expected_update_rate_.seconds(), stale_checks);
++  } else if (event == patrolbot_nav2_patch::StaleWarningEvent::Recovered) {
++    RCLCPP_INFO(
++      logger_,
++      "The %s observation buffer is current again after %zu stale checks.",
++      topic_name_.c_str(), stale_checks);
+   }
+   return current;
+ }
+diff --git a/nav2_costmap_2d/src/stale_warning_policy.hpp b/nav2_costmap_2d/src/stale_warning_policy.hpp
+new file mode 100644
+--- /dev/null
++++ b/nav2_costmap_2d/src/stale_warning_policy.hpp
+@@ -0,0 +1,71 @@
++#ifndef PATROLBOT_NAV2_STALE_WARNING_POLICY_HPP
++#define PATROLBOT_NAV2_STALE_WARNING_POLICY_HPP
++
++#include <chrono>
++#include <cstddef>
++
++namespace patrolbot_nav2_patch {
++
++enum class StaleWarningEvent {
++  None,
++  Stale,
++  Recovered
++};
++
++struct StaleWarningResult {
++  StaleWarningEvent event;
++  std::size_t stale_checks;
++};
++
++class StaleWarningPolicy {
++public:
++  typedef std::chrono::steady_clock Clock;
++  typedef Clock::time_point TimePoint;
++
++  explicit StaleWarningPolicy(
++    std::chrono::seconds repeat_interval = std::chrono::seconds(30))
++  : repeat_interval_(repeat_interval), stale_(false), have_time_(false),
++    last_time_(), last_warning_(), stale_checks_(0)
++  {
++  }
++
++  StaleWarningResult observe(bool current, TimePoint now) {
++    if (have_time_ && now < last_time_) {
++      now = last_time_;
++    }
++    last_time_ = now;
++    have_time_ = true;
++
++    if (current) {
++      if (!stale_) {
++        return {StaleWarningEvent::None, stale_checks_};
++      }
++      stale_ = false;
++      return {StaleWarningEvent::Recovered, stale_checks_};
++    }
++
++    ++stale_checks_;
++    if (!stale_) {
++      stale_ = true;
++      last_warning_ = now;
++      return {StaleWarningEvent::Stale, stale_checks_};
++    }
++    if (now - last_warning_ >= repeat_interval_) {
++      last_warning_ = now;
++      return {StaleWarningEvent::Stale, stale_checks_};
++    }
++    return {StaleWarningEvent::None, stale_checks_};
++  }
++
++private:
++  const std::chrono::seconds repeat_interval_;
++  bool stale_;
++  bool have_time_;
++  TimePoint last_time_;
++  TimePoint last_warning_;
++  std::size_t stale_checks_;
++};
++
++}  // namespace patrolbot_nav2_patch
++
++#endif  // PATROLBOT_NAV2_STALE_WARNING_POLICY_HPP

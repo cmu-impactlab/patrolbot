@@ -33,7 +33,7 @@ COPY ros2_ws/src/patrolbot_navigation src/patrolbot_navigation
 # in the Pi image; navigation's safety-contract test verifies that dock release
 # cannot set velocity or enable motors as a side effect.
 COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server
-COPY docker/Dockerfile docker/docker-compose.yml docker/status.sh \
+COPY docker/Dockerfile docker/docker-compose.yml docker/status.sh docker/status_report.py docker/nav2-log-health.py \
   docker/source-tree-digest.sh docker/capture-nav-goal.sh docker/
 COPY --chmod=0755 docker/source-tree-digest.sh /usr/local/bin/patrolbot-source-tree-digest
 

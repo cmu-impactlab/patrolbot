@@ -7,6 +7,14 @@ COMPOSE=(docker compose -f "$SCRIPT_DIR/docker-compose.yml" --env-file "$SCRIPT_
 CONTAINERS=(patrolbot-bringup patrolbot-bridge patrolbot-navigation)
 SBC_HOST=${PATROLBOT_SBC_HOST:-10.0.0.1}
 SBC_PORT=${PATROLBOT_SBC_PORT:-7272}
+MACHINE_CHECKS=()
+
+record_check() {
+  local scope=$1 name=$2 status=$3 evidence=$4
+  evidence=${evidence//$'\n'/ }
+  evidence=${evidence//|//}
+  MACHINE_CHECKS+=("$scope|$name|$status|$evidence")
+}
 
 if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
   COMPOSE=(docker compose -f "$SCRIPT_DIR/docker-compose.yml")
@@ -19,11 +27,17 @@ for container in "${CONTAINERS[@]}"; do
       --format 'status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}} image={{.Config.Image}}' \
       2>/dev/null); then
     printf '  %-24s missing\n' "$container"
+    record_check container "container.${container#patrolbot-}" fail missing
     all_healthy=false
     continue
   fi
   printf '  %-24s %s\n' "$container" "$state"
-  [[ "$state" == *"status=running health=healthy"* ]] || all_healthy=false
+  if [[ "$state" == *"status=running health=healthy"* ]]; then
+    record_check container "container.${container#patrolbot-}" pass "$state"
+  else
+    record_check container "container.${container#patrolbot-}" fail "$state"
+    all_healthy=false
+  fi
 done
 
 revision=$(docker inspect patrolbot-navigation \
@@ -69,11 +83,6 @@ bridge_publication_mode=$(docker inspect patrolbot-bridge \
   | sed -n 's/^RMW_FASTRTPS_PUBLICATION_MODE=//p' | head -n 1)
 printf '  %-24s %s\n' "bridge DDS publication" \
   "${bridge_publication_mode:-unset}"
-
-if [[ "$all_healthy" != true ]]; then
-  printf '\nOVERALL=unhealthy reason=container-liveness\n'
-  exit 1
-fi
 
 ros_exec() {
   local container=$1
@@ -206,25 +215,31 @@ printf '\nSBC and ROS readiness\n'
 # un-accepted in its listen backlog (CLOSE-WAIT) and, once the backlog fills,
 # blocks the bridge's own reconnects. Inferring reachability from live /odom is
 # both accurate and non-invasive.
-ready=true
+ready=$all_healthy
 
 if [[ "$source_digest_ok" != true ]]; then
   printf '  %-24s mismatch (image must match deployed source)\n' \
     "source provenance"
   ready=false
+  record_check pi source.provenance fail \
+    "image=${image_source_digest:-unset} deployed=${deployed_source_digest:-unavailable}"
 else
   printf '  %-24s verified\n' "source provenance"
+  record_check pi source.provenance pass "$image_source_digest"
 fi
 
 if [[ "$discovery_ok" != true ]]; then
   printf '  %-24s invalid (expected one consistent LOCALHOST or SUBNET policy)\n' \
     "DDS discovery scope"
   ready=false
+  record_check pi dds.discovery fail "inconsistent or invalid"
 elif [[ "$discovery_expected" == SUBNET ]]; then
   printf '  %-24s SUBNET (full LAN graph; unauthenticated)\n' \
     "DDS discovery scope"
+  record_check pi dds.discovery pass "SUBNET unauthenticated"
 else
   printf '  %-24s LOCALHOST only\n' "DDS discovery scope"
+  record_check pi dds.discovery pass "LOCALHOST"
 fi
 
 # PB-AUDIT-025. The source digest above only covers the core stack, so a derived
@@ -262,7 +277,9 @@ for interface in msg/BaseState msg/DockReadiness; do
   if [[ "$interface_hash_ok" == true && -n "$reference_hash" ]]; then
     printf '  %-24s one hash (%s)\n' \
       "$interface_name types" "${reference_hash:0:18}"
+    record_check pi "interface.$interface_name" pass "$reference_hash"
   else
+    record_check pi "interface.$interface_name" fail "hash mismatch or unreadable"
     ready=false
   fi
 done
@@ -279,14 +296,19 @@ if [[ -n "$monitor_processes" ]]; then
   printf '  %-24s found (must be stopped)\n' "unattended topic monitors"
   printf '%s' "$monitor_processes"
   ready=false
+  record_check pi diagnostics.unattended-monitors fail "$monitor_processes"
 else
   printf '  %-24s none\n' "unattended topic monitors"
+  record_check pi diagnostics.unattended-monitors pass none
 fi
 
 if [[ "$bridge_publication_mode" != ASYNCHRONOUS ]]; then
   printf '  %-24s %s (expected ASYNCHRONOUS)\n' \
     "bridge DDS publication" "${bridge_publication_mode:-unset}"
   ready=false
+  record_check pi dds.bridge-publication fail "${bridge_publication_mode:-unset}"
+else
+  record_check pi dds.bridge-publication pass ASYNCHRONOUS
 fi
 
 printf '\nPi safety architecture\n'
@@ -302,44 +324,54 @@ for specification in \
     "/cmd_vel_nav PUBLISHER nav_command_mux" \
     "/cmd_vel_nav SUBSCRIPTION velocity_smoother" \
     "/cmd_vel_out PUBLISHER cmd_vel_mux" \
-    "/cmd_vel_out SUBSCRIPTION patrolbot_safety_watchdog,teleop_velocity_smoother" \
+    "/cmd_vel_out SUBSCRIPTION patrolbot_controller_feedback,patrolbot_safety_watchdog,teleop_velocity_smoother" \
     "/cmd_vel PUBLISHER teleop_velocity_smoother" \
     "/cmd_vel SUBSCRIPTION patrolbot_bridge"; do
   read -r topic endpoint expected <<<"$specification"
   actual=$(topic_endpoint_nodes "$topic" "$endpoint") || actual=unknown
   if [[ "$actual" == "${expected:-}" ]]; then
     printf '  %-24s %s\n' "$topic $endpoint" "${actual:-none}"
+    record_check pi "endpoint.$topic.$endpoint" pass "${actual:-none}"
   else
     printf '  %-24s %s (expected %s)\n' \
       "$topic $endpoint" "${actual:-none}" "${expected:-none}"
     ready=false
+    record_check pi "endpoint.$topic.$endpoint" fail \
+      "actual=${actual:-none} expected=${expected:-none}"
   fi
 done
 
 if ros_name_exists node /docking_server; then
   printf '  %-24s PRESENT (must remain disabled)\n' "/docking_server"
   ready=false
+  record_check pi node.docking_server fail present
 else
   printf '  %-24s absent\n' "/docking_server"
+  record_check pi node.docking_server pass absent
 fi
 
 if ros_name_exists topic /scan_unfiltered_candidate; then
   printf '  %-24s PRESENT (must remain uncommissioned)\n' \
     "/scan_unfiltered_candidate"
   ready=false
+  record_check pi topic.scan_unfiltered_candidate fail present
 else
   printf '  %-24s absent/uncommissioned\n' \
     "/scan_unfiltered_candidate"
+  record_check pi topic.scan_unfiltered_candidate pass absent
 fi
 
 smoother_max=$(ros_exec patrolbot-bringup \
   "ros2 param get /teleop_velocity_smoother max_velocity 2>&1" || true)
 if [[ "$smoother_max" == *"[0.3, 0.0, 0.7]"* ]]; then
   printf '  %-24s [0.30, 0.0, 0.7]\n' "teleop smoother max"
+  record_check pi parameter.teleop-smoother-max pass "[0.3,0.0,0.7]"
 else
   printf '  %-24s %s (unexpected)\n' "teleop smoother max" \
     "${smoother_max:-unavailable}"
   ready=false
+  record_check pi parameter.teleop-smoother-max fail \
+    "${smoother_max:-unavailable}"
 fi
 
 battery_stop=$(ros_exec patrolbot-navigation \
@@ -348,42 +380,59 @@ bumper_enforcement=$(ros_exec patrolbot-navigation \
   "ros2 param get /patrolbot_safety_watchdog bumper_enforcement_enabled 2>&1" || true)
 if [[ "$battery_stop" == *"23.0"* ]]; then
   printf '  %-24s 23.0 V\n' "battery motion stop"
+  record_check pi parameter.battery-stop pass "23.0 V"
 else
   printf '  %-24s %s (expected 23.0 V)\n' "battery motion stop" \
     "${battery_stop:-unavailable}"
   ready=false
+  record_check pi parameter.battery-stop fail "${battery_stop:-unavailable}"
 fi
 if [[ "$bumper_enforcement" == *"False"* ]]; then
   printf '  %-24s disabled/uncommissioned\n' "bumper enforcement"
+  record_check pi parameter.bumper-enforcement pass disabled
 else
   printf '  %-24s %s (requires physical mapping review)\n' \
     "bumper enforcement" "${bumper_enforcement:-unavailable}"
   ready=false
+  record_check pi parameter.bumper-enforcement fail \
+    "${bumper_enforcement:-unavailable}"
 fi
 
 if docker exec patrolbot-navigation test -e /dev/input/js0 2>/dev/null; then
   if topic_is_fresh /joy; then
     printf '  %-24s receiver present; /joy fresh\n' "manual control"
+    record_check pi topic.joy pass "receiver present and fresh"
   else
     printf '  %-24s receiver present; /joy stale\n' "manual control"
     ready=false
+    record_check pi topic.joy fail "receiver present but stale"
   fi
 else
   printf '  %-24s joystick receiver absent\n' "manual control"
   ready=false
+  record_check pi topic.joy fail "receiver absent"
 fi
 
 for specification in \
     "service /patrolbot/charge_release" \
     "service /patrolbot/motor_enable" \
     "service /patrolbot/initialize_dock_pose" \
-    "action /patrolbot/undock"; do
+    "service /request_nomotion_update" \
+    "action /patrolbot/undock" \
+    "action /navigate_to_pose" \
+    "action /navigate_through_poses" \
+    "action /compute_path_to_pose" \
+    "action /follow_path" \
+    "action /spin" \
+    "action /backup"; do
   read -r kind name <<<"$specification"
   if ros_name_exists "$kind" "$name"; then
     printf '  %-24s advertised\n' "$name"
+    record_check pi "$kind.$name" pass advertised
   else
     printf '  %-24s missing\n' "$name"
     ready=false
+    record_check pi "$kind.$name" fail missing
   fi
 done
 
@@ -391,27 +440,37 @@ readiness_publishers=$(topic_publisher_count /patrolbot/dock_readiness) || \
   readiness_publishers=unknown
 if [[ "$readiness_publishers" == 1 ]]; then
   printf '  %-24s one publisher\n' "/patrolbot/dock_readiness"
+  record_check pi topic.dock-readiness.publishers pass one
 else
   printf '  %-24s %s publishers (expected one)\n' \
     "/patrolbot/dock_readiness" "$readiness_publishers"
   ready=false
+  record_check pi topic.dock-readiness.publishers fail \
+    "${readiness_publishers} expected one"
 fi
 
 if topic_is_fresh /odom; then
   printf '  %-24s fresh (SBC link up)\n' "/odom"
+  sbc_available=true
+  record_check sensor topic.odom.fresh pass "SBC link up"
 else
   printf '  %-24s unavailable/stale\n' "/odom"
   printf '  SBC link unavailable (bridge not receiving /odom)\n'
-  printf '  telemetry and odom->base_link checks skipped\n'
-  printf '\nOVERALL=degraded reason=sbc-unavailable\n'
-  exit 2
+  printf '  sensor freshness and dynamic TF are degraded; Pi checks continue\n'
+  sbc_available=false
+  record_check sensor topic.odom.fresh degraded "SBC unavailable"
 fi
 
 if topic_is_fresh /scan; then
   printf '  %-24s fresh\n' "/scan"
+  record_check sensor topic.scan.fresh pass fresh
 else
   printf '  %-24s unavailable/stale\n' "/scan"
-  ready=false
+  if [[ "$sbc_available" == true ]]; then
+    record_check sensor topic.scan.fresh fail "stale while odom is fresh"
+  else
+    record_check sensor topic.scan.fresh degraded "SBC unavailable"
+  fi
 fi
 
 # One bridge publisher per hardware topic is a deployment invariant. This
@@ -421,9 +480,12 @@ for topic in /odom /scan; do
   count=$(topic_publisher_count "$topic") || count=unknown
   if [[ "$count" == 1 ]]; then
     printf '  %-24s one\n' "$topic publisher"
+    record_check sensor "topic.$topic.publishers" pass one
   else
     printf '  %-24s %s (expected one)\n' "$topic publishers" "$count"
     ready=false
+    record_check sensor "topic.$topic.publishers" fail \
+      "$count expected one"
   fi
 done
 
@@ -431,41 +493,101 @@ for topic in /scan /sonar; do
   reliability=$(topic_publisher_reliability "$topic") || reliability=unknown
   if [[ "$reliability" == BEST_EFFORT ]]; then
     printf '  %-24s BEST_EFFORT\n' "$topic publisher QoS"
+    record_check sensor "topic.$topic.qos" pass BEST_EFFORT
   else
     printf '  %-24s %s (expected BEST_EFFORT)\n' \
       "$topic publisher QoS" "$reliability"
     ready=false
+    record_check sensor "topic.$topic.qos" fail \
+      "$reliability expected BEST_EFFORT"
   fi
 done
 
-if lifecycle_is_active patrolbot-bringup /teleop_velocity_smoother; then
-  printf '  %-24s active\n' "/teleop_velocity_smoother"
-else
-  printf '  %-24s inactive/unavailable\n' "/teleop_velocity_smoother"
-  ready=false
-fi
+printf '\nPi node and lifecycle readiness\n'
 
-if lifecycle_is_active patrolbot-navigation /controller_server; then
-  printf '  %-24s active\n' "/controller_server"
-else
-  printf '  %-24s inactive/unavailable\n' "/controller_server"
-  ready=false
-fi
-
-for frames in "odom base_link" "base_link laser_frame"; do
-  read -r parent child <<<"$frames"
-  if tf_is_ready "$parent" "$child"; then
-    printf '  %-24s ready\n' "$parent->$child"
+for specification in \
+    "patrolbot-bringup /teleop_velocity_smoother" \
+    "patrolbot-navigation /map_server" \
+    "patrolbot-navigation /amcl" \
+    "patrolbot-navigation /controller_server" \
+    "patrolbot-navigation /smoother_server" \
+    "patrolbot-navigation /planner_server" \
+    "patrolbot-navigation /route_server" \
+    "patrolbot-navigation /behavior_server" \
+    "patrolbot-navigation /velocity_smoother" \
+    "patrolbot-navigation /collision_monitor" \
+    "patrolbot-navigation /bt_navigator" \
+    "patrolbot-navigation /waypoint_follower"; do
+  read -r container node <<<"$specification"
+  if lifecycle_is_active "$container" "$node"; then
+    printf '  %-24s active\n' "$node"
+    record_check pi "lifecycle.$node" pass active
   else
-    printf '  %-24s unavailable\n' "$parent->$child"
+    printf '  %-24s inactive/unavailable\n' "$node"
+    record_check pi "lifecycle.$node" fail inactive
     ready=false
   fi
 done
 
-if [[ "$ready" == true ]]; then
-  printf '\nOVERALL=ready\n'
-  exit 0
+for node in \
+    /lifecycle_manager_script \
+    /lifecycle_manager_localization \
+    /lifecycle_manager_navigation \
+    /nav_command_mux \
+    /cmd_vel_mux \
+    /patrolbot_safety_watchdog \
+    /patrolbot_dock_manager \
+    /patrolbot_joy_teleop \
+    /laser_static_tf; do
+  if ros_name_exists node "$node"; then
+    printf '  %-24s present\n' "$node"
+    record_check pi "node.$node" pass present
+  else
+    printf '  %-24s missing\n' "$node"
+    record_check pi "node.$node" fail missing
+    ready=false
+  fi
+done
+
+printf '\nTF readiness\n'
+
+for frames in "odom base_link" "map odom" "base_link laser_frame"; do
+  read -r parent child <<<"$frames"
+  if tf_is_ready "$parent" "$child"; then
+    printf '  %-24s ready\n' "$parent->$child"
+    if [[ "$parent" == base_link ]]; then
+      record_check pi "tf.$parent-$child" pass ready
+    else
+      record_check sensor "tf.$parent-$child" pass ready
+    fi
+  else
+    printf '  %-24s unavailable\n' "$parent->$child"
+    if [[ "$parent" == base_link ]]; then
+      record_check pi "tf.$parent-$child" fail unavailable
+      ready=false
+    elif [[ "$sbc_available" == true ]]; then
+      record_check sensor "tf.$parent-$child" fail unavailable
+    else
+      record_check sensor "tf.$parent-$child" skipped \
+        "requires SBC sensor data"
+    fi
+  fi
+done
+
+# Advisory retained-log evidence, independent of current readiness. Bound both
+# the requested window and line count; never infer current health from silence.
+if [[ -f "$SCRIPT_DIR/nav2-log-health.py" ]]; then
+  printf '\nNav2 warning history (last hour, at most 10000 lines)\n'
+  if nav2_log_summary=$(
+      set -o pipefail
+      timeout 10 docker logs --since 1h --tail 10000 \
+      patrolbot-navigation 2>&1 | python3 "$SCRIPT_DIR/nav2-log-health.py"); then
+    printf 'NAV2_LOG_HEALTH_JSON=%s\n' "$nav2_log_summary"
+  else
+    printf 'NAV2_LOG_HEALTH_JSON={"error":"log collection unavailable"}\n'
+  fi
 fi
 
-printf '\nOVERALL=degraded reason=ros-readiness\n'
-exit 2
+printf '\nMachine-readable readiness\n'
+python3 "$SCRIPT_DIR/status_report.py" "${MACHINE_CHECKS[@]}"
+exit $?

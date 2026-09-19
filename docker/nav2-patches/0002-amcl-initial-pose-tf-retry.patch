@@ -1,0 +1,200 @@
+--- a/nav2_amcl/include/nav2_amcl/amcl_node.hpp
++++ b/nav2_amcl/include/nav2_amcl/amcl_node.hpp
+@@ -22,6 +22,7 @@
+ #define NAV2_AMCL__AMCL_NODE_HPP_
+ 
+ #include <atomic>
++#include <chrono>
+ #include <map>
+ #include <memory>
+ #include <string>
+@@ -193,6 +194,8 @@
+    * @brief Handle with an initial pose estimate is received
+    */
+   void initialPoseReceived(geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
++  void retryInitialPose();
++  void cancelInitialPoseRetry();
+   /*
+    * @brief Handle when a laser scan is received
+    */
+@@ -340,7 +343,15 @@
+   /*
+    * @brief Handle a new pose estimate callback
+    */
+-  void handleInitialPose(geometry_msgs::msg::PoseWithCovarianceStamped & msg);
++  void handleInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped & msg);
++  void handleInitialPose(
++    const geometry_msgs::msg::PoseWithCovarianceStamped & msg,
++    const rclcpp::Time & target_time);
++  geometry_msgs::msg::PoseWithCovarianceStamped pending_initial_pose_;
++  rclcpp::Time pending_initial_pose_target_;
++  std::chrono::steady_clock::time_point pending_initial_pose_deadline_;
++  bool initial_pose_pending_{false};
++  rclcpp::TimerBase::SharedPtr initial_pose_retry_timer_;
+   bool init_pose_received_on_inactive{false};
+   bool initial_pose_is_known_{false};
+   bool set_initial_pose_{false};
+--- a/nav2_amcl/src/amcl_node.cpp
++++ b/nav2_amcl/src/amcl_node.cpp
+@@ -313,6 +313,7 @@
+ {
+   RCLCPP_INFO(get_logger(), "Deactivating");
+ 
++  cancelInitialPoseRetry();
+   active_ = false;
+ 
+   // Lifecycle publishers must be explicitly deactivated
+@@ -334,6 +335,7 @@
+ {
+   RCLCPP_INFO(get_logger(), "Cleaning up");
+ 
++  cancelInitialPoseRetry();
+   executor_thread_.reset();
+ 
+   // Get rid of the inputs first (services and message filter input), so we
+@@ -403,6 +405,7 @@
+ AmclNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
+ {
+   RCLCPP_INFO(get_logger(), "Shutting down");
++  cancelInitialPoseRetry();
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+ 
+@@ -556,43 +559,63 @@
+     return;
+   }
+ 
+-  // Overriding last published pose to initial pose
+-  last_published_pose_ = *msg;
+-
+   if (!active_) {
++    // Keep an inactive seed for activation, but do not overwrite the last
++    // accepted AMCL pose until the timestamped odom lookup succeeds.
++    last_published_pose_ = *msg;
+     init_pose_received_on_inactive = true;
+     RCLCPP_WARN(
+       get_logger(), "Received initial pose request, "
+       "but AMCL is not yet in the active state");
+     return;
+   }
+-  handleInitialPose(*msg);
+-}
+-
+-void
+-AmclNode::handleInitialPose(geometry_msgs::msg::PoseWithCovarianceStamped & msg)
++  // A newer operator request supersedes an older one that is waiting for TF.
++  cancelInitialPoseRetry();
++  // A requested reinitialization must not keep advertising the previous
++  // localization while its new timestamped odometry transform is unavailable.
++  initial_pose_is_known_ = false;
++  latest_tf_valid_ = false;
++  handleInitialPose(*msg, now());
++}
++
++void
++AmclNode::handleInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped & msg)
++{
++  handleInitialPose(msg, now());
++}
++
++void
++AmclNode::handleInitialPose(
++  const geometry_msgs::msg::PoseWithCovarianceStamped & msg,
++  const rclcpp::Time & target_time)
+ {
+   std::lock_guard<std::recursive_mutex> cfl(mutex_);
+   // In case the client sent us a pose estimate in the past, integrate the
+   // intervening odometric change.
+   geometry_msgs::msg::TransformStamped tx_odom;
+   try {
+-    rclcpp::Time rclcpp_time = now();
+-    tf2::TimePoint tf2_time(std::chrono::nanoseconds(rclcpp_time.nanoseconds()));
++    tf2::TimePoint tf2_time(std::chrono::nanoseconds(target_time.nanoseconds()));
+ 
+     // Check if the transform is available
+     tx_odom = tf_buffer_->lookupTransform(
+       base_frame_id_, tf2_ros::fromMsg(msg.header.stamp),
+       base_frame_id_, tf2_time, odom_frame_id_);
+   } catch (tf2::TransformException & e) {
+-    // If we've never sent a transform, then this is normal, because the
+-    // global_frame_id_ frame doesn't exist.  We only care about in-time
+-    // transformation for on-the-move pose-setting, so ignoring this
+-    // startup condition doesn't really cost us anything.
+-    if (sent_first_transform_) {
+-      RCLCPP_WARN(get_logger(), "Failed to transform initial pose in time (%s)", e.what());
+-    }
+-    tf2::impl::Converter<false, true>::convert(tf2::Transform::getIdentity(), tx_odom.transform);
++    pending_initial_pose_ = msg;
++    pending_initial_pose_target_ = target_time;
++    if (!initial_pose_pending_) {
++      pending_initial_pose_deadline_ = std::chrono::steady_clock::now() +
++        std::chrono::nanoseconds(transform_tolerance_.count());
++    }
++    initial_pose_pending_ = true;
++    if (!initial_pose_retry_timer_) {
++      initial_pose_retry_timer_ = create_wall_timer(
++        20ms, std::bind(&AmclNode::retryInitialPose, this), callback_group_);
++    }
++    RCLCPP_WARN_THROTTLE(
++      get_logger(), *get_clock(), 2000,
++      "Waiting for odom->base_link at initial pose time: %s", e.what());
++    return;
+   }
+ 
+   tf2::Transform tx_odom_tf2;
+@@ -613,6 +636,8 @@
+     tf2::getYaw(pose_new.getRotation()));
+ 
+   // Re-initialize the filter
++  cancelInitialPoseRetry();
++  last_published_pose_ = msg;
+   pf_vector_t pf_init_pose_mean = pf_vector_zero();
+   pf_init_pose_mean.v[0] = pose_new.getOrigin().x();
+   pf_init_pose_mean.v[1] = pose_new.getOrigin().y();
+@@ -632,6 +657,46 @@
+   pf_init_ = false;
+   init_pose_received_on_inactive = false;
+   initial_pose_is_known_ = true;
++}
++
++void
++AmclNode::retryInitialPose()
++{
++  std::lock_guard<std::recursive_mutex> cfl(mutex_);
++  if (!active_ || !initial_pose_pending_) {
++    initial_pose_pending_ = false;
++    if (initial_pose_retry_timer_) {
++      initial_pose_retry_timer_->cancel();
++    }
++    return;
++  }
++  if (std::chrono::steady_clock::now() >= pending_initial_pose_deadline_) {
++    RCLCPP_ERROR(
++      get_logger(),
++      "Rejecting initial pose: odom->base_link was unavailable at its timestamp "
++      "within transform_tolerance.");
++    initial_pose_pending_ = false;
++    if (initial_pose_retry_timer_) {
++      initial_pose_retry_timer_->cancel();
++    }
++    return;
++  }
++  const auto msg = pending_initial_pose_;
++  const auto target_time = pending_initial_pose_target_;
++  // Keep the original deadline across retries. A new request explicitly
++  // cancels this state before starting its own bounded attempt.
++  handleInitialPose(msg, target_time);
++}
++
++void
++AmclNode::cancelInitialPoseRetry()
++{
++  std::lock_guard<std::recursive_mutex> cfl(mutex_);
++  initial_pose_pending_ = false;
++  if (initial_pose_retry_timer_) {
++    initial_pose_retry_timer_->cancel();
++    initial_pose_retry_timer_.reset();
++  }
+ }
+ 
+ void

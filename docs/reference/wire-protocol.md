@@ -240,3 +240,13 @@ legacy missing identity as unknown. This wire change alone does not reset
 covariance or make localization safe after an origin change. Consumer gating,
 persistence across bridge restarts, coordinated localization invalidation and
 exact-image reconnect acceptance remain required before deploying it.
+
+The ROS-free `EpochRecovery` contract orders origin recovery as: accepted
+origin, successful AMCL lifecycle reset, valid operator seed, then a newer
+AMCL result. Its token includes a bridge-instance UUID and recovery generation
+so a bridge restart or origin change invalidates in-flight acknowledgements.
+ROS clock regression also invalidates recovery. Receipt order alone cannot
+accept an old queued seed/result; source stamps must follow the relevant
+barrier. Origin association does not waive existing covariance/freshness gates.
+This contract still requires runtime coordinator and consumer integration; it
+does not itself publish a seed or release navigation.

@@ -104,6 +104,7 @@ class ServerHello:
 
     protocol: int
     features: frozenset = field(default_factory=frozenset)
+    odom_epoch: Optional[str] = None
 
     def supports_undock(self) -> bool:
         """Report whether this SBC can execute the hardware undock at all."""
@@ -169,6 +170,7 @@ def parse_hello(line: str) -> Optional[ServerHello]:
         return None
     protocol = 0
     features = set()
+    odom_epoch = None
     for item in fields[1:]:
         if '=' not in item:
             raise ValueError('malformed HELLO field')
@@ -178,9 +180,14 @@ def parse_hello(line: str) -> Optional[ServerHello]:
                 protocol = int(value)
             except ValueError as exc:
                 raise ValueError('non-numeric HELLO protocol') from exc
+        elif key == 'ODOM_EPOCH':
+            if odom_epoch is not None or not valid_request_id(value):
+                raise ValueError('invalid or duplicate odometry epoch')
+            odom_epoch = value
         elif key == 'FEATURES':
             features = {token for token in value.split(',') if token}
-    return ServerHello(protocol=protocol, features=frozenset(features))
+    return ServerHello(protocol=protocol, features=frozenset(features),
+                       odom_epoch=odom_epoch)
 
 
 def _float(value: str, name: str) -> float:

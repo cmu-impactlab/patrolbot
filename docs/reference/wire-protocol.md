@@ -222,3 +222,21 @@ duplicate, negative, or over-limit metadata suppresses scan publication while
 odometry continues. Missing metadata is legacy-compatible with a throttled
 warning; it is not acquisition-time acceptance. Empty laser payloads remain
 silent. Existing bridges ignore the added section.
+
+### Explicit odometry origin identity (candidate; not deployed)
+
+The candidate server obtains one canonical UUID from Linux
+`/proc/sys/kernel/random/uuid` before creating its `ArRobot`. It refuses startup
+if that identity is unavailable. It repeats `ODOM_EPOCH=<uuid>` in every HELLO
+and `|ODOM_EPOCH:<uuid>` after laser-age metadata in every navigation frame.
+TCP client reconnects retain the UUID; a server process restart creates a new
+one. This is an origin identifier, not a timestamp, TCP session generation or
+physical-position correction. The current server exits on base disconnection
+and has no in-process pose reset; any future reset or base reconnect must also
+rotate the identity.
+
+The HELLO decoder rejects malformed/duplicate identities and represents a
+legacy missing identity as unknown. This wire change alone does not reset
+covariance or make localization safe after an origin change. Consumer gating,
+persistence across bridge restarts, coordinated localization invalidation and
+exact-image reconnect acceptance remain required before deploying it.

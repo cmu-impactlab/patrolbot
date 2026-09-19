@@ -142,7 +142,7 @@ std::string formatUndockResult(const std::string& request_id, bool success,
                                int release_attempts,
                                DockPhysicalState dock_state,
                                bool physically_clear);
-std::string formatHello();
+std::string formatHello(const std::string& odom_epoch = "");
 
 }  // namespace patrolbot
 

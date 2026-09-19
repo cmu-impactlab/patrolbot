@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <sstream>
+#include <stdexcept>
 
 namespace patrolbot {
 namespace {
@@ -346,9 +347,14 @@ std::string formatUndockResult(const std::string& request_id, bool success,
   return stream.str();
 }
 
-std::string formatHello() {
+std::string formatHello(const std::string& odom_epoch) {
+  if (!odom_epoch.empty() && !isCanonicalUuid(odom_epoch)) {
+    throw std::invalid_argument("invalid odometry epoch UUID");
+  }
   std::stringstream stream;
-  stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK\n";
+  stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK";
+  if (!odom_epoch.empty()) stream << ":ODOM_EPOCH=" << odom_epoch;
+  stream << "\n";
   return stream.str();
 }
 

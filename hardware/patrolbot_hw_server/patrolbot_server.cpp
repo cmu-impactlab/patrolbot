@@ -833,6 +833,16 @@ void handleUndockCancel(const patrolbot::ParsedCommand& command,
 }  // namespace
 
 int main(int argc, char** argv) {
+  // One identity for this ArRobot lifetime, not for each TCP client. This
+  // server exits on base disconnection (runAsync(true)); it has no in-process
+  // pose-reset operation. Any future reset/reconnect must rotate this identity.
+  std::ifstream epoch_source("/proc/sys/kernel/random/uuid");
+  std::string odom_epoch;
+  if (!std::getline(epoch_source, odom_epoch) ||
+      !patrolbot::isCanonicalUuid(odom_epoch)) {
+    std::fprintf(stderr, "Cannot obtain odometry epoch identity; refusing startup.\n");
+    return 1;
+  }
   Aria::init();
   ArArgumentParser parser(&argc, argv);
   parser.loadDefaultArguments();
@@ -968,7 +978,7 @@ int main(int argc, char** argv) {
     bool client_connected = true;
     // A bridge that never sees FEATURES=UNDOCK refuses undock goals rather
     // than waiting for a reply that will not come.
-    responses.push_back(patrolbot::formatHello());
+    responses.push_back(patrolbot::formatHello(odom_epoch));
 
     while (robot.isRunning() && client_connected) {
       const long long now_ms = clock.tick();
@@ -1168,7 +1178,8 @@ int main(int argc, char** argv) {
       }
       // Relative duration, never SBC wall time: this host may not share the
       // Pi's clock epoch. Unknown/old scans carry no ranges and age -1.
-      telemetry << "|LASER_AGE_MS:" << laserAgeMs;
+      telemetry << "|LASER_AGE_MS:" << laserAgeMs
+                << "|ODOM_EPOCH:" << odom_epoch;
       telemetry << "\n";
 
       if (++auxCounter >= auxInterval) {

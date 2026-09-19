@@ -156,3 +156,20 @@ def test_other_lines_are_not_misclassified():
     assert parse_hello(telemetry) is None
     assert parse_undock_event(RESULT) is None
     assert parse_undock_result(EVENT) is None
+
+
+def test_epoch_identity_in_hello_is_explicit_and_optional():
+    epoch = '123e4567-e89b-12d3-a456-426614174000'
+    assert parse_hello('HELLO:PROTOCOL=2:FEATURES=UNDOCK').odom_epoch is None
+    hello = parse_hello('HELLO:PROTOCOL=2:FEATURES=UNDOCK:ODOM_EPOCH=' + epoch)
+    assert hello.odom_epoch == epoch
+
+
+@pytest.mark.parametrize('value', [
+    '', '123', 'none', '123E4567-e89b-12d3-a456-426614174000',
+    '123e4567-e89b-12d3-a456-426614174000:ODOM_EPOCH='
+    '123e4567-e89b-12d3-a456-426614174000',
+])
+def test_malformed_or_duplicate_epoch_is_rejected(value):
+    with pytest.raises(ValueError):
+        parse_hello('HELLO:PROTOCOL=2:FEATURES=UNDOCK:ODOM_EPOCH=' + value)

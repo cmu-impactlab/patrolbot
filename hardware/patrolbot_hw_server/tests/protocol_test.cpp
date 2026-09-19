@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -196,6 +197,12 @@ void test_control_frame_formatting() {
                      false, false) ==
         "RESULT:CHARGE_RELEASE:" + kId + ":OK:0:charge_released:0:0:0\n");
   CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK\n");
+  CHECK(formatHello(kId) ==
+        "HELLO:PROTOCOL=2:FEATURES=UNDOCK:ODOM_EPOCH=" + kId + "\n");
+  bool rejected = false;
+  try { formatHello("bad:ODOM_EPOCH=injection"); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  CHECK(rejected);
 }
 
 void test_undock_frame_formatting() {

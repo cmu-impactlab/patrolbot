@@ -12,10 +12,10 @@ SOURCES = patrolbot_server.cpp protocol.cpp undock.cpp
 PROBE = patrolbot_commission_probe
 PROBE_SOURCES = patrolbot_commission_probe.cpp
 
-HEADERS = protocol.hpp undock.hpp
+HEADERS = protocol.hpp undock.hpp scan_timing.hpp
 
 # Neither test binary links ARIA, so both build and run on a workstation.
-TESTS = tests/protocol_test tests/undock_test
+TESTS = tests/protocol_test tests/undock_test tests/scan_timing_test
 
 .PHONY: all clean test probe
 
@@ -35,9 +35,13 @@ tests/protocol_test: tests/protocol_test.cpp protocol.cpp $(HEADERS)
 tests/undock_test: tests/undock_test.cpp undock.cpp $(HEADERS)
 	$(CXX) $(CXXFLAGS) tests/undock_test.cpp undock.cpp -o $@
 
+tests/scan_timing_test: tests/scan_timing_test.cpp scan_timing.hpp
+	$(CXX) $(CXXFLAGS) tests/scan_timing_test.cpp -o $@
+
 test: $(TESTS)
 	./tests/protocol_test
 	./tests/undock_test
+	./tests/scan_timing_test
 
 clean:
 	rm -f $(TARGET) $(PROBE) $(TESTS)

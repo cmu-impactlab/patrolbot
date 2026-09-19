@@ -1,5 +1,6 @@
 """Isolated loopback integration tests for the real Pi bridge node."""
 
+import math
 import os
 import socket
 import threading
@@ -61,6 +62,10 @@ class FakeSbc:
         # Reported ARIA pose. Settable so a test can drive the fake robot and
         # watch what that does to the covariance on the wire.
         self.odom_pose = (0.0, 0.0, 0.0)
+        # Body of the LASER: section, verbatim. Settable so a test can put a
+        # field on the wire that does not parse as a number and watch what the
+        # bridge does with the beams either side of it.
+        self.laser_field = '1.0,1.0,1.0'
         self.undock_should_succeed = True
         self.undock_stall = False
         self._active_undock = None
@@ -132,8 +137,9 @@ class FakeSbc:
                 f'{int(self.redock_inhibited)},0,'
                 f'{int(self.profile_commissioned)}')
             odom_x, odom_y, odom_th = self.odom_pose
+            laser_field = self.laser_field
         return (
-            f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:1.0,1.0,1.0\n'
+            f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
             f'DOCK={dock}\n').encode('ascii')
@@ -674,20 +680,15 @@ def test_odom_pose_covariance_grows_as_the_robot_drives(harness):
     # Drive the fake robot forward in steps small enough to be real motion
     # rather than a rejected discontinuity.
     for step in range(1, 21):
-        fake.odom_pose = (0.05 * step, 0.0, 0.0)
+        fake.odom_pose = (0.005 * step, 0.0, 0.0)
         time.sleep(0.05)
 
     assert wait_until(lambda: seen[-1].pose.covariance[0] > at_rest), (
-        'covariance never grew despite a metre of driving')
+        'covariance never grew despite 0.1 m of driving')
 
 
-def test_odom_covariance_restarts_with_a_new_sbc_session(harness):
-    """
-    A reconnect starts a new dead-reckoning run from ARIA's origin.
-
-    Carrying the old session's accumulated drift into the new one would keep
-    charging the robot for distance it is no longer being told about.
-    """
+def test_link_reconnect_preserves_odometry_covariance(harness):
+    """Losing the Pi socket leaves ARIA's origin and accrued drift intact."""
     fake, bridge, client_node, _executor = harness
     from nav_msgs.msg import Odometry
 
@@ -695,21 +696,268 @@ def test_odom_covariance_restarts_with_a_new_sbc_session(harness):
     client_node.create_subscription(
         Odometry, '/odom', lambda msg: seen.append(msg), 50)
     assert wait_until(lambda: len(seen) > 0)
-
+    at_rest = seen[-1].pose.covariance[0]
     for step in range(1, 21):
-        fake.odom_pose = (0.05 * step, 0.0, 0.0)
+        fake.odom_pose = (0.005 * step, 0.0, 0.0)
         time.sleep(0.05)
-    assert wait_until(lambda: seen[-1].pose.covariance[0] > 0.0)
-    driven = seen[-1].pose.covariance[0]
+    assert wait_until(lambda: abs(seen[-1].pose.pose.position.x - 0.1) < 1e-6)
+    driven = list(seen[-1].pose.covariance)
+    assert driven[0] > at_rest
 
-    # Drop the link. The SBC comes back with its pose reset to the origin.
-    generation = bridge._session_generation
-    fake.drop_connection()
-    fake.odom_pose = (0.0, 0.0, 0.0)
-    assert wait_until(lambda: bridge._session_generation > generation,
-                      timeout=6.0), 'never reconnected'
+    for _ in range(2):
+        generation = bridge._session_generation
+        fake.drop_connection()
+        assert wait_until(lambda: bridge._session_generation > generation,
+                          timeout=6.0), 'never reconnected'
+        # Require a newly accepted frame, not a queued pre-disconnect message.
+        before = bridge._pose_at
+        assert wait_until(lambda: bridge._pose_at > before)
+        with bridge._pose_lock:
+            assert bridge._odom_covariance.pose_covariance() == driven
+
+    fake.odom_pose = (0.11, 0.0, 0.0)
+    assert wait_until(lambda: seen[-1].pose.covariance[0] > driven[0]), (
+        'valid motion after reconnect did not accumulate covariance')
+
+
+# ----------------------------------------------------------------------------
+# Scan geometry. The SBC sends ranges only -- ARIA's per-reading angles never
+# reach the wire -- so a beam's bearing is purely its index in the list, and
+# `_laser_scan_message` reconstructs the sweep as angle_min = -pi/2 with
+# angle_increment = pi/(N-1). N is therefore not a count, it is the angular
+# calibration: add or drop one element and every beam after it is reported at
+# the wrong bearing, in a scan that still looks entirely plausible in RViz.
+# ----------------------------------------------------------------------------
+
+def _scan_from(seen, field_count, second_range):
+    """
+    Wait for a scan that could only have come from the field just installed.
+
+    A scan built from the previous LASER: body can still be in flight, so
+    waiting for "any scan" samples the old one and fails intermittently. The
+    identifying mark is the second range, which differs from the 1.0 the
+    default field produces. Deliberately accepts a short scan too: a buggy
+    bridge drops the bad element and publishes N-1 beams, and this has to fail
+    on the assertions below rather than hang here.
+    """
+    def matches(msg):
+        if len(msg.ranges) not in (field_count - 1, field_count):
+            return False
+        return (len(msg.ranges) > 1 and
+                msg.ranges[1] == pytest.approx(second_range))
+
+    assert wait_until(lambda: any(matches(m) for m in seen)), (
+        'no scan was produced from the installed LASER: field')
+    return next(m for m in seen if matches(m))
+
+
+def _subscribe_to_scan(client_node):
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import LaserScan
+
+    seen = []
+    client_node.create_subscription(
+        LaserScan, '/scan', lambda msg: seen.append(msg),
+        qos_profile_sensor_data)
+    return seen
+
+
+def test_an_unparsable_range_does_not_rotate_the_rest_of_the_scan(harness):
+    """
+    A field that will not parse must occupy its slot, not vanish.
+
+    Silently skipping it shortens N, which widens angle_increment across the
+    whole sweep and slides every later beam off its true bearing. From AMCL's
+    side that is indistinguishable from a miscalibrated laser -- and it is
+    exactly the failure that gets misdiagnosed as bad odometry.
+    """
+    fake, _bridge, client_node, _executor = harness
+    seen = _subscribe_to_scan(client_node)
+    assert wait_until(lambda: len(seen) > 0), 'no scan on a clean stream'
+
+    # The corrupt field is deliberately neither first nor last: an off-by-one
+    # at either end would still pass a bare length check.
+    fake.laser_field = '1.0,nonsense,3.0,4.0'
     seen.clear()
-    assert wait_until(lambda: len(seen) > 0, timeout=6.0)
+    scan = _scan_from(seen, field_count=4, second_range=float('inf'))
 
-    assert seen[-1].pose.covariance[0] < driven, (
-        'kept the old session accumulated drift across a reconnect')
+    assert len(scan.ranges) == 4, (
+        f'published {len(scan.ranges)} beams for 4 fields -- the unparsable '
+        'one was dropped rather than marked invalid, so every beam after it '
+        'is now reported at the wrong bearing')
+    assert scan.angle_increment == pytest.approx(math.pi / 3.0)
+    assert math.isinf(scan.ranges[1])
+    assert scan.ranges[2] == pytest.approx(3.0), (
+        'the beam after the bad field shifted into the wrong slot')
+    assert scan.ranges[3] == pytest.approx(4.0)
+
+
+def test_a_blank_field_inside_the_sweep_also_keeps_its_slot(harness):
+    """
+    An empty field mid-sweep is the same defect as an unparsable one.
+
+    Both require a corrupt frame, and both must cost one invalid beam rather
+    than re-aiming the remainder of the scan.
+    """
+    fake, _bridge, client_node, _executor = harness
+    seen = _subscribe_to_scan(client_node)
+    assert wait_until(lambda: len(seen) > 0), 'no scan on a clean stream'
+
+    fake.laser_field = '1.0,,3.0,4.0'
+    seen.clear()
+    scan = _scan_from(seen, field_count=4, second_range=float('inf'))
+
+    assert len(scan.ranges) == 4, (
+        f'published {len(scan.ranges)} beams for 4 fields -- the blank one '
+        'was dropped, re-aiming every beam after it')
+    assert scan.angle_increment == pytest.approx(math.pi / 3.0)
+    assert math.isinf(scan.ranges[1])
+    assert scan.ranges[2] == pytest.approx(3.0)
+    assert scan.ranges[3] == pytest.approx(4.0)
+
+
+def test_the_servers_trailing_comma_does_not_add_a_phantom_beam(harness):
+    """
+    The real SBC terminates every LASER: body with a comma. Pin that.
+
+    `patrolbot_server.cpp` writes `range,` per reading, so the production wire
+    format always ends in a separator and splitting it yields a final empty
+    element. That one must stay ignored. This is the counter-case to the two
+    tests above and the reason they cannot be satisfied by blindly treating
+    every empty field as a beam: doing so would append a phantom +inf return
+    to every single scan the robot ever publishes and mis-aim the whole sweep
+    by one increment. Nothing covered this before -- the fake omitted the
+    trailing comma the real server always sends.
+    """
+    fake, _bridge, client_node, _executor = harness
+    seen = _subscribe_to_scan(client_node)
+    assert wait_until(lambda: len(seen) > 0), 'no scan on a clean stream'
+
+    fake.laser_field = '1.0,2.0,3.0,'
+    seen.clear()
+    scan = _scan_from(seen, field_count=4, second_range=2.0)
+
+    assert len(scan.ranges) == 3, (
+        f'published {len(scan.ranges)} beams for 3 readings plus the '
+        "server's trailing comma -- the terminator was counted as a beam")
+    assert scan.angle_increment == pytest.approx(math.pi / 2.0)
+    assert scan.ranges == pytest.approx([1.0, 2.0, 3.0])
+
+
+def test_a_one_beam_frame_is_dropped_without_disturbing_the_stream(harness):
+    """
+    A frame too short to describe the sweep must be skipped deliberately.
+
+    `angle_increment` is `pi/(N-1)`, so a single-beam frame divides by zero.
+    That used to raise inside `_parse_telemetry` and be swallowed whole by the
+    broad `except Exception` -- the right outcome reached the wrong way: the
+    scan was correctly dropped, but nothing recorded that it happened, so on
+    the live robot a corrupt frame was indistinguishable from a quiet laser.
+    The guard is now explicit and warns, throttled, on exactly one beam; zero
+    beams stays silent because that is the ordinary laser-down path.
+
+    What must hold either way: no scan is ever published with fewer than two
+    beams (there is no honest geometry for one), `/odom` keeps flowing because
+    it is published before the scan block, and the stream recovers on the next
+    good frame rather than wedging.
+    """
+    from nav_msgs.msg import Odometry
+
+    fake, _bridge, client_node, _executor = harness
+    seen = _subscribe_to_scan(client_node)
+    odom_seen = []
+    client_node.create_subscription(
+        Odometry, '/odom', lambda msg: odom_seen.append(msg), 50)
+    assert wait_until(lambda: len(seen) > 0), 'no scan on a clean stream'
+
+    # One reading plus the server's terminator: N == 1 after the terminator is
+    # discarded, which is exactly the degenerate case.
+    fake.laser_field = '1.0,'
+    seen.clear()
+    odom_seen.clear()
+
+    assert wait_until(lambda: len(odom_seen) > 2), (
+        'odometry stopped while the laser field was degenerate -- a bad scan '
+        'must not take the pose stream down with it')
+    assert all(len(msg.ranges) >= 2 for msg in seen), (
+        'published a scan with fewer than two beams, which has no valid '
+        'angle_increment')
+
+    # The next good frame must come straight back.
+    fake.laser_field = '1.0,2.0,3.0,'
+    scan = _scan_from(seen, field_count=4, second_range=2.0)
+    assert len(scan.ranges) == 3, 'the stream did not recover'
+    assert scan.angle_increment == pytest.approx(math.pi / 2.0)
+
+
+@pytest.mark.parametrize('odom,reason', [
+    ('nan,0,0,0,0', 'non-finite'),
+    ('0,0,0,inf,0', 'non-finite'),
+    ('0,0,0,0.31,0', 'linear-speed-limit'),
+    ('0,0,0,0,1.21', 'angular-speed-limit'),
+    ('100,0,0,0,0', 'position-discontinuity'),
+    ('0,0,3.0,0,0', 'heading-discontinuity'),
+])
+def test_invalid_odometry_cannot_refresh_pose_and_valid_stream_recovers(
+        harness, odom, reason):
+    fake, bridge, _client_node, _executor = harness
+    assert wait_until(lambda: bridge._pose_at > 0)
+    fake.telemetry_paused = True
+    time.sleep(0.2)
+    before = bridge._pose_at
+    bridge._parse_telemetry('ODOM:' + odom + '|LASER:1,1,1')
+    assert bridge._odom_rejections.get(reason, 0) >= 1
+    assert bridge._pose_at == before
+    fake.telemetry_paused = False
+    assert wait_until(lambda: bridge._pose_at > before)
+
+
+@pytest.mark.parametrize('metadata', [
+    'LASER_AGE_MS:-1', 'LASER_AGE_MS:501', 'LASER_AGE_MS:nan',
+    'LASER_AGE_MS:1|LASER_AGE_MS:2',
+])
+def test_invalid_scan_age_drops_only_scan_and_recovers(harness, metadata):
+    fake, bridge, _client, _executor = harness
+    assert wait_until(lambda: bridge._pose_at > 0)
+    fake.telemetry_paused = True
+    time.sleep(0.2)
+    published = []
+    original = bridge._publish_with_timing
+    bridge._publish_with_timing = lambda pub, msg, topic: published.append((topic, msg))
+    try:
+        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|' + metadata)
+        assert [topic for topic, _ in published] == ['/odom']
+        published.clear()
+        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120')
+        assert [topic for topic, _ in published] == ['/odom', '/scan']
+        odom, scan = [msg for _, msg in published]
+        def ns(msg):
+            return msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
+        assert 120000000 <= ns(odom) - ns(scan) < 140000000
+        assert list(scan.ranges) == [1, 2, 3]
+    finally:
+        bridge._publish_with_timing = original
+        fake.telemetry_paused = False
+
+
+def test_scan_age_includes_local_queue_wait(harness):
+    fake, bridge, _client, _executor = harness
+    assert wait_until(lambda: bridge._pose_at > 0)
+    fake.telemetry_paused = True
+    time.sleep(0.2)
+    published = []
+    original = bridge._publish_with_timing
+    bridge._publish_with_timing = lambda pub, msg, topic: published.append((topic, msg))
+    try:
+        line = 'ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120'
+        bridge._parse_telemetry(line, received_at=time.monotonic() - .1)
+        odom, scan = [msg for _, msg in published]
+        def ns(msg):
+            return msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
+        assert 220000000 <= ns(odom) - ns(scan) < 240000000
+        published.clear()
+        bridge._parse_telemetry(line, received_at=time.monotonic() - .4)
+        assert [topic for topic, _ in published] == ['/odom']
+    finally:
+        bridge._publish_with_timing = original
+        fake.telemetry_paused = False

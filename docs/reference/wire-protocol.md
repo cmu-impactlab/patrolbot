@@ -205,3 +205,20 @@ An unknown leading verb returns "not mine" rather than raising, which is what le
 halves of the system share a link without one spamming parse errors about the other's frames.
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->
+
+### Scan acquisition age (optional navigation extension)
+
+Navigation frames may append `|LASER_AGE_MS:<milliseconds>` after `LASER:`.
+The SBC sends the oldest ARIA reading age across the complete scan, measured
+while holding the laser lock. Every beam must be present and have age 0–500 ms;
+otherwise it sends no ranges and age `-1`. Using the oldest reading also covers
+ARIA's alternating deinterlaced acquisition timestamps.
+
+The bridge subtracts this age and its measured local receive-queue delay from
+its ROS clock. SBC/Pi wall clocks need not agree. Transport/send-buffer delay
+and the individual beam acquisition offsets remain unmeasured: this corrects
+known age, not an exact synchronized acquisition timestamp. Malformed,
+duplicate, negative, or over-limit metadata suppresses scan publication while
+odometry continues. Missing metadata is legacy-compatible with a throttled
+warning; it is not acquisition-time acceptance. Empty laser payloads remain
+silent. Existing bridges ignore the added section.

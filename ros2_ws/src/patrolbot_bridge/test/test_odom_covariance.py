@@ -169,11 +169,19 @@ def test_path_length_counts_distance_not_displacement():
 
 def test_yaw_uncertainty_grows_with_rotation():
     """
-    Heading error is what a gyro-less differential base accrues fastest.
+    Heading error is what a differential base accrues fastest.
 
-    HasGyro=0 on this base, so yaw comes from differencing two wheel encoders
-    and nothing corrects it. Turning has to cost more heading confidence than
-    standing still does.
+    Do not read `HasGyro=0` here as "no gyro". It is not a field in the uARCS
+    packet: ARIA derives it in ArRobotConfigPacketReader.cpp as `GyroType == 1`,
+    so `GyroType=2` on this base forces it to 0 as a matter of arithmetic. The
+    base reports `GyroType=2` (GYRO_ANALOG_CONTROLLER), meaning the
+    microcontroller fuses the gyro before the SIP is emitted -- yaw reaching
+    ROS is already gyro-corrected, not raw encoder differencing. See
+    diagnostics/session1/REPORT.md.
+
+    That does not weaken this test. Fused or not, heading is still dead
+    reckoned with nothing observing absolute orientation, so turning has to
+    cost more heading confidence than standing still does.
     """
     acc = make()
     before = acc.pose_covariance()[YAW]
@@ -200,7 +208,9 @@ def test_translation_can_also_bleed_into_heading():
 
     Unequal wheel diameters turn a commanded straight line into a slow arc, so
     a base that only ever drives forward still loses heading. This is AMCL's
-    alpha4 term, expressed as a covariance.
+    **alpha2** term (rotation noise from translation), expressed as a
+    covariance. Corrected 2026-08-21 -- this said alpha4, which is the opposite
+    direction of the same coupling: translation noise caused by rotation.
     """
     acc = make(min_variance=0.0)
     drive_straight(acc, 5.0)
@@ -350,7 +360,7 @@ def test_both_matrices_are_36_element_row_major_with_zero_cross_terms():
 
 
 def test_reset_returns_the_pose_covariance_to_the_floor():
-    """A new SBC session starts a new dead-reckoning run from zero drift."""
+    """An explicit odometry epoch reset starts a new accumulation."""
     fresh = make()
     acc = make()
     drive_straight(acc, 8.0)

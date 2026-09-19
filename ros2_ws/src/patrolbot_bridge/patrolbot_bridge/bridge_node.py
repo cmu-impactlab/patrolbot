@@ -20,6 +20,9 @@ from patrolbot_bridge.control_protocol import (
     valid_request_id,
 )
 from patrolbot_bridge.odom_covariance import OdomCovariance
+from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
+from patrolbot_bridge.scan_timing import parse_laser_age, compute_scan_stamp_ns
+from rclpy.time import Time
 from patrolbot_bridge.safety_telemetry import (
     battery_diagnostic,
     BATTERY_MIN_OPERATING_VOLTS,
@@ -142,6 +145,13 @@ class PatrolBotBridge(Node):
         self.declare_parameter('odom_sigma_vyaw', 0.02)
         self.declare_parameter('odom_min_variance', 1.0e-6)
         self.declare_parameter('odom_max_variance', 1.0)
+        # These are protocol/timing contracts, not estimated physical values.
+        # patrolbot_server rejects DRIVE above 0.30 m/s or 1.20 rad/s and emits
+        # telemetry every 50 ms. The validator derives each continuity
+        # allowance from elapsed time plus one sample period.
+        self.declare_parameter('odom_max_linear_speed', 0.30)
+        self.declare_parameter('odom_max_angular_speed', 1.20)
+        self.declare_parameter('odom_expected_period', 0.05)
         self.server_ip = str(self.get_parameter('server_ip').value)
         self.server_port = int(self.get_parameter('server_port').value)
         self.CONNECT_TIMEOUT = float(
@@ -271,6 +281,16 @@ class PatrolBotBridge(Node):
             max_variance=float(
                 self.get_parameter('odom_max_variance').value),
         )
+        self._odom_validator = OdomValidator(
+            max_linear_speed=float(
+                self.get_parameter('odom_max_linear_speed').value),
+            max_angular_speed=float(
+                self.get_parameter('odom_max_angular_speed').value),
+            expected_period=float(
+                self.get_parameter('odom_expected_period').value),
+        )
+        self._odom_rejections = {}
+        self._last_odom_rejection_warning = 0.0
         self._odom_tf_stale = False
         self._tf_send_lock = threading.Lock()
 
@@ -398,8 +418,10 @@ class PatrolBotBridge(Node):
                     # re-announces its capabilities on every accept.
                     self._server_hello = None
                     session = self._session_generation
-                with self._pose_lock:
-                    self._odom_covariance.reset()
+                # TCP session identity is not an ARIA odometry epoch. Keep
+                # both the covariance and continuity reference across link
+                # reconnects; the current protocol has no odometry epoch ID.
+                # A disconnect must never manufacture renewed confidence.
                 self.get_logger().info('Connected to SBC server.')
                 self._receive_loop(sock)
             except Exception as e:
@@ -543,7 +565,10 @@ class PatrolBotBridge(Node):
                     f'Discarding {age:.3f} s old {path_name} telemetry after '
                     'ROS publish stall.')
                 continue
-            parser(line)
+            if path_name == 'navigation':
+                parser(line, received_at=received_at)
+            else:
+                parser(line)
 
     def _publish_with_timing(self, publisher, message, topic):
         """Publish and make any unexpected middleware stall visible in logs."""
@@ -559,8 +584,44 @@ class PatrolBotBridge(Node):
     # Telemetry parsing — called from the navigation publisher worker
     # ------------------------------------------------------------------
 
-    def _parse_telemetry(self, line):
+    def _record_odom_rejection(self, reason, detail=''):
+        self._odom_rejections[reason] = (
+            self._odom_rejections.get(reason, 0) + 1)
+        now = time.monotonic()
+        if now - self._last_odom_rejection_warning < 5.0:
+            return
+        self._last_odom_rejection_warning = now
+        counts = ', '.join(
+            f'{name}={count}'
+            for name, count in sorted(self._odom_rejections.items()))
+        suffix = f' ({detail})' if detail else ''
+        self.get_logger().error(
+            f'Rejected SBC navigation frame: {reason}{suffix}; '
+            f'odometry rejection counts: {counts}.')
+
+        status = DiagnosticStatus()
+        status.name = 'patrolbot/odometry'
+        status.hardware_id = 'pioneer_patrolbot'
+        status.level = DiagnosticStatus.ERROR
+        status.message = f'odometry frame rejected: {reason}'
+        status.values = [
+            KeyValue(key='rejected_total',
+                     value=str(sum(self._odom_rejections.values()))),
+        ] + [
+            KeyValue(key=f'rejected_{name}', value=str(count))
+            for name, count in sorted(self._odom_rejections.items())
+        ]
+        diagnostics = DiagnosticArray()
+        diagnostics.header.stamp = self.get_clock().now().to_msg()
+        diagnostics.status = [status]
+        self._publish_with_timing(
+            self.diag_pub, diagnostics, '/diagnostics')
+
+    def _parse_telemetry(self, line, received_at=None):
         try:
+            receipt_clock = self.get_clock().now()
+            queue_age_ns = (0 if received_at is None else
+                            max(0, int((time.monotonic() - received_at) * 1e9)))
             if '|' not in line or 'ODOM:' not in line or 'LASER:' not in line:
                 return
 
@@ -575,6 +636,12 @@ class PatrolBotBridge(Node):
             vth = float(odom_fields[4])
 
             now = time.monotonic()
+            validation = self._odom_validator.check_and_accept(
+                OdomSample(x, y, th, vx, vth), now)
+            if not validation.accepted:
+                self._record_odom_rejection(validation.reason)
+                return
+
             with self._pose_lock:
                 # Was odom->base_link absent immediately before this pose --
                 # either never published, or withdrawn as stale?
@@ -606,7 +673,7 @@ class PatrolBotBridge(Node):
             q = get_quaternion_from_euler(th)
             stamp = self.get_clock().now().to_msg()
 
-            # /odom — accurate timestamp from current clock
+            # /odom — receipt-time estimate; acquisition time is not on the wire
             odom_msg = Odometry()
             odom_msg.header.stamp = stamp
             odom_msg.header.frame_id = 'odom'
@@ -623,10 +690,9 @@ class PatrolBotBridge(Node):
             odom_msg.twist.covariance = twist_covariance
             self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
 
-            # /scan — the TF buffer already covers this scan: the timer has
-            # been publishing at 50 Hz in parallel during normal operation, and
-            # after a gap the block above has just re-broadcast the transform
-            # ahead of this publish.
+            # /scan — preserve reported acquisition age plus local queue age.
+            # After startup/reconnect, older scans may precede TF history and
+            # must wait/drop in consumers; never re-stamp them to hide the gap.
             # Returns below SCAN_RANGE_MIN are dropped to +inf (invalid): the SICK
             # grazes the robot's own frame near -75 deg (~0.15 m, fixed self-
             # occlusion), which otherwise paints a permanent phantom obstacle
@@ -634,33 +700,69 @@ class PatrolBotBridge(Node):
             # robot radius is inside the footprint anyway.
             raw_ranges = []
             ranges = []
+            # patrolbot_server.cpp writes every reading with a trailing comma;
+            # discard that single wire terminator rather than inventing a beam.
+            if laser_fields and not laser_fields[-1].strip():
+                laser_fields = laser_fields[:-1]
             for r in laser_fields:
                 r = r.strip()
-                if r:
-                    try:
-                        val = float(r)
-                        raw_ranges.append(
-                            val if math.isfinite(val) and val >= 0.0
-                            else float('inf'))
-                        ranges.append(
-                            val if math.isfinite(val) and
-                            val >= self.SCAN_RANGE_MIN else float('inf'))
-                    except ValueError:
-                        pass
+                try:
+                    val = float(r)
+                    raw_ranges.append(
+                        val if math.isfinite(val) and val >= 0.0
+                        else float('inf'))
+                    ranges.append(
+                        val if math.isfinite(val) and
+                        val >= self.SCAN_RANGE_MIN else float('inf'))
+                except ValueError:
+                    # Index is bearing; dropping this slot re-aims the rest
+                    # of the scan, so keep it as an invalid return.
+                    raw_ranges.append(float('inf'))
+                    ranges.append(float('inf'))
 
-            if ranges:
+            # One beam has no honest angle_increment for the 180-degree sweep,
+            # while zero beams is the normal laser-down path and stays silent.
+            if len(ranges) >= 2:
+                age = parse_laser_age(line)
+                if not age.accepted:
+                    self.get_logger().warning(
+                        f'Dropping laser scan: {age.reason}.',
+                        throttle_duration_sec=10.0)
+                    return
+                if age.legacy:
+                    self.get_logger().warning(
+                        'SBC scan has no acquisition age; legacy arrival-time '
+                        'stamping is unverified for localization.',
+                        throttle_duration_sec=60.0)
+                measured_age_ns = (age.age_ms or 0) * 1000000 + queue_age_ns
+                if measured_age_ns > 500000000:
+                    self.get_logger().warning(
+                        'Dropping laser scan: acquisition plus queue age '
+                        'exceeds 0.5 s.', throttle_duration_sec=10.0)
+                    return
+                scan_stamp = Time(nanoseconds=compute_scan_stamp_ns(
+                    receipt_clock.nanoseconds, measured_age_ns)).to_msg()
                 scan_msg = self._laser_scan_message(
-                    stamp, ranges, self.SCAN_RANGE_MIN)
+                    scan_stamp, ranges, self.SCAN_RANGE_MIN)
                 self._publish_with_timing(self.scan_pub, scan_msg, '/scan')
                 if self.unfiltered_scan_pub is not None:
                     candidate = self._laser_scan_message(
-                        stamp, raw_ranges, 0.0)
+                        scan_stamp, raw_ranges, 0.0)
                     self._publish_with_timing(
                         self.unfiltered_scan_pub, candidate,
                         self.unfiltered_scan_topic)
+            elif ranges:
+                self.get_logger().warning(
+                    f'Dropping laser scan with {len(ranges)} range: no honest '
+                    'angle_increment exists for a single beam.',
+                    throttle_duration_sec=10.0)
 
-        except Exception:
-            pass
+        except (IndexError, ValueError) as exc:
+            self._record_odom_rejection(
+                'malformed-telemetry', type(exc).__name__)
+        except Exception as exc:
+            self._record_odom_rejection(
+                'navigation-frame-error', type(exc).__name__)
 
     @staticmethod
     def _laser_scan_message(stamp, ranges, range_min):

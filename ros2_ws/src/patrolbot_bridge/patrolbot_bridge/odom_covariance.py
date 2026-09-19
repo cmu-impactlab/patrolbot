@@ -143,8 +143,9 @@ class OdomCovariance:
         """
         Begin a new dead-reckoning run with no accumulated motion.
 
-        Called when the SBC session changes: the pose stream restarts from
-        ARIA's origin, so the drift accrued against the old one is finished.
+        Used at construction or for an independently confirmed odometry epoch.
+        A TCP reconnect does not prove an ARIA origin reset and must not call
+        this method. The current wire protocol carries no odometry epoch ID.
         """
         self._path_length = 0.0
         self._rotation_length = 0.0

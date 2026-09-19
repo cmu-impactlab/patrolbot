@@ -22,6 +22,7 @@
 #include "Aria.h"
 #include "protocol.hpp"
 #include "undock.hpp"
+#include "scan_timing.hpp"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1143,29 +1144,31 @@ int main(int argc, char** argv) {
       telemetry << "ODOM:" << x << "," << y << "," << th << ","
                 << motion.linear << "," << motion.angular << "|LASER:";
 
+      long laserAgeMs = -1;
       if (laser) {
         laser->lockDevice();
         const std::list<ArSensorReading*>* readings = laser->getRawReadings();
-        bool laserFresh = false;
         if (laser->isConnected() && readings && !readings->empty()) {
-          long newestAgeMs = 1000000;
+          std::vector<long> ages;
           for (std::list<ArSensorReading*>::const_iterator it = readings->begin();
                it != readings->end(); ++it) {
-            if (*it) {
-              const long ageMs = (*it)->getTimeTaken().mSecSince();
-              if (ageMs < newestAgeMs) newestAgeMs = ageMs;
-            }
+            // Missing beams invalidate the scan rather than rotating subsequent
+            // ranges by silently dropping a bearing.
+            ages.push_back(*it ? (*it)->getTimeTaken().mSecSince() : -1);
           }
-          laserFresh = newestAgeMs <= 500;
+          laserAgeMs = patrolbot::oldestScanAgeMs(ages);
         }
-        if (laserFresh) {
+        if (laserAgeMs >= 0) {
           for (std::list<ArSensorReading*>::const_iterator it = readings->begin();
                it != readings->end(); ++it) {
-            if (*it) telemetry << ((*it)->getRange() / 1000.0) << ",";
+            telemetry << ((*it)->getRange() / 1000.0) << ",";
           }
         }
         laser->unlockDevice();
       }
+      // Relative duration, never SBC wall time: this host may not share the
+      // Pi's clock epoch. Unknown/old scans carry no ranges and age -1.
+      telemetry << "|LASER_AGE_MS:" << laserAgeMs;
       telemetry << "\n";
 
       if (++auxCounter >= auxInterval) {

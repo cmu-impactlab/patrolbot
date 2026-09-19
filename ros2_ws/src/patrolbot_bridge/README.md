@@ -64,3 +64,28 @@ ros2 run patrolbot_bridge bridge_node
 
 `rclpy`, `sensor_msgs`, `nav_msgs`, `geometry_msgs`, `diagnostic_msgs`,
 `std_msgs`, `tf2_ros`
+
+## Odometry reconnects
+
+A TCP client reconnect advances the hardware control session and invalidates
+pending control requests, but preserves the wheel-odometry covariance and
+continuity reference. ARIA can keep running with the same origin while the
+socket reconnects; reconnecting alone must not reset uncertainty to its floor.
+
+The current SBC protocol carries no odometry epoch identifier. A real SBC/ARIA
+restart therefore cannot be reliably distinguished from a link interruption.
+Automatic origin-reset detection and recovery remain unimplemented. An origin
+jump is subject to the normal elapsed-time continuity check; sufficiently small
+jumps or long outages can pass that check, so it is not proof of epoch identity.
+Do not use a TCP session number as evidence to reset odometry or localization.
+A bridge process restart still creates a fresh accumulator; persistence across
+process restarts is outside this fix.
+
+### Scan age on the SBC link
+
+New servers append `LASER_AGE_MS` to navigation frames. `/scan` and optional
+unfiltered scans subtract this conservative ARIA scan age plus local queue
+wait; `/odom` remains receipt-stamped. Invalid age metadata drops only the scan.
+Legacy servers remain readable, with a throttled warning about missing age.
+Transport latency is not measured by this extension. See the canonical
+[wire protocol](../../../docs/reference/wire-protocol.md).

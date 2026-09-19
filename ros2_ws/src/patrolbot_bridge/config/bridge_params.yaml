@@ -32,7 +32,10 @@ patrolbot_bridge:
     odom_sigma_xy_per_m: 0.016      # 1-sigma ~5 cm after 10 m
     odom_sigma_yaw_per_rad: 0.014   # 1-sigma ~2 deg after one full turn
     # Heading error bled in by driving straight: unequal wheel diameters turn a
-    # commanded straight line into a slow arc. This is AMCL's alpha4 term.
+    # commanded straight line into a slow arc. This is AMCL's **alpha2** term
+    # (rotation noise from translation). Corrected 2026-08-21 -- this comment
+    # previously said alpha4, which is the opposite direction of the same
+    # coupling: alpha4 is translation noise caused by rotation.
     odom_sigma_yaw_per_m: 0.004
     # Instantaneous velocity noise. Constant -- velocity is measured fresh each
     # frame rather than integrated, so its error does not compound.
@@ -44,3 +47,11 @@ patrolbot_bridge:
     # unbounded linear growth would reach magnitudes that wreck the
     # conditioning of anything the value is multiplied into.
     odom_max_variance: 1.0
+
+    # Semantic odometry validation. These mirror source-enforced contracts,
+    # not guessed physical values: patrolbot_server accepts DRIVE only through
+    # 0.30 m/s and 1.20 rad/s and emits telemetry every 50 ms. Continuity
+    # allowance is speed * (observed elapsed time + one sample period).
+    odom_max_linear_speed: 0.30
+    odom_max_angular_speed: 1.20
+    odom_expected_period: 0.05

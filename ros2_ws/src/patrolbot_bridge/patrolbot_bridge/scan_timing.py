@@ -55,7 +55,12 @@ def parse_laser_age(line: str) -> LaserAgeResult:
     value = field[len(prefix):]
     if not value or not value.isascii() or not value.isdecimal():
         return LaserAgeResult(False, False, None, 'malformed-age-value')
-    age_ms = int(value)
+    # Bound the conversion before int(): a long wire value must reject the
+    # scan, not raise Python's integer-string conversion limit exception.
+    significant = value.lstrip('0') or '0'
+    if len(significant) > len(str(MAX_SCAN_AGE_MS)):
+        return LaserAgeResult(False, False, None, 'age-exceeds-freshness-limit')
+    age_ms = int(significant)
     if age_ms > MAX_SCAN_AGE_MS:
         return LaserAgeResult(False, False, None, 'age-exceeds-freshness-limit')
     return LaserAgeResult(True, False, age_ms, 'age-valid')

@@ -52,3 +52,14 @@ def test_corrected_stamp_rejects_negative_age_and_result():
         compute_scan_stamp_ns(2_000, -1)
     with pytest.raises(ValueError):
         compute_scan_stamp_ns(2_000, 2_001)
+
+
+def test_oversized_wire_age_rejects_without_interrupting_telemetry():
+    result = parse_laser_age('|LASER_AGE_MS:' + '9' * 5000)
+    assert result == LaserAgeResult(
+        False, False, None, 'age-exceeds-freshness-limit')
+
+
+def test_leading_zeroes_do_not_change_wire_age_semantics():
+    assert parse_laser_age('|LASER_AGE_MS:' + '0' * 5000 + '120').age_ms == 120
+    assert parse_laser_age('|LASER_AGE_MS:' + '0' * 5000).age_ms == 0

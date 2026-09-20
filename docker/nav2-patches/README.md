@@ -53,3 +53,33 @@ hold/release. The accelerated outage is not eight hours of wall-clock resource
 soak. The warning cadence's injected steady-clock test independently covers
 960 warnings per eight hours at 5 Hz. Resource measurement uses `wait4` for the
 test child alone to exclude compiler resource use.
+
+## Operator-seed acceptance acknowledgement
+
+`0003-amcl-seed-acceptance.patch` applies after patch 0002. It publishes the
+original seed on `amcl/accepted_initial_pose` only after timestamped TF lookup
+and particle initialization succeed. Timed-out, superseded and lifecycle-
+canceled requests do not emit an acknowledgement. With
+`always_reset_initial_pose=true`, configure also clears inactive seed reuse
+and old transform validity.
+
+`integration_amcl_seed_ack.py` checks acknowledgement correlation against the
+compiled candidate. `Dockerfile.epoch-candidate` builds a development overlay
+from the earlier two-patch candidate; it is not a deployment instruction.
+The epoch coordinator and its consumers must be validated together before
+rollout, including real lifecycle-manager pause/resume and old-goal termination.
+
+## Behavior deactivation
+
+`0004-behavior-deactivation.patch` makes `TimedBehavior::execute()` observe
+its action server's active state. In Navigation2 1.3.12, deactivation first
+marks the action server inactive, then waits for the execution callback.
+Without this check an active Wait continues looping after deactivation,
+preventing the lifecycle pause from completing. On callback return the
+existing action worker terminates outstanding goals. New goals are rejected
+by the inactive action server; no additional velocity publisher is introduced.
+
+The overlay also builds `nav2_behaviors`. The isolated
+`integration_epoch_navigation.py` exercises an active real Wait across an
+origin change and requires its terminal result plus completed recovery.
+Compilation or unit tests alone do not establish this acceptance.

@@ -1,0 +1,13 @@
+--- a/nav2_behaviors/include/nav2_behaviors/timed_behavior.hpp
++++ b/nav2_behaviors/include/nav2_behaviors/timed_behavior.hpp
+@@ -235,7 +235,9 @@
+     auto start_time = clock_->now();
+     rclcpp::WallRate loop_rate(cycle_frequency_);
+ 
+-    while (rclcpp::ok()) {
++    // Deactivation waits for this callback before completing its transition.
++    // The action worker terminates outstanding goals after this loop exits.
++    while (rclcpp::ok() && action_server_->is_server_active()) {
+       elasped_time_ = clock_->now() - start_time;
+       // TODO(orduno) #868 Enable preempting a Behavior on-the-fly without stopping
+       if (action_server_->is_preempt_requested()) {

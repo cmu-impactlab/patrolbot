@@ -1,0 +1,65 @@
+--- a/nav2_amcl/include/nav2_amcl/amcl_node.hpp
++++ b/nav2_amcl/include/nav2_amcl/amcl_node.hpp
+@@ -188,6 +188,8 @@
+     initial_pose_sub_;
+   rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
+     pose_pub_;
++  rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
++    initial_pose_ack_pub_;
+   rclcpp_lifecycle::LifecyclePublisher<nav2_msgs::msg::ParticleCloud>::SharedPtr
+     particle_cloud_pub_;
+   /*
+--- a/nav2_amcl/src/amcl_node.cpp
++++ b/nav2_amcl/src/amcl_node.cpp
+@@ -272,6 +272,7 @@
+ 
+   // Lifecycle publishers must be explicitly activated
+   pose_pub_->on_activate();
++  initial_pose_ack_pub_->on_activate();
+   particle_cloud_pub_->on_activate();
+ 
+   first_pose_sent_ = false;
+@@ -318,6 +319,7 @@
+ 
+   // Lifecycle publishers must be explicitly deactivated
+   pose_pub_->on_deactivate();
++  initial_pose_ack_pub_->on_deactivate();
+   particle_cloud_pub_->on_deactivate();
+ 
+   // shutdown and reset dynamic parameter handler
+@@ -364,6 +366,7 @@
+ 
+   // PubSub
+   pose_pub_.reset();
++  initial_pose_ack_pub_.reset();
+   particle_cloud_pub_.reset();
+ 
+   // Odometry
+@@ -657,6 +660,8 @@
+   pf_init_ = false;
+   init_pose_received_on_inactive = false;
+   initial_pose_is_known_ = true;
++  // Acknowledge the original operator stamp only after TF and pf_init succeed.
++  initial_pose_ack_pub_->publish(msg);
+ }
+ 
+ void
+@@ -1232,6 +1237,8 @@
+ 
+   if (always_reset_initial_pose_) {
+     initial_pose_is_known_ = false;
++    init_pose_received_on_inactive = false;
++    latest_tf_valid_ = false;
+   }
+ }
+ 
+@@ -1627,6 +1634,9 @@
+     "amcl_pose",
+     rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable());
+ 
++  initial_pose_ack_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
++    "amcl/accepted_initial_pose", rclcpp::QoS(10).reliable().durability_volatile());
++
+   initial_pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+     "initialpose", rclcpp::SystemDefaultsQoS(),
+     std::bind(&AmclNode::initialPoseReceived, this, std::placeholders::_1));

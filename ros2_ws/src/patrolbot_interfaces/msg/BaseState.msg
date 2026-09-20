@@ -47,3 +47,13 @@ float32 redock_inhibit_remaining
 # False until the SBC's rear-sonar indices, E-stop semantics and fault masks
 # have been physically validated. Production undocking is refused while false.
 bool undock_profile_commissioned
+
+# Distinct from the TCP session generation. Unknown origin and recovery hold
+# must prevent navigation, including any parked-localization allowance.
+string odom_epoch
+uint64 odom_epoch_generation
+bool odom_epoch_valid
+bool localization_recovery_required
+string localization_recovery_stage
+# Seed barrier used to reject a cached AMCL result from before recovery.
+int64 localization_seed_stamp_ns

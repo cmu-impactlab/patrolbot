@@ -24,6 +24,7 @@ from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
+from patrolbot_dock_manager.epoch_policy import epoch_hardware_ready
 from patrolbot_dock_manager.contracts import (
     automatic_docking_allowed,
     DOCK_DOCKED_CONFIRMED,
@@ -250,7 +251,8 @@ class DockManager(Node):
                 response.code = InitializeDockPose.Response.PRECONDITION_FAILED
                 response.message = 'an undock goal is active'
                 return self._finish_initialization_response(response, started)
-        failures = dock_pose_initialization_failures(self._snapshot())
+        failures = dock_pose_initialization_failures(
+            self._snapshot(for_pose_initialization=True))
         if failures:
             response.code = InitializeDockPose.Response.PRECONDITION_FAILED
             response.message = '; '.join(failures)
@@ -854,7 +856,7 @@ class DockManager(Node):
             time.sleep(0.02)
         return False
 
-    def _snapshot(self):
+    def _snapshot(self, *, for_pose_initialization=False):
         now = time.monotonic()
         timeout = float(self.get_parameter('sensor_timeout').value)
         self._refresh_command_path()
@@ -917,12 +919,25 @@ class DockManager(Node):
             last_motion_at <= localization_at and
             base is not None and
             not fault_flags & ENCODER_FAULT_MASK)
+        epoch_ready = bool(
+            base and getattr(base, 'odom_epoch_valid', False)
+            and not getattr(base, 'localization_recovery_required', True))
+        hardware_epoch_ready = epoch_hardware_ready(
+            origin_valid=getattr(base, 'odom_epoch_valid', False),
+            recovery_required=getattr(base, 'localization_recovery_required', True),
+            recovery_stage=getattr(base, 'localization_recovery_stage', ''),
+            for_pose_initialization=for_pose_initialization)
+        seed_stamp = getattr(base, 'localization_seed_stamp_ns', 0) if base else 0
+        pose_stamp = (pose.header.stamp.sec * 1_000_000_000 +
+                      pose.header.stamp.nanosec) if pose else 0
         pose_still_describes_the_robot = (
-            pose_age <= timeout or parked_since_the_pose)
+            epoch_ready and seed_stamp > 0 and pose_stamp > seed_stamp
+            and (pose_age <= timeout or parked_since_the_pose))
         return SafetySnapshot(
             link_connected=bool(base and base.link_connected),
             hardware_state_valid=bool(
-                base and base.hardware_state_valid and base_age <= timeout),
+                base and base.hardware_state_valid and base_age <= timeout
+                and hardware_epoch_ready),
             session_generation=base.session_generation if base else 0,
             charge_state_valid=bool(base and base.charge_state_valid),
             charge_state=base.charge_state if base else -1,

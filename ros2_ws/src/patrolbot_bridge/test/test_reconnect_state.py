@@ -47,6 +47,7 @@ def test_repeated_reconnect_preserves_estimator_but_invalidates_controls():
         sock_lock=threading.Lock(), _state_lock=threading.Lock(),
         _pose_lock=threading.Lock(), _session_generation=0,
         _odom_covariance=covariance, _odom_validator=validator,
+        _epoch=Mock(spec=['begin_session', 'disconnect']),
         _stop_event=Mock(), get_logger=Mock(return_value=Mock()),
         _fail_pending_controls=Mock(), _fail_pending_undock=Mock())
 
@@ -69,6 +70,8 @@ def test_repeated_reconnect_preserves_estimator_but_invalidates_controls():
     bridge._receive_loop = receive
     connection_loop()(bridge)
     assert bridge._session_generation == 3
+    assert bridge._epoch.begin_session.call_count == 3
+    assert [call.args[0] for call in bridge._epoch.disconnect.call_args_list] == [1, 2, 3]
     bridge.get_logger.return_value.warn.assert_not_called()
     assert not bridge._link_connected
     assert bridge.sock is None

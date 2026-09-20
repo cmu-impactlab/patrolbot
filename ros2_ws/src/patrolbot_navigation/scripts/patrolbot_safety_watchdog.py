@@ -104,7 +104,10 @@ class SafetyWatchdog(Node):
 
     def _base_state_cb(self, message):
         self._last_base_state = self._now()
-        self._hardware_state_valid = bool(message.hardware_state_valid)
+        self._hardware_state_valid = bool(
+            message.hardware_state_valid
+            and getattr(message, 'odom_epoch_valid', False)
+            and not getattr(message, 'localization_recovery_required', True))
         self._fault_flags = int(message.fault_flags)
         self._estop_pressed = bool(message.estop_pressed)
         self._bumpers_valid = bool(message.bumpers_valid)
@@ -174,7 +177,7 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

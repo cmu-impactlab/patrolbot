@@ -1,4 +1,4 @@
-"""Malformed-wire acceptance against the unchanged deployed ROS image.
+"""Malformed-wire acceptance against the selected built ROS image.
 
 Run with PATROLBOT_RUN_INTEGRATION=1 in a network-isolated container. This
 external acceptance suite imports the image's own fake-SBC fixture and bridge;
@@ -40,7 +40,7 @@ def test_malformed_odom_preserves_last_valid_state_and_recovers(harness, wire):
     rejected = bridge._odom_rejections.get('malformed-telemetry', 0)
     with patch.object(bridge, '_publish_with_timing',
                       wraps=bridge._publish_with_timing) as publish:
-        bridge._parse_telemetry(wire)
+        bridge._parse_telemetry(wire + '|ODOM_EPOCH:' + fake.odom_epoch)
         assert not any(call.args[2] in ('/odom', '/scan')
                        for call in publish.call_args_list)
     assert bridge._pose_at == before

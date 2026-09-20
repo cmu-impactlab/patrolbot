@@ -237,9 +237,9 @@ rotate the identity.
 
 The HELLO decoder rejects malformed/duplicate identities and represents a
 legacy missing identity as unknown. This wire change alone does not reset
-covariance or make localization safe after an origin change. Consumer gating,
-persistence across bridge restarts, coordinated localization invalidation and
-exact-image reconnect acceptance remain required before deploying it.
+covariance or make localization safe after an origin change. The candidate
+runtime below adds recovery gating; deployment still requires exact-image and
+real-system acceptance.
 
 The ROS-free `EpochRecovery` contract orders origin recovery as: accepted
 origin, successful AMCL lifecycle reset, valid operator seed, then a newer
@@ -248,5 +248,39 @@ so a bridge restart or origin change invalidates in-flight acknowledgements.
 ROS clock regression also invalidates recovery. Receipt order alone cannot
 accept an old queued seed/result; source stamps must follow the relevant
 barrier. Origin association does not waive existing covariance/freshness gates.
-This contract still requires runtime coordinator and consumer integration; it
-does not itself publish a seed or release navigation.
+The runtime coordinator and consumers below implement these gates; the pure
+contract itself never publishes a seed or releases navigation.
+
+### Candidate runtime recovery (not deployed)
+
+The bridge now associates every queued navigation and auxiliary frame with its
+TCP generation and serializes origin checks with pose/TF/publication. An
+explicit origin change resets covariance/continuity once; reconnecting to the
+same origin preserves both. Unknown/mismatched origins withdraw pose and close
+the transport, invoking the SBC's existing stop/disable-on-client-loss path.
+
+`BaseState` carries `odom_epoch`, its generation/validity, a recovery-required
+flag, a recovery stage and `localization_seed_stamp_ns`. Physical hardware flags
+remain separate. Watchdog recovery hold and DockManager prechecks fail closed;
+the parked-pose allowance cannot accept a pose older than the seed barrier.
+The bridge rejects nonzero DRIVE, maintenance-control and undock requests while
+recovery is pending. Zero DRIVE and undock cancellation remain available.
+
+The coordinator first waits for the localization lifecycle manager to report
+startup complete, avoiding concurrent lifecycle transitions. AMCL is then
+deactivated, cleaned up and configured with `set_initial_pose=false`
+and `always_reset_initial_pose=true`, then activated. Only after this sequence
+may new-origin odometry/TF/scan flow for localization. The coordinator never
+publishes a seed. The first new-origin odometry transform must exist before a
+seed can be admitted. A valid operator seed must be acknowledged by patched AMCL
+on `/amcl/accepted_initial_pose` with its original stamp after TF lookup and
+particle initialization succeed. A matching acknowledgement and newer AMCL
+result establish origin association, without waiving covariance/freshness
+limits. Before allowing commands, the navigation lifecycle manager must
+successfully pause and resume, terminating prior navigation execution. A
+failure or unresolved lifecycle request keeps recovery held.
+
+The BaseState schema and AMCL acknowledgement require a coordinated rebuild of
+all interface consumers, including the web bridge. Do not mix old deployed
+interfaces with this candidate. Full-stack integration and live acceptance are
+still required; passing pure/loopback tests is not deployment acceptance.

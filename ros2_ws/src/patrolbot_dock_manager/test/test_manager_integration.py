@@ -76,6 +76,10 @@ class FakeWorld(Node):
         self.localization_restore_delay = 0.0
         self._dock_state_clear_at = 0.0
         self._localization_resume_at = 0.0
+        self.epoch_valid = True
+        self.recovery_required = False
+        self.seed_stamp_ns = 1
+        self.recovery_stage = 'ready'
         self.localization_enabled = True
         # Odometry is its own stream, stoppable independently of /amcl_pose.
         # A gate that infers "parked" must not be satisfiable by telemetry that
@@ -236,6 +240,10 @@ class FakeWorld(Node):
         state.link_connected = True
         state.telemetry_age = 0.0
         state.hardware_state_valid = True
+        state.odom_epoch_valid = self.epoch_valid
+        state.localization_recovery_required = self.recovery_required
+        state.localization_seed_stamp_ns = self.seed_stamp_ns
+        state.localization_recovery_stage = self.recovery_stage
         state.charge_state = self.charge_state
         state.charge_state_valid = True
         state.motors_enabled = self.motors_enabled
@@ -969,3 +977,65 @@ def test_an_encoder_fault_voids_the_parked_allowance(harness):
     time.sleep(timeout * 2)
     assert not manager._snapshot().localization_valid, (
         'a degraded encoder still propped up the parked allowance')
+
+
+def test_epoch_recovery_blocks_readiness_despite_fresh_stationary_inputs(harness):
+    manager, world, _ = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    world.recovery_required = True
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not manager._snapshot().localization_valid
+    assert not precheck_ready(manager)
+
+
+def test_new_epoch_seed_barrier_rejects_cached_parked_amcl(harness):
+    manager, world, _ = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    world.localization_enabled = False
+    time.sleep(.15)
+    world.seed_stamp_ns = world.get_clock().now().nanoseconds
+    assert wait_until(lambda: not manager._snapshot().localization_valid)
+    assert manager._snapshot().hardware_state_valid
+    assert not manager._snapshot().dock_pose_valid
+    world.localization_enabled = True
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+
+@pytest.mark.parametrize('stage', ['wait-operator-seed', 'wait-amcl-pose'])
+def test_operator_seed_can_recover_epoch_without_releasing_motion(harness, stage):
+    manager, world, client_node = harness
+    world.recovery_required = True
+    world.recovery_stage = stage
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert manager._snapshot(for_pose_initialization=True).hardware_state_valid
+    assert not precheck_ready(manager)
+    initialize = client_node.create_client(
+        InitializeDockPose, '/patrolbot/initialize_dock_pose')
+    assert initialize.wait_for_service(timeout_sec=1.0)
+    request = InitializeDockPose.Request()
+    request.dock_id = 'main_charger'
+    request.operator_authorized = True
+    response = wait_future(initialize.call_async(request), timeout=3.0)
+    assert response.success
+    assert not manager._snapshot().hardware_state_valid
+    assert not manager._snapshot().localization_valid
+    assert world.undock_calls == 0
+
+
+@pytest.mark.parametrize('stage', [
+    'wait-origin', 'wait-reset', 'wait-first-odometry', 'failed:activate'])
+def test_operator_seed_cannot_bypass_unfinished_origin_reset(harness, stage):
+    manager, world, _ = harness
+    world.recovery_required = True
+    world.recovery_stage = stage
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not manager._snapshot(for_pose_initialization=True).hardware_state_valid
+
+
+def test_operator_seed_cannot_bypass_invalid_origin(harness):
+    manager, world, _ = harness
+    world.recovery_required = True
+    world.recovery_stage = 'wait-operator-seed'
+    world.epoch_valid = False
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not manager._snapshot(for_pose_initialization=True).hardware_state_valid

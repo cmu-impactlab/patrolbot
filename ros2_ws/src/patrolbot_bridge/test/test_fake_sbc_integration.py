@@ -7,7 +7,10 @@ import threading
 import time
 from uuid import uuid4
 
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
+from lifecycle_msgs.srv import ChangeState, GetState
+from nav2_msgs.srv import ManageLifecycleNodes
+from std_srvs.srv import Trigger
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.srv import ChargeRelease, MotorEnable
@@ -34,6 +37,7 @@ class FakeSbc:
         self.listener.listen(4)
         self.listener.settimeout(0.1)
         self.port = self.listener.getsockname()[1]
+        self.odom_epoch = str(uuid4())
         self.running = True
         self.charge_state = 2
         self.motors_enabled = False
@@ -91,7 +95,7 @@ class FakeSbc:
                 features = 'UNDOCK' if self.advertise_undock else ''
                 self._send(
                     connection,
-                    f'HELLO:PROTOCOL=2:FEATURES={features}\n'.encode('ascii'))
+                    f'HELLO:PROTOCOL=2:FEATURES={features}:ODOM_EPOCH={self.odom_epoch}\n'.encode('ascii'))
             except OSError:
                 pass
             buffer = ''
@@ -139,7 +143,8 @@ class FakeSbc:
             odom_x, odom_y, odom_th = self.odom_pose
             laser_field = self.laser_field
         return (
-            f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}\n'
+            f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}'
+            f'|ODOM_EPOCH:{self.odom_epoch}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
             f'DOCK={dock}\n').encode('ascii')
@@ -303,8 +308,73 @@ def wait_until(predicate, timeout=3.0):
     return False
 
 
+class FakeAmcl(Node):
+    """Lifecycle peer for bridge integration; not physical convergence proof."""
+
+    def __init__(self):
+        super().__init__('amcl')
+        self.declare_parameter('set_initial_pose', True)
+        self.declare_parameter('always_reset_initial_pose', False)
+        self.state = 3
+        self.transitions = []
+        self.navigation_transitions = []
+        self.create_service(ManageLifecycleNodes,
+                            '/lifecycle_manager_navigation/manage_nodes',
+                            self.manage_navigation)
+        self.create_service(Trigger, '/lifecycle_manager_localization/is_active',
+                            self.localization_active)
+        self.create_service(GetState, '/amcl/get_state', self.get_state)
+        self.create_service(ChangeState, '/amcl/change_state', self.change_state)
+        self.ack = self.create_publisher(
+            PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', 10)
+        self.pose = self.create_publisher(PoseWithCovarianceStamped, '/amcl_pose', 10)
+        self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.seed, 10)
+
+    def localization_active(self, _request, response):
+        response.success = True
+        return response
+
+    def manage_navigation(self, request, response):
+        self.navigation_transitions.append(request.command)
+        response.success = True
+        return response
+
+    def get_state(self, _request, response):
+        response.current_state.id = self.state
+        return response
+
+    def change_state(self, request, response):
+        self.transitions.append(request.transition.id)
+        self.state = {4: 2, 2: 1, 1: 2, 3: 3}[request.transition.id]
+        response.success = True
+        return response
+
+    def seed(self, message):
+        if self.state != 3:
+            return
+        self.ack.publish(message)
+        message.header.stamp = self.get_clock().now().to_msg()
+        self.pose.publish(message)
+
+
+def seed_harness(bridge, client_node):
+    assert wait_until(lambda: bridge._epoch.first_tf_ns is not None)
+    publisher = client_node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
+    assert wait_until(lambda: publisher.get_subscription_count() >= 2)
+    message = PoseWithCovarianceStamped()
+    message.header.frame_id = 'map'
+    message.header.stamp = client_node.get_clock().now().to_msg()
+    message.pose.pose.orientation.w = 1.0
+    for index in (0, 7, 35):
+        message.pose.covariance[index] = .1
+    publisher.publish(message)
+    assert wait_until(lambda: bridge._epoch.commands_allowed)
+    client_node.destroy_publisher(publisher)
+
+
 def build_harness(fake):
     rclpy.init()
+    amcl = FakeAmcl()
     bridge = PatrolBotBridge(parameter_overrides=[
         Parameter('server_ip', value='127.0.0.1'),
         Parameter('server_port', value=fake.port),
@@ -314,7 +384,9 @@ def build_harness(fake):
         Parameter('control_timeout', value=0.4),
     ])
     client_node = Node('fake_sbc_integration_client')
+    client_node.fake_amcl = amcl
     executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(amcl)
     executor.add_node(bridge)
     executor.add_node(client_node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
@@ -322,12 +394,14 @@ def build_harness(fake):
     assert wait_until(lambda: bridge._link_connected)
     assert wait_until(lambda: bridge._pose_received)
     assert wait_until(lambda: bridge._charge_state_at > 0 and bridge._flags_at > 0)
+    seed_harness(bridge, client_node)
     return bridge, client_node, executor, spin_thread
 
 
 def teardown_harness(bridge, client_node, executor, spin_thread, fake):
     executor.shutdown(timeout_sec=2.0)
     bridge.destroy_node()
+    client_node.fake_amcl.destroy_node()
     client_node.destroy_node()
     spin_thread.join(timeout=2.0)
     rclpy.shutdown()
@@ -905,7 +979,8 @@ def test_invalid_odometry_cannot_refresh_pose_and_valid_stream_recovers(
     fake.telemetry_paused = True
     time.sleep(0.2)
     before = bridge._pose_at
-    bridge._parse_telemetry('ODOM:' + odom + '|LASER:1,1,1')
+    bridge._parse_telemetry(
+        'ODOM:' + odom + '|LASER:1,1,1|ODOM_EPOCH:' + fake.odom_epoch)
     assert bridge._odom_rejections.get(reason, 0) >= 1
     assert bridge._pose_at == before
     fake.telemetry_paused = False
@@ -925,10 +1000,12 @@ def test_invalid_scan_age_drops_only_scan_and_recovers(harness, metadata):
     original = bridge._publish_with_timing
     bridge._publish_with_timing = lambda pub, msg, topic: published.append((topic, msg))
     try:
-        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|' + metadata)
+        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|' + metadata +
+            '|ODOM_EPOCH:' + fake.odom_epoch)
         assert [topic for topic, _ in published] == ['/odom']
         published.clear()
-        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120')
+        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' +
+            '|ODOM_EPOCH:' + fake.odom_epoch)
         assert [topic for topic, _ in published] == ['/odom', '/scan']
         odom, scan = [msg for _, msg in published]
         def ns(msg):
@@ -949,7 +1026,8 @@ def test_scan_age_includes_local_queue_wait(harness):
     original = bridge._publish_with_timing
     bridge._publish_with_timing = lambda pub, msg, topic: published.append((topic, msg))
     try:
-        line = 'ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120'
+        line = ('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' +
+                '|ODOM_EPOCH:' + fake.odom_epoch)
         bridge._parse_telemetry(line, received_at=time.monotonic() - .1)
         odom, scan = [msg for _, msg in published]
         def ns(msg):
@@ -961,3 +1039,45 @@ def test_scan_age_includes_local_queue_wait(harness):
     finally:
         bridge._publish_with_timing = original
         fake.telemetry_paused = False
+
+
+def test_explicit_origin_change_holds_commands_until_new_seed(harness):
+    from unittest.mock import patch
+
+    fake, bridge, client, _executor = harness
+    old_session = bridge._session_generation
+    old_epoch = fake.odom_epoch
+    with bridge._epoch.lock:
+        bridge._odom_covariance.update(0.0, 0.0, 0.0)
+        bridge._odom_covariance.update(.1, 0.0, 0.0)
+        before = bridge._odom_covariance.pose_covariance()[0]
+    with patch.object(bridge._odom_covariance, 'reset',
+                      wraps=bridge._odom_covariance.reset) as reset:
+        with fake._lock:
+            fake.odom_epoch = str(uuid4())
+        fake.drop_connection()
+        assert wait_until(lambda: bridge._epoch.guard.epoch == fake.odom_epoch)
+        assert wait_until(lambda: bridge._epoch.streams_allowed)
+        assert not bridge._epoch.commands_allowed
+        assert bridge._odom_covariance.pose_covariance()[0] < before
+        assert reset.call_count == 1
+        fake.telemetry_paused = True
+        time.sleep(.1)
+        previous = bridge._pose_at
+        bridge._parse_telemetry(
+            'ODOM:0,0,0,0,0|LASER:1,1|ODOM_EPOCH:' + old_epoch,
+            session=old_session)
+        assert bridge._pose_at == previous
+        command = Twist()
+        command.linear.x = .05
+        with fake._lock:
+            command_count = len(fake.received)
+        bridge.cmd_vel_callback(command)
+        time.sleep(.05)
+        with fake._lock:
+            assert not any(line.startswith('DRIVE:0.05:')
+                           for _, line in fake.received[command_count:])
+        fake.telemetry_paused = False
+        seed_harness(bridge, client)
+        assert reset.call_count == 1
+        assert client.fake_amcl.navigation_transitions[-2:] == [1, 2]

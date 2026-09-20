@@ -16,6 +16,7 @@ from test_fake_sbc_integration import FakeSbc, wait_until
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from nav2_msgs.action import Wait
+from nav2_msgs.srv import ManageLifecycleNodes
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
@@ -29,6 +30,7 @@ launch = None
 fake = None
 bridge = None
 executor = None
+forced_shutdown = False
 try:
     log = log_path.open('w')
     launch = subprocess.Popen(
@@ -121,6 +123,19 @@ try:
     print(json.dumps({'passed': ['real_amcl_seed_ack', 'origin_restart_hold',
                                  'real_navigation_pause_resume', 'old_goal_terminal'],
                       'old_wait_status': result.result().status}), flush=True)
+    # Shut down lifecycle-managed plugins while TF, DDS and their executors
+    # still exist; then stop launch and the fake hardware process below.
+    for manager in ('navigation', 'localization'):
+        shutdown = node.create_client(
+            ManageLifecycleNodes, f'/lifecycle_manager_{manager}/manage_nodes')
+        assert shutdown.wait_for_service(timeout_sec=5)
+        request = ManageLifecycleNodes.Request()
+        request.command = request.SHUTDOWN
+        future = shutdown.call_async(request)
+        assert wait_until(future.done, timeout=20), manager + ' shutdown timed out'
+        assert future.result().success, manager + ' shutdown failed'
+    print(json.dumps({'event': 'managed_shutdown_complete'}), flush=True)
+
 finally:
     if executor is not None:
         executor.shutdown(timeout_sec=5)
@@ -137,6 +152,7 @@ finally:
         try:
             launch.wait(timeout=12)
         except subprocess.TimeoutExpired:
+            forced_shutdown = True
             os.killpg(launch.pid, signal.SIGKILL)
             launch.wait()
     if log_path.exists():
@@ -149,3 +165,5 @@ finally:
         print(logs[-5000:])
         assert 'SIGSEGV' not in logs and 'Segmentation Fault' not in logs, (
             'Nav2 composition crashed during isolated test teardown')
+
+    assert not forced_shutdown, 'isolated Nav2 launch required forced termination'

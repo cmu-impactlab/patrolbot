@@ -83,3 +83,16 @@ The overlay also builds `nav2_behaviors`. The isolated
 `integration_epoch_navigation.py` exercises an active real Wait across an
 origin change and requires its terminal result plus completed recovery.
 Compilation or unit tests alone do not establish this acceptance.
+
+## Pending-seed scheduling
+
+`0005-amcl-pending-seed-priority.patch` skips laser processing while an
+initial-pose request is waiting for timestamped TF. This prevents first-scanner
+map preprocessing from occupying the callback group ahead of that request's
+bounded retry. Pending requests already withdraw localization; after seed
+acceptance, the next scan constructs or updates the scanner normally. The
+original deadline, TF requirements and rejection behavior are unchanged.
+
+Validate with the seed acknowledgement timeout/supersession tests and repeated
+real-map startup/origin-recovery tests. A single successful startup does not
+establish repeatable acceptance; retain failed-run evidence.

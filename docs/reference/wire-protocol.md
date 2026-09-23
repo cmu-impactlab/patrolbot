@@ -223,9 +223,9 @@ odometry continues. Missing metadata is legacy-compatible with a throttled
 warning; it is not acquisition-time acceptance. Empty laser payloads remain
 silent. Existing bridges ignore the added section.
 
-### Explicit odometry origin identity (candidate; not deployed)
+### Explicit odometry origin identity
 
-The candidate server obtains one canonical UUID from Linux
+The server obtains one canonical UUID from Linux
 `/proc/sys/kernel/random/uuid` before creating its `ArRobot`. It refuses startup
 if that identity is unavailable. It repeats `ODOM_EPOCH=<uuid>` in every HELLO
 and `|ODOM_EPOCH:<uuid>` after laser-age metadata in every navigation frame.
@@ -237,7 +237,7 @@ rotate the identity.
 
 The HELLO decoder rejects malformed/duplicate identities and represents a
 legacy missing identity as unknown. This wire change alone does not reset
-covariance or make localization safe after an origin change. The candidate
+covariance or make localization safe after an origin change. The
 runtime below adds recovery gating; deployment still requires exact-image and
 real-system acceptance.
 
@@ -251,7 +251,7 @@ barrier. Origin association does not waive existing covariance/freshness gates.
 The runtime coordinator and consumers below implement these gates; the pure
 contract itself never publishes a seed or releases navigation.
 
-### Candidate runtime recovery (not deployed)
+### Runtime recovery
 
 The bridge now associates every queued navigation and auxiliary frame with its
 TCP generation and serializes origin checks with pose/TF/publication. An

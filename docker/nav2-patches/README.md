@@ -153,3 +153,20 @@ The diagnostic build passes all 20 component cases without preload (ten normal,
 ten explicit cleanup). Composed recovery and managed shutdown requests pass,
 but final process exit still crashes during ROS Context destruction. The combined
 candidate remains undeployed; this is not full-stack shutdown acceptance.
+
+## Post-seed scan ordering
+
+`0009-amcl-post-seed-scan.patch` records the timestamp of each successfully
+accepted seed and rejects laser scans at or before that timestamp. A delayed
+scan otherwise consumes AMCL's first forced update while the robot is stationary,
+leaving the bridge correctly waiting for a newer estimate. The barrier is set
+only after TF lookup and filter initialization succeed, follows each new seed,
+and resets during lifecycle cleanup. It preserves the bridge freshness gate.
+
+`integration_amcl_seed_scan_barrier.py` reproduces the deployed failure with a
+scan 150 ms older than the seed. The AMCL-only candidate passes old/equal-stamp
+rejection and produces a newer estimate without motion or a refresh request.
+The five existing seed-acknowledgement cases also pass. Composed recovery and
+live fresh-seed acceptance are still required; wall alignment remains a separate
+physical acceptance gate. `Dockerfile.amcl-seed-scan` builds this scoped overlay
+from the deployed image without the experimental teardown changes.

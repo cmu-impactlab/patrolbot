@@ -123,3 +123,21 @@ passes its recovery assertions, but the container still crashes during final
 shutdown. This patch resolves the isolated navigator-plugin failure only; the
 remaining composed failure is under investigation. Do not treat this candidate
 as a complete shutdown fix or deploy it on the basis of component tests.
+
+## Route-operation plugin lifetime
+
+`0007-route-plugin-lifetime.patch` applies Linux `NODELETE` to the
+`route_operations` library only. Configured RouteServer teardown otherwise
+releases plugin code before retained weak references are destroyed. The native
+trace faults at a control-block vtable inside the unloaded library. This retains
+code mappings until process exit, not operation instances or active execution.
+
+A diagnostic build passes all 16 component cases (eight direct shutdown and
+eight with explicit cleanup), including RouteServer and the navigator controls.
+Full-stack recovery and shutdown acceptance remain separately required before
+production deployment.
+
+The first composed test of the route diagnostic build still faults in lifecycle
+node destruction. The standalone RouteServer regression is fixed in that build;
+the remaining full-stack fault has not been attributed. No production rollout
+is accepted on these results.

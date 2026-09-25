@@ -96,3 +96,30 @@ original deadline, TF requirements and rejection behavior are unchanged.
 Validate with the seed acknowledgement timeout/supersession tests and repeated
 real-map startup/origin-recovery tests. A single successful startup does not
 establish repeatable acceptance; retain failed-run evidence.
+
+## Navigator plugin lifetime
+
+`0006-bt-plugin-lifetime.patch` keeps the two navigator shared libraries mapped
+until process exit on Linux using the ELF `NODELETE` linker flag. Executor-held
+entity references can outlive the navigator plugin loader; their control-block
+vtables must still be mapped when those references are released. This does not
+retain active goals or navigator instances, change lifecycle acceptance, or
+relax safety checks. The tradeoff is retaining the two code mappings for the
+process lifetime rather than reclaiming them during plugin unload.
+
+`Dockerfile.bt-lifetime` rebuilds only `nav2_bt_navigator` on an existing epoch
+image, verifies the pinned upstream archive and package version, and checks both
+ELF flags. The full Nav2 and epoch recipes also apply this patch and build the
+package. Its separate patch digest is recorded in the scoped image label.
+
+Validate `integration_component_teardown.py` with and without
+`PATROLBOT_TEST_CLEANUP=1`, then composed epoch recovery/action termination and
+scan-outage recovery through clean shutdown. All integration probes require a
+network-isolated container. A passing component probe alone is insufficient.
+
+Current validation: the scoped candidate passes all 12 component teardown cases
+(six direct shutdown and six explicit cleanup). Composed scan-outage recovery
+passes its recovery assertions, but the container still crashes during final
+shutdown. This patch resolves the isolated navigator-plugin failure only; the
+remaining composed failure is under investigation. Do not treat this candidate
+as a complete shutdown fix or deploy it on the basis of component tests.

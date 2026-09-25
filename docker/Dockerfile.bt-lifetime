@@ -1,0 +1,20 @@
+# Scoped overlay for already deployed epoch images.
+ARG PATROLBOT_BASE_IMAGE=patrolbot:epoch-f5931eaf-labels-20260924
+FROM ${PATROLBOT_BASE_IMAGE}
+COPY docker/nav2-patches/0006-bt-plugin-lifetime.patch /tmp/bt-lifetime.patch
+RUN test "$(sha256sum /tmp/bt-lifetime.patch | cut -d' ' -f1)" = 64a369d5a08d2ee297de8e63c7f7a02366888ab814a54bf829875146020fcfbb && \
+    test "$(sha256sum /tmp/epoch-nav2.tar.gz | cut -d' ' -f1)" = bcdf575c86250d63007595c992b9c5785c3ec907e897b79abfb4fc7eacbd1129 && \
+    test "$(dpkg-query -W -f='${Version}' ros-jazzy-nav2-bt-navigator | cut -d- -f1)" = 1.3.12 && \
+    tar xzf /tmp/epoch-nav2.tar.gz -C /opt/patrolbot_nav2/src --strip-components=1 navigation2-1.3.12/nav2_bt_navigator && \
+    patch --batch -d /opt/patrolbot_nav2/src -p1 < /tmp/bt-lifetime.patch
+WORKDIR /opt/patrolbot_nav2
+RUN . /opt/patrolbot_ws/install/setup.sh && \
+    . /opt/patrolbot_nav2/install/setup.sh && \
+    MAKEFLAGS=-j2 colcon build --parallel-workers 1 --packages-select nav2_bt_navigator \
+      --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+RUN readelf -d install/nav2_bt_navigator/lib/libnav2_navigate_to_pose_navigator.so | grep NODELETE && \
+    readelf -d install/nav2_bt_navigator/lib/libnav2_navigate_through_poses.so | grep NODELETE
+ARG PATROLBOT_REVISION=unknown
+LABEL org.opencontainers.image.revision=${PATROLBOT_REVISION} \
+      io.patrolbot.nav2-bt-lifetime-patch-sha256=64a369d5a08d2ee297de8e63c7f7a02366888ab814a54bf829875146020fcfbb
+WORKDIR /opt/patrolbot_ws

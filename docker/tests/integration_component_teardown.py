@@ -11,6 +11,9 @@ from rclpy.node import Node
 from composition_interfaces.srv import LoadNode
 from lifecycle_msgs.srv import ChangeState
 from lifecycle_msgs.msg import Transition
+from geometry_msgs.msg import TransformStamped
+from tf2_ros import StaticTransformBroadcaster
+from rclpy.parameter import Parameter
 assert os.environ.get('PATROLBOT_ISOLATED_TEST') == '1'
 assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}
 rclpy.init()
@@ -22,7 +25,7 @@ def call(client, request):
     assert future.done(), client.srv_name
     return future.result()
 results=[]
-for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_waypoint_follower','nav2_waypoint_follower::WaypointFollower','waypoint_follower'),('nav2_route','nav2_route::RouteServer','route_server')]):
+for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_waypoint_follower','nav2_waypoint_follower::WaypointFollower','waypoint_follower'),('nav2_route','nav2_route::RouteServer','route_server'),('nav2_controller','nav2_controller::ControllerServer','controller_server')]):
   for configure in (False,True):
     name=f'{original_name}_{case_index}_{int(configure)}'
     container=f'probe_container_{case_index}_{int(configure)}'
@@ -34,6 +37,18 @@ for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigat
       try:
         c=node.create_client(LoadNode,'/'+container+'/_container/load_node')
         req=LoadNode.Request();req.package_name=package;req.plugin_name=plugin;req.node_name=name
+        if package == 'nav2_controller':
+          # Synthetic TF only inside the required network-isolated container.
+          broadcaster = StaticTransformBroadcaster(node)
+          tf = TransformStamped()
+          tf.header.frame_id = 'map'; tf.child_frame_id = 'base_link'
+          tf.header.stamp = node.get_clock().now().to_msg()
+          tf.transform.rotation.w = 1.0
+          broadcaster.sendTransform(tf)
+          req.parameters = [
+            Parameter('controller_plugins', value=['FollowPath']).to_parameter_msg(),
+            Parameter('FollowPath.plugin', value='nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController').to_parameter_msg(),
+          ]
         response=call(c,req);assert response.success,response.error_message
         node.destroy_client(c)
         if configure:

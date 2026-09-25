@@ -22,7 +22,7 @@ def call(client, request):
     assert future.done(), client.srv_name
     return future.result()
 results=[]
-for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_waypoint_follower','nav2_waypoint_follower::WaypointFollower','waypoint_follower')]):
+for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_waypoint_follower','nav2_waypoint_follower::WaypointFollower','waypoint_follower'),('nav2_route','nav2_route::RouteServer','route_server')]):
   for configure in (False,True):
     name=f'{original_name}_{case_index}_{int(configure)}'
     container=f'probe_container_{case_index}_{int(configure)}'

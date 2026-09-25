@@ -141,3 +141,15 @@ The first composed test of the route diagnostic build still faults in lifecycle
 node destruction. The standalone RouteServer regression is fixed in that build;
 the remaining full-stack fault has not been attributed. No production rollout
 is accepted on these results.
+
+## Regulated-pure-pursuit plugin lifetime
+
+`0008-controller-plugin-lifetime.patch` retains the controller library's code
+mappings on Linux until process exit. Configured ControllerServer otherwise
+releases the plugin while lifecycle weak references still need control-block
+vtables defined in it. This does not retain controller instances or enable motion.
+
+The diagnostic build passes all 20 component cases without preload (ten normal,
+ten explicit cleanup). Composed recovery and managed shutdown requests pass,
+but final process exit still crashes during ROS Context destruction. The combined
+candidate remains undeployed; this is not full-stack shutdown acceptance.

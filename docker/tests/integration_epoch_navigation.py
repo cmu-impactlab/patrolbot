@@ -12,6 +12,7 @@ import time
 from uuid import uuid4
 
 assert os.environ.get('PATROLBOT_ISOLATED_TEST') == '1'
+assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}, 'requires network-none isolation'
 sys.path.insert(0, '/validation/ros2_ws/src/patrolbot_bridge/test')
 from test_fake_sbc_integration import FakeSbc, wait_until
 import rclpy
@@ -23,7 +24,6 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from std_srvs.srv import Empty
 from tf2_ros import StaticTransformBroadcaster
 
 log_path = Path('/tmp/epoch-navigation.log')
@@ -39,7 +39,7 @@ try:
         stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     fake = FakeSbc()
     scan = json.loads(Path('/validation/evidence/20260918-scan.json').read_text())
-    fake.laser_field = ','.join('nan' if r is None else str(r) for r in scan['ranges'])
+    fake.laser_field = ','.join('nan' if r is None else str(r) for r in scan['ranges']) + '|LASER_AGE_MS:250'
     rclpy.init()
     node = Node('isolated_epoch_navigation_acceptance')
     bridge = PatrolBotBridge(parameter_overrides=[
@@ -63,7 +63,6 @@ try:
     thread = threading.Thread(target=executor.spin, daemon=True)
     thread.start()
     publisher = node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
-    refresh = node.create_client(Empty, '/request_nomotion_update')
     events = [json.loads(line) for line in Path(
         '/validation/evidence/20260918-initialpose.jsonl').read_text().splitlines()]
     recorded = next(e['message'] for e in events if e['event'] == '/initialpose')
@@ -83,11 +82,8 @@ try:
         msg.pose.pose.orientation.w = p['orientation']['w']
         msg.pose.covariance = recorded['pose']['covariance']
         publisher.publish(msg)
-        # One bounded isolated refresh ensures a scan stamped after the seed;
-        # no standing refresh loop and no call to live ROS.
-        time.sleep(.7)
-        if refresh.service_is_ready():
-            refresh.call_async(Empty.Request())
+        # Acquisition age deliberately makes queued scans older than the seed.
+        # Recovery must succeed without an extra test-generated refresh request.
         ready = wait_until(lambda: bridge._epoch.commands_allowed, timeout=65)
         if not ready:
             pending = bridge._epoch._pending_pose

@@ -22,7 +22,7 @@ from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from patrolbot_interfaces.msg import BaseState
 from rclpy.qos import qos_profile_sensor_data
-from safety_policy import evaluate_safety
+from safety_policy import evaluate_safety, odometry_values_finite
 from sensor_msgs.msg import BatteryState, LaserScan
 
 
@@ -55,6 +55,7 @@ class SafetyWatchdog(Node):
         # Use monotonic-ish ROS clock seconds for age math.
         self._last_scan = None
         self._last_odom = None
+        self._invalid_odom_count = 0
         self._last_battery = None
         self._battery_voltage = float('nan')
         self._last_base_state = None
@@ -95,7 +96,20 @@ class SafetyWatchdog(Node):
     def _scan_cb(self, _):
         self._last_scan = self._now()
 
-    def _odom_cb(self, _):
+    def _odom_cb(self, message):
+        orientation = message.pose.pose.orientation
+        if not odometry_values_finite(
+                message.pose.pose.position.x,
+                message.pose.pose.position.y,
+                (orientation.x, orientation.y, orientation.z, orientation.w),
+                message.twist.twist.linear.x,
+                message.twist.twist.angular.z):
+            self._last_odom = None
+            self._invalid_odom_count += 1
+            self.get_logger().error(
+                f'Rejected non-finite /odom; count={self._invalid_odom_count}.',
+                throttle_duration_sec=5.0)
+            return
         self._last_odom = self._now()
 
     def _battery_cb(self, message):

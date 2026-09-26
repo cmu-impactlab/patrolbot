@@ -135,6 +135,17 @@ def generate_launch_description():
              name='patrolbot_joy_teleop', output='screen',
              remappings=[('/cmd_vel_joy', '/input/joy')],
              respawn=True, respawn_delay=2.0),
+        # Alert-only controller feedback. Its sole publisher is joy_node's
+        # feedback input; it has no velocity, action, or motor-service client.
+        Node(
+            package='patrolbot_navigation',
+            executable='patrolbot_controller_feedback.py',
+            name='patrolbot_controller_feedback',
+            output='screen',
+            parameters=[nav2_params_file],
+            respawn=True,
+            respawn_delay=2.0,
+        ),
         # Safety watchdog: holds the robot (zero Twist on twist_mux priority-10
         # input/safety_controller) whenever /scan or /odom goes stale, and releases
         # automatically when they return. Sensor-loss safe-hold for the whole stack.

@@ -5,7 +5,7 @@ import sys
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from safety_policy import evaluate_safety  # noqa: E402
+from safety_policy import evaluate_safety, odometry_values_finite  # noqa: E402
 
 
 def safe_state(**overrides):
@@ -32,6 +32,17 @@ def safe_state(**overrides):
 
 def test_nominal_state_releases_priority_hold():
     assert evaluate_safety(**safe_state()) == []
+
+
+def test_non_finite_odometry_cannot_satisfy_watchdog_freshness():
+    assert odometry_values_finite(1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
+    for bad in (float('nan'), float('inf'), -float('inf')):
+        assert not odometry_values_finite(
+            bad, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
+        assert not odometry_values_finite(
+            1.0, 2.0, (0.0, bad, 0.0, 1.0), 0.1, 0.2)
+        assert not odometry_values_finite(
+            1.0, 2.0, (0.0, 0.0, 0.0, 1.0), bad, 0.2)
 
 
 def test_every_missing_or_stale_required_stream_holds():

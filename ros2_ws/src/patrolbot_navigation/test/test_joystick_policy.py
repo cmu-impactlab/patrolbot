@@ -11,6 +11,7 @@ from joystick_policy import (  # noqa: E402
     apply_deadzone,
     axis_value,
     button_pressed,
+    drive_intent,
     ramp_toward,
     rising_edge,
 )
@@ -42,3 +43,12 @@ def test_ramp_toward_never_overshoots():
     assert ramp_toward(0.0, -0.35, 0.1) == -0.1
     assert ramp_toward(-0.3, -0.35, 0.1) == -0.35
     assert ramp_toward(0.2, 0.0, 0.3) == 0.0
+
+
+def test_shared_f710_drive_intent_requires_rb_and_nonzero_direction():
+    buttons = [0] * 6
+    axes = [0.0] * 8
+    axes[1] = 0.5
+    assert drive_intent(axes, buttons, 0.12) == (False, 0.0, 0.0)
+    buttons[5] = 1
+    assert drive_intent(axes, buttons, 0.12) == (True, 0.5, 0.0)

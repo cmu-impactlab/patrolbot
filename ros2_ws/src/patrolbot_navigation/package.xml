@@ -18,6 +18,7 @@
   <exec_depend>patrolbot_dock_manager</exec_depend>
   <exec_depend>patrolbot_docking_plugins</exec_depend>
   <exec_depend>patrolbot_interfaces</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>

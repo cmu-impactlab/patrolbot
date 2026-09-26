@@ -1,7 +1,9 @@
 """Static safety-contract tests for PatrolBot navigation configuration."""
 
+import ast
 import math
 import re
+import stat
 from pathlib import Path
 import subprocess
 import unittest
@@ -136,13 +138,64 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIs(amcl['set_initial_pose'], False)
         self.assertIs(amcl['always_reset_initial_pose'], False)
 
+    def test_amcl_recovery_and_bounded_update_policy_are_pinned(self):
+        amcl = self.params['amcl']['ros__parameters']
+        self.assertEqual(amcl['recovery_alpha_slow'], 0.001)
+        self.assertEqual(amcl['recovery_alpha_fast'], 0.1)
+        self.assertEqual(amcl['resample_interval'], 1)
+        self.assertEqual(amcl['robot_model_type'], (
+            'nav2_amcl::DifferentialMotionModel'))
+        self.assertEqual(
+            {name: amcl[name] for name in (
+                'alpha1', 'alpha2', 'alpha3', 'alpha4', 'alpha5')},
+            {
+                'alpha1': 0.05,
+                'alpha2': 0.05,
+                'alpha3': 0.05,
+                'alpha4': 0.05,
+                'alpha5': 0.0,
+            })
+        self.assertEqual(
+            {name: amcl[name] for name in (
+                'beam_skip_distance', 'beam_skip_error_threshold',
+                'beam_skip_threshold', 'do_beamskip',
+                'laser_likelihood_max_dist', 'laser_max_range',
+                'laser_min_range', 'laser_model_type', 'sigma_hit',
+                'z_hit', 'z_max', 'z_rand', 'z_short')},
+            {
+                'beam_skip_distance': 0.5,
+                'beam_skip_error_threshold': 0.9,
+                'beam_skip_threshold': 0.3,
+                'do_beamskip': True,
+                'laser_likelihood_max_dist': 2.0,
+                'laser_max_range': -1.0,
+                'laser_min_range': -1.0,
+                'laser_model_type': 'likelihood_field_prob',
+                'sigma_hit': 0.3,
+                'z_hit': 0.7,
+                'z_max': 0.0,
+                'z_rand': 0.3,
+                'z_short': 0.0,
+            })
+        self.assertEqual(amcl['max_beams'], 60)
+        self.assertEqual(amcl['min_particles'], 1000)
+        self.assertEqual(amcl['max_particles'], 4000)
+
+        manager = self.params[
+            'patrolbot_dock_manager']['ros__parameters']
+        self.assertEqual(manager['localization_update_max_attempts'], 5)
+        self.assertNotIn('docked_localization_refresh_period', manager)
+        manager_source = DOCK_MANAGER_FILE.read_text(encoding='utf-8')
+        self.assertNotIn('docked_localization_refresh_period', manager_source)
+        self.assertNotIn('_docked_localization_refresh', manager_source)
+
     def test_guarded_undock_uses_the_commissioned_main_charger_pose(self):
         manager = self.params['patrolbot_dock_manager']['ros__parameters']
         self.assertIs(manager['dock_pose_configured'], True)
         self.assertEqual(manager['dock_id'], 'main_charger')
-        self.assertAlmostEqual(manager['dock_pose_x'], 99.28925458355519)
-        self.assertAlmostEqual(manager['dock_pose_y'], 126.33778290362004)
-        self.assertAlmostEqual(manager['dock_pose_yaw'], -1.578938606346)
+        self.assertAlmostEqual(manager['dock_pose_x'], 100.37)
+        self.assertAlmostEqual(manager['dock_pose_y'], 126.63)
+        self.assertAlmostEqual(manager['dock_pose_yaw'], -1.842)
         self.assertEqual(manager['sensor_timeout'], 0.5)
         self.assertAlmostEqual(manager['undock_turn_yaw'], math.pi)
         self.assertEqual(manager['spin_timeout'], 20.0)
@@ -175,6 +228,99 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIn(
             '/opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml',
             bridge_command)
+
+    def test_joystick_survives_a_usb_replug_without_a_container_restart(self):
+        """joy_node must re-detect the pad after an unplug/replug.
+
+        joy 3.3.0 does implement hotplug, but SDL discovers devices through a
+        libudev netlink monitor. The container has no /run/udev, so libudev
+        never subscribes to a multicast group -- its uevent sockets sit at
+        Groups=00000000 while host udevd broadcasts on group 2. No event ever
+        arrives, so joy_node enumerates once at startup and is blind forever
+        after. Disabling udev forces SDL's polling fallback, which rescans
+        /dev/input directly. Both halves are load-bearing: the bind mount
+        publishes the new device node into the container, and the polling
+        fallback is what notices it.
+        """
+        compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
+        navigation = compose['services']['navigation']
+        self.assertEqual(
+            navigation['environment']['SDL_JOYSTICK_DISABLE_UDEV'], '1')
+        self.assertIn('/dev/input:/dev/input:rw', navigation['volumes'])
+
+    def test_rumble_permissions_are_scoped_to_navigation(self):
+        compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
+        navigation = compose['services']['navigation']
+        gimbal = compose['services']['gimbal']
+        self.assertIn('/dev/input:/dev/input:rw', navigation['volumes'])
+        self.assertEqual(navigation['device_cgroup_rules'], ['c 13:* rw'])
+        self.assertIn('/dev/input:/dev/input:ro', gimbal['volumes'])
+        self.assertIn('c 13:* r', gimbal['device_cgroup_rules'])
+        self.assertNotIn('c 13:* rw', gimbal['device_cgroup_rules'])
+
+    def test_controller_feedback_can_only_publish_rumble(self):
+        notifier_path = (
+            PACKAGE_ROOT / 'scripts' /
+            'patrolbot_controller_feedback.py')
+        notifier = notifier_path.read_text(encoding='utf-8')
+        tree = ast.parse(notifier)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+
+        publishers = [
+            call for call in calls
+            if isinstance(call.func, ast.Attribute)
+            and call.func.attr == 'create_publisher'
+        ]
+        self.assertEqual(len(publishers), 1)
+        publisher = publishers[0]
+        self.assertEqual(publisher.args[0].id, 'JoyFeedback')
+        self.assertEqual(publisher.args[1].value, '/joy/set_feedback')
+
+        forbidden_calls = {
+            'create_client', 'create_service', 'ActionClient',
+            'ActionServer', 'send_goal_async',
+        }
+        called_names = set()
+        for call in calls:
+            if isinstance(call.func, ast.Attribute):
+                called_names.add(call.func.attr)
+            elif isinstance(call.func, ast.Name):
+                called_names.add(call.func.id)
+        self.assertFalse(forbidden_calls & called_names)
+        self.assertNotIn('Twist()', notifier)
+        self.assertNotIn("'/patrolbot/motor_enable'", notifier)
+        self.assertIn('message.id = 0', notifier)
+        self.assertIn('JoyFeedback.TYPE_RUMBLE', notifier)
+        self.assertIn('SignalHandlerOptions.NO', notifier)
+        self.assertIn('node.stop_feedback()', notifier)
+        self.assertTrue(
+            notifier_path.stat().st_mode & stat.S_IXUSR,
+            'launchable ROS scripts must retain their executable mode when '
+            'the image uses colcon --symlink-install')
+
+    def test_controller_feedback_defaults_and_launch_are_pinned(self):
+        config = self.params[
+            'patrolbot_controller_feedback']['ros__parameters']
+        self.assertEqual(config, {
+            'intensity': 1.0,
+            'event_pulse': 0.6,
+            'retry_pulse': 0.35,
+            'retry_interval': 1.5,
+            'startup_grace': 2.0,
+            'joystick_timeout': 0.4,
+            'deadzone': 0.12,
+        })
+        bringup = (
+            PACKAGE_ROOT / 'launch' /
+            'bringup.launch.py').read_text(encoding='utf-8')
+        self.assertIn("executable='patrolbot_controller_feedback.py'", bringup)
+        self.assertIn("name='patrolbot_controller_feedback'", bringup)
+        notifier = (
+            PACKAGE_ROOT / 'scripts' /
+            'patrolbot_controller_feedback.py').read_text(encoding='utf-8')
+        self.assertIn('FloatingPointRange', notifier)
+        for name in config:
+            self.assertIn(f"'{name}'", notifier)
 
     def test_system_watchdog_enforces_power_and_hardware_state(self):
         watchdog = (

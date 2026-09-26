@@ -5,49 +5,72 @@ amcl:
     # (translation noise from rotation) dominate during the undock's in-place
     # 180 deg turn, which is where the estimate was seen wandering worst.
     # Halved so a pure rotation spreads the particle cloud far less.
-    alpha1: 0.1
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.1
-    alpha5: 0.2
+    alpha1: 0.05
+    alpha2: 0.05
+    alpha3: 0.05
+    alpha4: 0.05
+    # alpha5 is unused by DifferentialMotionModel (only used by omni drive) —
+    # zeroed rather than left at a value that never does anything.
+    alpha5: 0.00
     base_frame_id: "base_link"
-    beam_skip_distance: 0.5
-    beam_skip_error_threshold: 0.9
-    beam_skip_threshold: 0.3
+    beam_skip_distance: 0.50
+    beam_skip_error_threshold: 0.90
+    beam_skip_threshold: 0.30
     do_beamskip: true
     global_frame_id: "map"
-    lambda_short: 0.1
-    laser_likelihood_max_dist: 2.0
+    lambda_short: 0.10
+    laser_likelihood_max_dist: 2.00
     laser_max_range: -1.0
     laser_min_range: -1.0
-    laser_model_type: "likelihood_field"
-    max_particles: 1500
-    min_particles: 500
+    # Changed from "likelihood_field" to "likelihood_field_prob": this is a
+    # different sensor model (adds beam-skip-aware probability weighting), not
+    # a value tweak on the same model. Re-validate localization behavior after
+    # this, ideally against the same undock/spin scenario that drove alpha1/4.
+    laser_model_type: "likelihood_field_prob"
+    # Required by likelihood_field_prob: number of evenly distributed scan
+    # beams AMCL actually evaluates per update.
+    max_beams: 60
+    # Particle count raised 500-1500 -> 1000-4000. That's up to 2.7x the worst
+    # case particle count, i.e. more CPU per update — worth watching given the
+    # SBC/Pi is already flagged elsewhere in this file as load-sensitive
+    # (see local_costmap's always_send_full_costmap note).
+    max_particles: 4000
+    min_particles: 1000
+    map_topic: "map"
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    # Random-particle injection, OFF (both zero). This is AMCL's kidnapped-
-    # robot recovery: when the scan match dips it scatters fresh particles
-    # across the map, which is exactly the "drifts like crazy" jumping seen
-    # while undocking — the dock structure fills the laser's near field, the
-    # match score drops, and AMCL starts guessing elsewhere. This robot is
-    # never kidnapped; it starts from a known dock pose, so the recovery only
-    # ever costs accuracy. Re-enable (0.001/0.1) if the robot is ever moved
-    # while powered off and must find itself again.
-    recovery_alpha_fast: 0.0
-    recovery_alpha_slow: 0.0
+    # Keep AMCL's standard slow/fast recovery signal available as a diversity
+    # backstop. Forced no-motion requests are now event/phase bounded, so this
+    # no longer combines with a permanent 5 Hz resampling loop while docked.
+    recovery_alpha_fast: 0.10
+    recovery_alpha_slow: 0.001
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
-    sigma_hit: 0.2
+    # 0.2 -> 0.30: looser expected laser noise. No PB-AUDIT note ties the old
+    # 0.2 to a specific measured behavior, so this reads as a generic
+    # likelihood_field_prob retune rather than something the new value breaks —
+    # but confirm that assumption, since nothing here documents why 0.30 specifically.
+    sigma_hit: 0.30
+    tf_broadcast: true
     transform_tolerance: 1.0
-    update_min_d: 0.1
-    update_min_a: 0.1
-    z_hit: 0.7
-    z_max: 0.05
-    z_rand: 0.2
-    z_short: 0.05
+    update_min_d: 0.10
+    update_min_a: 0.10
+    z_hit: 0.70
+    # z_max/z_short are unused by likelihood_field_prob (it only consumes
+    # z_hit + z_rand, which correctly sum to 1.0) — zeroed to reflect that.
+    # Note lambda_short (above) is ALSO unused by likelihood_field_prob but was
+    # left at 0.10 rather than zeroed in the source values you gave me: that's
+    # an inconsistency in the new config itself, not something I introduced.
+    z_max: 0.00
+    z_rand: 0.30
+    z_short: 0.00
     scan_topic: "scan"
+    first_map_only: true
+    freespace_downsampling: false
+    bond_heartbeat_period: 0.1
+    allow_parameter_qos_overrides: true
     # Never claim map origin after a restart. A valid pose must come from the
     # operator or the guarded dock-pose initializer after it has proved the
     # robot is on a known dock. Navigation/undock readiness remains false until
@@ -55,7 +78,7 @@ amcl:
     set_initial_pose: false
     always_reset_initial_pose: false
     initial_pose: [0.0, 0.0, 0.0, 0.0]
-
+ 
 behavior_server:
   ros__parameters:
     use_sim_time: False
@@ -367,16 +390,26 @@ patrolbot_safety_watchdog:
     bumper_enforcement_enabled: false
     rate: 10.0
 
+patrolbot_controller_feedback:
+  ros__parameters:
+    intensity: 1.0
+    event_pulse: 0.6
+    retry_pulse: 0.35
+    retry_interval: 1.5
+    startup_grace: 2.0
+    joystick_timeout: 0.4
+    deadzone: 0.12
+
 patrolbot_dock_manager:
   ros__parameters:
-    # Measured in the main charger after operator localization on 2026-07-23.
-    # The guarded initializer republishes this pose only while dock evidence
-    # proves the stationary robot is charging with its motors disabled.
+    # Captured exactly from the operator's RViz /initialpose while seated in
+    # the main charger on 2026-08-27. Charging and dock residence never publish
+    # this autonomously; the guarded initializer remains explicit-only.
     dock_pose_configured: true
     dock_id: "main_charger"
-    dock_pose_x: 99.28925458355519
-    dock_pose_y: 126.33778290362004
-    dock_pose_yaw: -1.578938606346
+    dock_pose_x: 100.37
+    dock_pose_y: 126.63
+    dock_pose_yaw: -1.842
     # The dock has real capture range — the robot mates and charges from a
     # spread of approach positions, not one surveyed point. 0.25 m was tighter
     # than the hardware: a hand-placed, charging robot measured 0.32 m from the
@@ -399,11 +432,10 @@ patrolbot_dock_manager:
     docked_max_position_variance: 1.0
     max_yaw_variance: 0.25
     sensor_timeout: 0.5
-    # A stationary AMCL publishes nothing, so without this the docked pose is
-    # always older than sensor_timeout and readiness reports "localization
-    # invalid" while idle even though the precheck's forced refresh clears it
-    # immediately. One no-motion update per tick, docked and idle only.
-    docked_localization_refresh_period: 0.2
+    # Every explicit localization phase has its own bounded request budget.
+    # Successfully dispatched service calls count; an unavailable service does
+    # not consume the budget, and the existing phase timeout remains final.
+    localization_update_max_attempts: 5
     precheck_timeout: 5.0
     # Requested of the SBC's exclusive UNDOCK operation. The SBC rejects
     # anything outside its own hard caps rather than clamping it, so these are

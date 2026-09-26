@@ -17,7 +17,15 @@ RUN for package in patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager 
     MAKEFLAGS=-j2 colcon build --parallel-workers 1 \
       --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+# Replace inherited metadata with the complete reviewed native patch manifest.
+COPY docker/nav2-patches /opt/patrolbot-nav2-patches
+ARG PATROLBOT_NAV2_PATCH_SHA256
+RUN test -n "${PATROLBOT_NAV2_PATCH_SHA256}" && \
+    test "$(for patch_file in /opt/patrolbot-nav2-patches/*.patch; do \
+      printf '%s\0' "${patch_file##*/}"; cat "$patch_file"; \
+    done | sha256sum | cut -d' ' -f1)" = "${PATROLBOT_NAV2_PATCH_SHA256}"
 ARG PATROLBOT_REVISION=unknown
-LABEL io.patrolbot.source-tree-sha256=${PATROLBOT_SOURCE_SHA256} \
+LABEL io.patrolbot.nav2-patch-sha256=${PATROLBOT_NAV2_PATCH_SHA256} \
+      io.patrolbot.source-tree-sha256=${PATROLBOT_SOURCE_SHA256} \
       io.patrolbot.source-sha256=${PATROLBOT_SOURCE_SHA256} \
       org.opencontainers.image.revision=${PATROLBOT_REVISION}

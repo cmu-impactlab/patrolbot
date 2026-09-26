@@ -8,6 +8,14 @@ from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch_ros.actions import Node
 
+def shutdown_on_container_exit(event, context):
+    # SIGINT already starts launch shutdown. Emitting it again on the resulting
+    # container exit runs the ROS adapter shutdown handler twice.
+    if context.is_shutdown:
+        return []
+    return [EmitEvent(event=Shutdown(reason='nav2_container exited'))]
+
+
 def generate_launch_description():
     pkg_dir = get_package_share_directory('patrolbot_navigation')
     launch_dir = os.path.join(pkg_dir, 'launch')
@@ -93,7 +101,7 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=container,
-                on_exit=[EmitEvent(event=Shutdown(reason='nav2_container exited'))],
+                on_exit=shutdown_on_container_exit,
             )
         ),
 

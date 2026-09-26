@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -167,3 +168,7 @@ finally:
             'Nav2 composition crashed during isolated test teardown')
 
     assert not forced_shutdown, 'isolated Nav2 launch required forced termination'
+    assert not re.search(r'process has died .*exit code (?!0[,\]])-?\d+', logs), (
+        'a launched child exited unsuccessfully during teardown')
+    assert launch is not None and launch.returncode == 0, (
+        'ROS launch did not exit cleanly', None if launch is None else launch.returncode)

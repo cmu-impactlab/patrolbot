@@ -25,8 +25,8 @@ def call(client, request):
     assert future.done(), client.srv_name
     return future.result()
 results=[]
-for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_waypoint_follower','nav2_waypoint_follower::WaypointFollower','waypoint_follower'),('nav2_route','nav2_route::RouteServer','route_server'),('nav2_controller','nav2_controller::ControllerServer','controller_server')]):
-  for configure in (False,True):
+for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_bt_navigator','nav2_bt_navigator::BtNavigator','bt_navigator'),('nav2_waypoint_follower','nav2_waypoint_follower::WaypointFollower','waypoint_follower'),('nav2_route','nav2_route::RouteServer','route_server'),('nav2_controller','nav2_controller::ControllerServer','controller_server'),('nav2_lifecycle_manager','nav2_lifecycle_manager::LifecycleManager','manager'),('nav2_lifecycle_manager','nav2_lifecycle_manager::LifecycleManager','manager')]):
+  for configure in ((False,) if package == 'nav2_lifecycle_manager' else (False,True)):
     name=f'{original_name}_{case_index}_{int(configure)}'
     container=f'probe_container_{case_index}_{int(configure)}'
     label=name
@@ -49,6 +49,8 @@ for case_index, (package, plugin, original_name) in enumerate([('nav2_bt_navigat
             Parameter('controller_plugins', value=['FollowPath']).to_parameter_msg(),
             Parameter('FollowPath.plugin', value='nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController').to_parameter_msg(),
           ]
+        if package == 'nav2_lifecycle_manager':
+          req.parameters = [Parameter('node_names', type_=Parameter.Type.STRING_ARRAY, value=[]).to_parameter_msg()]
         response=call(c,req);assert response.success,response.error_message
         node.destroy_client(c)
         if configure:

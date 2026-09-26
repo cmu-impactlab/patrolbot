@@ -1,0 +1,32 @@
+--- a/nav2_lifecycle_manager/src/lifecycle_manager.cpp
++++ b/nav2_lifecycle_manager/src/lifecycle_manager.cpp
+@@ -111,6 +111,10 @@
+ 
+ LifecycleManager::~LifecycleManager()
+ {
++  // The Context outlives this component and its library. Release its bound
++  // callback while both the instance and callback code are still valid.
++  get_node_base_interface()->get_context()->remove_pre_shutdown_callback(
++    preshutdown_callback_handle_);
+   RCLCPP_INFO(get_logger(), "Destroying %s", get_name());
+   service_thread_.reset();
+ }
+@@ -468,7 +472,7 @@
+ {
+   rclcpp::Context::SharedPtr context = get_node_base_interface()->get_context();
+ 
+-  context->add_pre_shutdown_callback(
++  preshutdown_callback_handle_ = context->add_pre_shutdown_callback(
+     std::bind(&LifecycleManager::onRclPreshutdown, this)
+   );
+ }
+--- a/nav2_lifecycle_manager/include/nav2_lifecycle_manager/lifecycle_manager.hpp
++++ b/nav2_lifecycle_manager/include/nav2_lifecycle_manager/lifecycle_manager.hpp
+@@ -71,6 +71,7 @@
+ protected:
+   // Callback group used by services and timers
+   rclcpp::CallbackGroup::SharedPtr callback_group_;
++  rclcpp::PreShutdownCallbackHandle preshutdown_callback_handle_;
+   std::unique_ptr<nav2_util::NodeThread> service_thread_;
+ 
+   // The services provided by this node

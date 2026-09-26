@@ -170,3 +170,17 @@ The five existing seed-acknowledgement cases also pass. Composed recovery and
 live fresh-seed acceptance are still required; wall alignment remains a separate
 physical acceptance gate. `Dockerfile.amcl-seed-scan` builds this scoped overlay
 from the deployed image without the experimental teardown changes.
+
+## Lifecycle-manager callback ownership
+
+`0010-manager-callback-lifetime.patch` retains the Context callback handle and
+removes the callback during manager destruction. Otherwise the Context keeps a
+callback whose bound object and component library have already been destroyed,
+causing a process-exit fault. No library-retention flag is needed for this repair.
+
+A manager with zero managed nodes reproduced the fault twice. With the patch,
+all 12 component cases pass and the composed Nav2 process exits cleanly after
+recovery and managed shutdown. The composed test also exposed Python child
+shutdown errors and a launch exception; complete stack shutdown is still pending.
+The integration fixture now rejects nonzero child and launch exits as well as
+SIGSEGV and forced termination.

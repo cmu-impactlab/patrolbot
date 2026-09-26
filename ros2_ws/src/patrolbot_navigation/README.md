@@ -11,8 +11,9 @@ and a custom joystick teleop node.
 
 | File | Role |
 |------|------|
-| `launch/bringup.launch.py` | Launches the composed Nav2 stack (AMCL + RPP + collision monitor), joystick teleop, safety watchdog, and laser static TF |
+| `launch/bringup.launch.py` | Launches the composed Nav2 stack (AMCL + RPP + collision monitor), joystick teleop, controller feedback, safety watchdog, and laser static TF |
 | `scripts/patrolbot_joy_teleop.py` | Logitech F710 Xinput teleop: RB deadman, left-stick drive/turn, publishes `/cmd_vel_joy` |
+| `scripts/patrolbot_controller_feedback.py` | Finite F710 rumble alerts for safety blockers; publishes only `/joy/set_feedback` and cannot command motion or enable motors |
 | `scripts/patrolbot_safety_watchdog.py` | Publishes a priority-10 zero command while `/scan` or `/odom` is stale |
 | `config/nav2_params.yaml` | AMCL differential model, RPP (`0.22 m/s` cruise), `0.26 m/s` Nav2 smoother cap, and a 0.6×0.6 m collision-monitor stop box |
 | `maps/second_map.yaml` + `.pgm` | Active map: 3192×2205 at 0.075 m/px, origin `[-1,-1,0]` |

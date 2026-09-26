@@ -1,0 +1,40 @@
+{
+  "issue": 60,
+  "candidate_image": "patrolbot:reconciled-4280d1c-20260926",
+  "candidate_image_id": "sha256:3374af498b08dee451df91a867fffcd9208d408faade125db3bed4506d106102",
+  "candidate_revision": "4280d1c115bdc4596812d316d22a2b94ba327edf",
+  "candidate_source_sha256": "186e937a695f65643923af9f8abf450b2ffafa8cb5d64c66dcb6f3c3f132ef0a",
+  "candidate_nav2_patch_sha256": "1434a9400428ceaafb95afaaa0777128d75ade05a6f4f8c005c65080363d9889",
+  "expected_previous_image": "patrolbot:epoch-f5931eaf-labels-20260924",
+  "expected_previous_source_sha256": "f5931eaf099b1bd1ddae0a8daa96433227eae4035b57a9c35fddc1e962cb4014",
+  "services": [
+    "bringup",
+    "bridge",
+    "navigation"
+  ],
+  "source_changes": [
+    {
+      "path": "ros2_ws/src/patrolbot_navigation/scripts/patrolbot_joy_teleop.py",
+      "before": "a5be97571c4d981a69229119272b78500e43f74f2635a40dc6135b150de649e4",
+      "after": "600334cedb13a19725c4e9c427d43007924fc05c14ae69821019a1d8627a711c"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_navigation/launch/bringup.launch.py",
+      "before": "488ab3600dfb5b7b9b1cff4285b9c1c0efc82e418561479711e796234eb6245d",
+      "after": "5c9134982610b1830700ecafdc94cb07b9216fdac04512fdf8a664ea4a6001dd"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_dock_manager/patrolbot_dock_manager/dock_manager.py",
+      "before": "6c93a4731f46da22f6b8509fe7fe42a9a6932308f1bf0283150449ce49596d1b",
+      "after": "5f3b0d40556db261b71fdbeb6658dc6c5632034d5d3ea52fe3a29d24d3d9e5ae"
+    }
+  ],
+  "required_gates": [
+    "completed eight-hour isolated soak including recovery and clean process exits",
+    "fresh read-only stationary hardware preflight with motors disabled and no active undock",
+    "verify all previous/candidate image and source hashes before writes",
+    "backup environment and all source_changes before writes; verify off-host copy before retiring snapshots",
+    "verify new host and embedded source digests, installed files and runtime health; restore source and environment together on failure"
+  ],
+  "physical_acceptance": "Not established by deployment; requires operator seed, stationary stability, geometry and separately authorized motion."
+}

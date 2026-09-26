@@ -412,12 +412,16 @@ def _build_harness(
             lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().command_path_valid)
     yield manager, world, nodes[-1]
-    executor.shutdown(timeout_sec=3.0)
+    # Stop callback workers and the spin thread before destroying ROS handles.
+    assert executor.shutdown(timeout_sec=3.0), 'executor failed to drain callbacks'
+    spin_thread.join(timeout=2.0)
+    assert not spin_thread.is_alive(), 'executor spin thread survived shutdown'
+    executor.remove_node(manager)
     manager.destroy_node()
     for node in nodes:
+        executor.remove_node(node)
         node.destroy_node()
-    spin_thread.join(timeout=2.0)
-    rclpy.shutdown()
+    rclpy.try_shutdown()
 
 
 @pytest.fixture

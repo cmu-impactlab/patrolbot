@@ -49,6 +49,14 @@ try:
     fake.laser_field = ','.join('nan' if r is None else str(r) for r in scan['ranges'])
     rclpy.init()
     node = Node('isolated_epoch_navigation_acceptance')
+    # Create persistent shutdown clients during setup, like the production
+    # recovery coordinator. Late-created clients intermittently report ready
+    # while their first request never reaches even an empty manager.
+    shutdown_clients = {
+        manager: node.create_client(
+            ManageLifecycleNodes, f'/lifecycle_manager_{manager}/manage_nodes')
+        for manager in ('navigation', 'localization')
+    }
     bridge = PatrolBotBridge(parameter_overrides=[
         Parameter('server_ip', value='127.0.0.1'),
         Parameter('server_port', value=fake.port),
@@ -170,8 +178,7 @@ try:
     # Shut down lifecycle-managed plugins while TF, DDS and their executors
     # still exist; then stop launch and the fake hardware process below.
     for manager in ('navigation', 'localization'):
-        shutdown = node.create_client(
-            ManageLifecycleNodes, f'/lifecycle_manager_{manager}/manage_nodes')
+        shutdown = shutdown_clients[manager]
         assert shutdown.wait_for_service(timeout_sec=5)
         request = ManageLifecycleNodes.Request()
         request.command = request.SHUTDOWN

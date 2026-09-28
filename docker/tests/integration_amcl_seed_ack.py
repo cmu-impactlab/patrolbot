@@ -70,8 +70,20 @@ try:
 
     transition(1)
     transition(3)
-    spin(.5)
+    deadline = time.monotonic() + 5.0
+    while publisher.get_subscription_count() != 1 and time.monotonic() < deadline:
+        spin(.02, tf=False)
     assert publisher.get_subscription_count() == 1
+    # A publisher existing is not proof that AMCL has received odometry TF.
+    # Reject a seed with no TF history; later TF must not silently replay it.
+    seed()
+    spin(.15, tf=False)
+    # Even TF arriving inside the retry window cannot reconstruct older history.
+    spin(1.25)
+    assert count('Rejecting initial pose') == 1, 'missing TF history was ignored'
+    assert count('Setting pose') == 0 and not accepted
+    spin(.5)
+    assert count('Setting pose') == 0 and not accepted, 'replayed an expired seed'
     # No transform covers this fresh seed until TF resumes 150 ms later.
     first_stamp = seed()
     spin(.15, tf=False)
@@ -83,7 +95,7 @@ try:
     # Future source timestamp never becomes available within the 1s bound.
     seed(5.0)
     spin(1.4)
-    assert count('Rejecting initial pose') == 1, 'retry deadline was extended'
+    assert count('Rejecting initial pose') == 2, 'retry deadline was extended'
     assert count('Setting pose') == 1, 'timeout used an identity fallback'
     assert accepted == [first_stamp], 'timed-out seed was acknowledged'
     # Superseding a future seed must create one fresh bounded request.
@@ -94,7 +106,7 @@ try:
     assert count('Setting pose') == 2
     assert accepted == [first_stamp, second_stamp]
     spin(1.1)
-    assert count('Rejecting initial pose') == 1, 'superseded request survived'
+    assert count('Rejecting initial pose') == 2, 'superseded request survived'
     # Pending callbacks must not apply after lifecycle deactivation.
     seed(5.0)
     spin(.1)
@@ -102,9 +114,9 @@ try:
     spin(1.2)
     assert count('Setting pose') == 2
     assert accepted == [first_stamp, second_stamp]
-    assert count('Rejecting initial pose') == 1
+    assert count('Rejecting initial pose') == 2
     transition(2)
-    print(json.dumps({'passed': ['delayed_tf', 'bounded_timeout', 'supersession', 'deactivation_cleanup', 'accepted_seed_correlation'],
+    print(json.dumps({'passed': ['cold_start_missing_tf_rejected', 'expired_seed_not_replayed', 'fresh_seed_after_tf', 'delayed_tf', 'bounded_timeout', 'supersession', 'deactivation_cleanup', 'accepted_seed_correlation'],
                       'settings': count('Setting pose'), 'timeouts': count('Rejecting initial pose')}))
 finally:
     if process is not None and process.poll() is None:

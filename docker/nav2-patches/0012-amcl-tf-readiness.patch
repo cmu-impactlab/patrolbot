@@ -1,0 +1,60 @@
+--- a/nav2_amcl/include/nav2_amcl/amcl_node.hpp
++++ b/nav2_amcl/include/nav2_amcl/amcl_node.hpp
+@@ -41,6 +41,7 @@
+ #include "nav_msgs/srv/set_map.hpp"
+ #include "sensor_msgs/msg/laser_scan.hpp"
+ #include "std_srvs/srv/empty.hpp"
++#include "std_srvs/srv/trigger.hpp"
+ #include "tf2_ros/transform_broadcaster.h"
+ #include "tf2_ros/transform_listener.h"
+ #include "pluginlib/class_loader.hpp"
+@@ -230,6 +231,7 @@
+ 
+   // Let amcl update samples without requiring motion
+   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr nomotion_update_srv_;
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr initial_pose_tf_ready_srv_;
+   /*
+    * @brief Request an AMCL update even though the robot hasn't moved
+    */
+--- a/nav2_amcl/src/amcl_node.cpp
++++ b/nav2_amcl/src/amcl_node.cpp
+@@ -345,6 +345,7 @@
+   global_loc_srv_.reset();
+   initial_guess_srv_.reset();
+   nomotion_update_srv_.reset();
++  initial_pose_tf_ready_srv_.reset();
+   initial_pose_sub_.reset();
+   laser_scan_connection_.disconnect();
+   tf_listener_.reset();  //  listener may access lase_scan_filter_, so it should be reset earlier
+@@ -1664,6 +1665,31 @@
+ void
+ AmclNode::initServices()
+ {
++  // Read-only consumer readiness: TF publication/discovery alone cannot prove
++  // this AMCL instance has history covering a subsequent operator pose seed.
++  initial_pose_tf_ready_srv_ = create_service<std_srvs::srv::Trigger>(
++    "~/initial_pose_tf_ready",
++    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response)
++    {
++      std::lock_guard<std::recursive_mutex> lock(mutex_);
++      response->success = false;
++      response->message = "AMCL is inactive or odometry TF is unavailable";
++      if (!active_ || !tf_buffer_) {return;}
++      try {
++        const auto transform = tf_buffer_->lookupTransform(
++          odom_frame_id_, base_frame_id_, tf2::TimePointZero);
++        const rclcpp::Time stamp(transform.header.stamp, get_clock()->get_clock_type());
++        const auto age = now() - stamp;
++        response->success = stamp.nanoseconds() > 0 && age.nanoseconds() >= 0 &&
++          age.nanoseconds() <= transform_tolerance_.count();
++        response->message = response->success ? "Timestamped odometry TF received" :
++          "Odometry TF timestamp is zero, future or stale";
++      } catch (const tf2::TransformException & error) {
++        response->message = error.what();
++      }
++    });
++
+   global_loc_srv_ = create_service<std_srvs::srv::Empty>(
+     "reinitialize_global_localization",
+     std::bind(&AmclNode::globalLocalizationCallback, this, _1, _2, _3));

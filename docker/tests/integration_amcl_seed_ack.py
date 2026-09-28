@@ -9,6 +9,7 @@ import time
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped
 from lifecycle_msgs.srv import ChangeState
+from std_srvs.srv import Trigger
 from rclpy.duration import Duration
 from tf2_ros import TransformBroadcaster
 
@@ -29,6 +30,7 @@ try:
         PoseWithCovarianceStamped, '/amcl/accepted_initial_pose',
         lambda msg: accepted.append(msg.header.stamp), 10)
     broadcaster = TransformBroadcaster(node)
+    readiness = node.create_client(Trigger, '/amcl/initial_pose_tf_ready')
     lifecycle = node.create_client(ChangeState, '/amcl/change_state')
     assert lifecycle.wait_for_service(timeout_sec=15)
 
@@ -68,8 +70,19 @@ try:
     def count(text):
         return log_path.read_text().count(text)
 
+    def ready():
+        assert readiness.wait_for_service(timeout_sec=5)
+        future = readiness.call_async(Trigger.Request())
+        deadline = time.monotonic() + 3
+        while not future.done() and time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=.02)
+        assert future.done(), 'readiness service did not respond'
+        return future.result().success
+
     transition(1)
+    assert not ready(), 'inactive AMCL reported ready'
     transition(3)
+    assert not ready(), 'AMCL ready without TF history'
     deadline = time.monotonic() + 5.0
     while publisher.get_subscription_count() != 1 and time.monotonic() < deadline:
         spin(.02, tf=False)
@@ -84,6 +97,7 @@ try:
     assert count('Setting pose') == 0 and not accepted
     spin(.5)
     assert count('Setting pose') == 0 and not accepted, 'replayed an expired seed'
+    assert ready(), 'AMCL did not report received TF'
     # No transform covers this fresh seed until TF resumes 150 ms later.
     first_stamp = seed()
     spin(.15, tf=False)
@@ -111,12 +125,34 @@ try:
     seed(5.0)
     spin(.1)
     transition(4)
+    assert not ready(), 'deactivated AMCL reported ready'
     spin(1.2)
     assert count('Setting pose') == 2
     assert accepted == [first_stamp, second_stamp]
     assert count('Rejecting initial pose') == 2
+    transition(3)
+    spin(.3)
+    assert ready()
+    spin(1.2, tf=False)
+    assert not ready(), 'stale TF reported ready'
+    spin(.3)
+    assert ready(), 'fresh TF did not restore readiness'
+    future_tf = TransformStamped()
+    future_tf.header.frame_id = 'odom'
+    future_tf.child_frame_id = 'base_link'
+    future_tf.header.stamp = (node.get_clock().now() + Duration(seconds=5)).to_msg()
+    future_tf.transform.rotation.w = 1.0
+    broadcaster.sendTransform(future_tf)
+    spin(.1, tf=False)
+    assert not ready(), 'future TF reported ready'
+    transition(4)
     transition(2)
-    print(json.dumps({'passed': ['cold_start_missing_tf_rejected', 'expired_seed_not_replayed', 'fresh_seed_after_tf', 'delayed_tf', 'bounded_timeout', 'supersession', 'deactivation_cleanup', 'accepted_seed_correlation'],
+    transition(1)
+    transition(3)
+    assert not ready(), 'cleanup preserved previous TF readiness'
+    transition(4)
+    transition(2)
+    print(json.dumps({'passed': ['readiness_missing_tf', 'readiness_inactive', 'readiness_fresh_tf', 'readiness_stale_tf', 'readiness_future_tf', 'readiness_lifecycle_reset', 'cold_start_missing_tf_rejected', 'expired_seed_not_replayed', 'fresh_seed_after_tf', 'delayed_tf', 'bounded_timeout', 'supersession', 'deactivation_cleanup', 'accepted_seed_correlation'],
                       'settings': count('Setting pose'), 'timeouts': count('Rejecting initial pose')}))
 finally:
     if process is not None and process.poll() is None:

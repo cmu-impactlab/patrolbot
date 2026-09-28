@@ -1,0 +1,37 @@
+--- a/nav2_costmap_2d/src/costmap_2d_ros.cpp
++++ b/nav2_costmap_2d/src/costmap_2d_ros.cpp
+@@ -310,6 +310,12 @@
+     // will do for the warning above. Reset the string here to avoid accumulation
+     tf_error.clear();
+     r.sleep();
++  }
++
++  // A signal can end the TF wait without making a transform available.
++  // Do not start publishers or a map thread after context shutdown.
++  if (!rclcpp::ok()) {
++    return nav2_util::CallbackReturn::FAILURE;
+   }
+ 
+   // Activate publishers
+--- a/nav2_lifecycle_manager/src/lifecycle_manager.cpp
++++ b/nav2_lifecycle_manager/src/lifecycle_manager.cpp
+@@ -455,16 +455,9 @@
+     get_logger(), "Running Nav2 LifecycleManager rcl preshutdown (%s)",
+     this->get_name());
+ 
+-  destroyBondTimer();
+-
+-  /*
+-   * Dropping the bond map is what we really need here, but we drop the others
+-   * to prevent the bond map being used. Likewise, squash the service thread.
+-   */
+-  service_thread_.reset();
+-  node_names_.clear();
+-  node_map_.clear();
+-  bond_map_.clear();
++  // Outstanding lifecycle requests may require context shutdown to interrupt
++  // their executor wait. Joining here prevents that shutdown from happening.
++  // Keep their state alive until the destructor joins the service thread.
+ }
+ 
+ void

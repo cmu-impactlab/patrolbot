@@ -184,3 +184,21 @@ recovery and managed shutdown. The composed test also exposed Python child
 shutdown errors and a launch exception; complete stack shutdown is still pending.
 The integration fixture now rejects nonzero child and launch exits as well as
 SIGSEGV and forced termination.
+
+## Shutdown during missing-TF startup
+
+`0011-startup-shutdown-order.patch` prevents costmap activation from continuing
+into publishers and the map-update thread when context shutdown ends its TF
+wait. It also defers the lifecycle manager's service-thread join and state
+release to destruction: joining from pre-shutdown prevents context shutdown
+from interrupting an outstanding activation request. The existing destructor
+joins the thread before its maps and timers are destroyed; callback ownership
+from patch 0010 remains in force.
+
+The production initial-transform wait is unchanged, preserving recovery after
+SBC outages. The network-isolated `integration_startup_shutdown.py` requires
+clean exit during missing-TF activation both directly and with
+`PATROLBOT_STARTUP_MANAGER=1`. Baseline direct activation aborts; the manager
+case requires forced termination. Both cases pass in the combined diagnostic
+image. Full canonical-image and live acceptance are still required; the
+prototype image inherits old provenance and must not be deployed.

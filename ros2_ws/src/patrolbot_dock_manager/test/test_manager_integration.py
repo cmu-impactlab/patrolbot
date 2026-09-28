@@ -1155,7 +1155,7 @@ def test_operator_seed_can_recover_epoch_without_releasing_motion(harness, stage
 
 
 @pytest.mark.parametrize('stage', [
-    'wait-origin', 'wait-reset', 'wait-first-odometry', 'failed:activate'])
+    'wait-origin', 'wait-reset', 'wait-first-odometry', 'wait-amcl-tf', 'failed:activate'])
 def test_operator_seed_cannot_bypass_unfinished_origin_reset(harness, stage):
     manager, world, _ = harness
     world.recovery_required = True

@@ -25,6 +25,9 @@ class Future:
     def result(self):
         return self.value
 
+    def cancel(self):
+        self.cancelled = True
+
 
 class Client:
     ready = True
@@ -34,6 +37,9 @@ class Client:
         self.calls = []
         self.future = None
         self.success = True
+
+    def remove_pending_request(self, future):
+        self.removed = future
 
     def service_is_ready(self):
         return self.ready
@@ -96,6 +102,9 @@ def reset(runtime):
             runtime.first_tf_ns = runtime.node.now
             runtime.node._pose_received = True
             runtime.node._pose_at = time.monotonic()
+            runtime.tick()
+            runtime.tick()
+            assert runtime.seed_tf_ready
             return
     raise AssertionError('reset did not reach the seed barrier')
 
@@ -291,3 +300,80 @@ def test_command_gate_withdraws_on_stale_missing_or_invalid_odometry():
         assert not runtime.commands_allowed
         node._pose_received = True
         assert runtime.commands_allowed
+
+
+def test_tf_readiness_missing_service_keeps_streams_but_rejects_seed():
+    node, runtime, _ = setup_runtime()
+    reset(runtime)
+    runtime._tf_ready_at = None
+    runtime._tf_readiness.ready = False
+    node.now = 110
+    runtime.seed(pose(110))
+    assert runtime.streams_allowed
+    assert runtime.status_stage == 'wait-amcl-tf'
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+    assert not runtime.commands_allowed
+
+
+def test_tf_readiness_expired_response_is_not_a_fresh_receipt():
+    _, runtime, _ = setup_runtime()
+    reset(runtime)
+    runtime._tf_last_query = float('-inf')
+    with patch('patrolbot_bridge.epoch_runtime.time.monotonic', return_value=10.0):
+        runtime.tick()
+    with patch('patrolbot_bridge.epoch_runtime.time.monotonic', return_value=11.0):
+        runtime.tick()
+        assert not runtime.seed_tf_ready
+        assert runtime.status_stage == 'wait-amcl-tf'
+
+
+def test_tf_readiness_timeout_releases_pending_request_without_acceptance():
+    _, runtime, _ = setup_runtime()
+    reset(runtime)
+    runtime._tf_last_query = float('-inf')
+    with patch('patrolbot_bridge.epoch_runtime.time.monotonic', return_value=10.0):
+        runtime.tick()
+        pending = runtime._tf_probe
+        pending.complete = False
+    with patch('patrolbot_bridge.epoch_runtime.time.monotonic', return_value=11.0):
+        runtime.tick()
+        assert not runtime.seed_tf_ready
+        assert pending.cancelled
+        assert runtime._tf_readiness.removed is pending
+
+
+def test_tf_readiness_response_from_previous_connection_is_ignored():
+    _, runtime, session = setup_runtime()
+    reset(runtime)
+    runtime._tf_last_query = float('-inf')
+    runtime.tick()
+    pending = runtime._tf_probe
+    runtime.disconnect(session)
+    new_session = runtime.begin_session()
+    runtime.announce(new_session, A)
+    runtime.first_tf_ns = runtime.node.now
+    runtime.tick()
+    assert pending.done()
+    assert not runtime.seed_tf_ready
+
+
+def test_tf_readiness_response_from_previous_epoch_is_ignored():
+    _, runtime, session = setup_runtime()
+    reset(runtime)
+    runtime._tf_last_query = float('-inf')
+    runtime.tick()
+    runtime.announce(session, B)
+    runtime.tick()
+    assert not runtime.seed_tf_ready
+    assert not runtime.commands_allowed
+
+
+def test_seed_before_consumer_readiness_cannot_be_replayed_later():
+    node, runtime, _ = setup_runtime()
+    reset(runtime)
+    runtime._tf_ready_since_ns = 115
+    node.now = 120
+    runtime.seed(pose(110))
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+    runtime.seed(pose(120))
+    assert runtime.recovery.stage == EpochRecovery.WAIT_POSE

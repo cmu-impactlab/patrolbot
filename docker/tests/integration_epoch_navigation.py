@@ -78,7 +78,7 @@ try:
     def seed():
         assert wait_until(lambda: bridge._epoch.streams_allowed, timeout=90), (
             bridge._epoch.recovery.stage, bridge._epoch._phase, bridge._epoch._failed)
-        assert wait_until(lambda: bridge._epoch.first_tf_ns is not None, timeout=10)
+        assert wait_until(lambda: bridge._epoch.seed_tf_ready, timeout=10)
         assert wait_until(lambda: publisher.get_subscription_count() >= 2, timeout=10)
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = 'map'

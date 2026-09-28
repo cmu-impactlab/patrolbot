@@ -24,6 +24,16 @@ class EpochRuntime:
         self.recovery = EpochRecovery()
         self._token = None
         self.first_tf_ns = None
+        self._tf_generation = 0
+        self._tf_ready_at = None
+        self._tf_ready_since_ns = None
+        self._tf_ready_token = None
+        self._tf_probe = None
+        self._tf_probe_started = None
+        self._tf_probe_generation = None
+        self._tf_probe_token = None
+        self._tf_last_query = float('-inf')
+        self._tf_readiness = node.create_client(Trigger, '/amcl/initial_pose_tf_ready')
         self._localization_active = node.create_client(
             Trigger, '/lifecycle_manager_localization/is_active')
         self._phase = 'wait-localization-manager'
@@ -61,6 +71,9 @@ class EpochRuntime:
 
     def withdraw(self):
         self.first_tf_ns = None
+        self._tf_generation += 1
+        self._tf_ready_at = None
+        self._tf_ready_since_ns = None
         with self.node._pose_lock:
             self.node._pose_received = False
             self.node._pose_at = 0.0
@@ -112,10 +125,66 @@ class EpochRuntime:
                         and 0.0 <= age <= self.node._odom_tf_timeout)
 
     @property
+    def seed_tf_ready(self):
+        if (not self.streams_allowed or self.first_tf_ns is None or
+                self._tf_ready_at is None or self._tf_ready_token != self.recovery.token):
+            return False
+        age = time.monotonic() - self._tf_ready_at
+        return 0.0 <= age <= self.node._odom_tf_timeout
+
+    def _poll_tf_readiness(self):
+        # Read-only requests may be discarded on timeout. Unlike lifecycle
+        # transitions, an old response cannot change the server's state.
+        now = time.monotonic()
+        if self._tf_probe is not None:
+            age = now - self._tf_probe_started
+            if self._tf_probe.done():
+                valid = (self._tf_probe_generation == self._tf_generation and
+                         self._tf_probe_token == self.recovery.token and
+                         0.0 <= age <= self.node._odom_tf_timeout)
+                try:
+                    result = self._tf_probe.result()
+                    valid = valid and result.success is True
+                except Exception:
+                    valid = False
+                if valid:
+                    if not self.seed_tf_ready:
+                        self._tf_ready_since_ns = self.node.get_clock().now().nanoseconds
+                    self._tf_ready_at = self._tf_probe_started
+                    self._tf_ready_token = self.recovery.token
+                else:
+                    self._tf_ready_at = None
+                    self._tf_ready_since_ns = None
+                self._tf_probe = None
+            elif not 0.0 <= age <= self.node._odom_tf_timeout:
+                self._tf_readiness.remove_pending_request(self._tf_probe)
+                self._tf_probe.cancel()
+                self._tf_probe = None
+                self._tf_ready_at = None
+                self._tf_ready_since_ns = None
+        if (not self.streams_allowed or self.first_tf_ns is None):
+            self._tf_ready_at = None
+            self._tf_ready_since_ns = None
+            return
+        if (self._tf_probe is None and now - self._tf_last_query >= .1 and
+                self._tf_readiness.service_is_ready()):
+            self._tf_last_query = now
+            self._tf_probe_started = now
+            self._tf_probe_generation = self._tf_generation
+            self._tf_probe_token = self.recovery.token
+            try:
+                self._tf_probe = self._tf_readiness.call_async(Trigger.Request())
+            except Exception:
+                self._tf_ready_at = None
+                self._tf_ready_since_ns = None
+
+    @property
     def status_stage(self):
         if (self.recovery.stage == EpochRecovery.WAIT_SEED and
                 self.first_tf_ns is None):
             return 'wait-first-odometry'
+        if self.recovery.stage == EpochRecovery.WAIT_SEED and not self.seed_tf_ready:
+            return 'wait-amcl-tf'
         if self._failed:
             return 'failed:' + self._phase
         if self.recovery.stage == EpochRecovery.READY and not self._navigation_ready:
@@ -140,7 +209,8 @@ class EpochRuntime:
             q = pose.orientation
             values = (pose.position.x, pose.position.y, pose.position.z,
                       q.x, q.y, q.z, q.w, *message.pose.covariance)
-            if (not self.streams_allowed or self.first_tf_ns is None
+            if (not self.seed_tf_ready or self._tf_ready_since_ns is None
+                    or self.stamp_ns(message) < self._tf_ready_since_ns
                     or self.stamp_ns(message) < self.first_tf_ns
                     or message.header.frame_id != 'map'
                     or not all(math.isfinite(v) for v in values)
@@ -224,6 +294,7 @@ class EpochRuntime:
         with self.lock:
             self.recovery.observe_clock(self.node.get_clock().now().nanoseconds)
             token = self.recovery.token
+            self._poll_tf_readiness()
             if self._future is not None:
                 if not self._future.done():
                     if (self._deadline is not None and

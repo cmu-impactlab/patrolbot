@@ -324,11 +324,16 @@ class FakeAmcl(Node):
         self.create_service(Trigger, '/lifecycle_manager_localization/is_active',
                             self.localization_active)
         self.create_service(GetState, '/amcl/get_state', self.get_state)
+        self.create_service(Trigger, '/amcl/initial_pose_tf_ready', self.tf_ready)
         self.create_service(ChangeState, '/amcl/change_state', self.change_state)
         self.ack = self.create_publisher(
             PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', 10)
         self.pose = self.create_publisher(PoseWithCovarianceStamped, '/amcl_pose', 10)
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.seed, 10)
+
+    def tf_ready(self, _request, response):
+        response.success = self.state == 3
+        return response
 
     def localization_active(self, _request, response):
         response.success = True
@@ -358,7 +363,7 @@ class FakeAmcl(Node):
 
 
 def seed_harness(bridge, client_node):
-    assert wait_until(lambda: bridge._epoch.first_tf_ns is not None)
+    assert wait_until(lambda: bridge._epoch.seed_tf_ready)
     publisher = client_node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
     assert wait_until(lambda: publisher.get_subscription_count() >= 2)
     message = PoseWithCovarianceStamped()

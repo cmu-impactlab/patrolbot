@@ -24,7 +24,7 @@ class EpochPolicyTests(unittest.TestCase):
 
     def test_reset_and_failed_stages_cannot_seed(self):
         for stage in ('', 'wait-origin', 'wait-amcl-reset',
-                      'wait-first-odometry', 'failed:activate',
+                      'wait-first-odometry', 'wait-amcl-tf', 'failed:activate',
                       'pause-navigation', 'resume-navigation', 'ready'):
             self.assertFalse(epoch_hardware_ready(
                 origin_valid=True, recovery_stage=stage,

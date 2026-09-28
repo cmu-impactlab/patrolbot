@@ -399,12 +399,13 @@ def build_harness(fake):
 
 
 def teardown_harness(bridge, client_node, executor, spin_thread, fake):
-    executor.shutdown(timeout_sec=2.0)
-    bridge.destroy_node()
-    client_node.fake_amcl.destroy_node()
-    client_node.destroy_node()
+    assert executor.shutdown(timeout_sec=3.0), 'executor failed to drain callbacks'
     spin_thread.join(timeout=2.0)
-    rclpy.shutdown()
+    assert not spin_thread.is_alive(), 'executor spin thread survived shutdown'
+    for node in (bridge, client_node.fake_amcl, client_node):
+        executor.remove_node(node)
+        node.destroy_node()
+    rclpy.try_shutdown()
     fake.close()
 
 

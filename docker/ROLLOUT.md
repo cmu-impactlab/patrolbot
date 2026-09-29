@@ -6,16 +6,19 @@ soak only. It performs no deployment:
 
 ```sh
 python3 docker/deploy_candidate.py \
-  --manifest docker/deployments/issue60-candidate-f7fd2db.json \
-  --payload backups/20260928-canonical-candidate/payload-tooling-221d78f.tar.gz \
-  --soak-container patrolbot-canonical-soak-f7fd2db-20260928
+  --manifest docker/deployments/issue60-candidate-f5ab152.json \
+  --payload backups/20260929-canonical-readiness/payload-tooling-098cbaf.tar.gz \
+  --soak-container patrolbot-canonical-soak-f5ab152-20260929
 ```
+
+The manifest, payload and soak must refer to the same candidate. A completed
+soak from an older image does not satisfy this check.
 
 For an already-authorized deployment, add `--apply`. The entry point requires
 successful terminal soak evidence on the pinned image and committed fixtures.
 It then locks deployment, archives existing snapshots off-host, verifies both
 copies, checks candidate and current image/source/health, and takes a fresh
-subscriber-only stationary preflight. Only then does it replace the four
+subscriber-only stationary preflight. Only then does it replace the eight
 declared source files and image selection and recreate bringup, bridge and
 navigation. The dashboard service is outside this rollout.
 

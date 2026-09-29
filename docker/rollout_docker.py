@@ -16,6 +16,7 @@ h=hashlib.sha256()
 for p in sorted(Path('/opt/patrolbot-nav2-patches').glob('*.patch')):
     h.update(p.name.encode()+b'\0'+p.read_bytes())
 pairs=[
+ ('patrolbot_bridge/patrolbot_bridge/epoch_runtime.py','patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/epoch_runtime.py'),
  ('patrolbot_dock_manager/patrolbot_dock_manager/dock_manager.py','patrolbot_dock_manager/lib/python3.12/site-packages/patrolbot_dock_manager/dock_manager.py'),
  ('patrolbot_navigation/scripts/patrolbot_joy_teleop.py','patrolbot_navigation/lib/patrolbot_navigation/patrolbot_joy_teleop.py'),
  ('patrolbot_navigation/scripts/patrolbot_controller_feedback.py','patrolbot_navigation/lib/patrolbot_navigation/patrolbot_controller_feedback.py'),

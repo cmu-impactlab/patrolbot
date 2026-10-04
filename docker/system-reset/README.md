@@ -68,9 +68,11 @@ robot. No live reset is part of installation or verification.
 
 ## Opt-in deployment
 
-Keep the feature disabled until the new dashboard server, frontend and web bridge
-code are installed and verified. The server/frontend deployment remains an
-operator task; building this code does not update the production website.
+Robot-side installation may precede the dashboard rollout: provision the restricted
+SSH access, supervisor and matching web bridge together, then verify their read-only
+status. The button requires the matching dashboard server and frontend. Their
+deployment remains an operator task; installing the robot side does not update
+the production website or establish end-to-end reset acceptance.
 
 Use `compose.override.yaml` alongside the normal Compose file for **every**
 subsequent Compose operation on the web bridge. Set `PATROLBOT_RESET_GID` in the
@@ -80,6 +82,20 @@ access across its own reset. The web bridge advertises `software_reset` only whe
 `PATROLBOT_RESET_SOCKET` is configured and the host capability check succeeds.
 Mount the directory rather than the socket inode so listener restarts remain
 reachable. Never mount the host Docker socket into the web bridge.
+
+The override is not automatically discovered in this subdirectory. Validate the
+combined configuration without printing credentials before recreating the bridge:
+
+```sh
+docker compose --env-file /home/ubuntu/patrolbot-repo/docker/.env \
+  -f /home/ubuntu/patrolbot-repo/docker/docker-compose.yml \
+  -f /home/ubuntu/patrolbot-repo/docker/system-reset/compose.override.yaml \
+  --profile web-bridge config --quiet
+```
+
+Use the same options for an authorized web-bridge deployment. Omitting the override
+on recreation removes socket access and makes reset unavailable. A normal Docker
+restart preserves the existing mount and environment.
 
 Before enabling: validate Compose without printing its environment, verify the
 dedicated SBC SSH alias using the read-only `status` operation, and run
@@ -114,3 +130,19 @@ command. `status` uses `LoadState=loaded` output compatible with the SBC's older
 systemd (`--value` is unsupported there). Keep private keys mode 0600 and do not
 include them in source, PRs, or logs. Provisioning and live reset commissioning
 are separate steps; checking `status` does not restart the robot.
+
+## Removing dedicated access after rollback
+
+First verify that the supervisor has no active or uncertain request and complete
+the backed-up Pi rollback. Retain its SQLite history. From the workstation's
+normal SBC SSH account, back up the current `~/.ssh/authorized_keys` before editing
+it. Remove only the line whose Ed25519 key blob exactly matches the dedicated
+Pi reset public key. Require exactly one match; stop for inspection if there are
+zero or multiple matches. Preserve all other lines, ownership and mode 0600.
+Do not overwrite the whole file with an older backup because other access keys
+may have changed since installation.
+
+Verify normal workstation SSH still works, then verify the dedicated reset key
+can no longer authenticate. Only afterward remove the dedicated Pi private key
+and config, and the SBC forced-command wrapper. Keep rollback evidence and
+backups; revocation is a separate operator action, not part of a read-only check.

@@ -1,0 +1,42 @@
+--- a/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
++++ b/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
+@@ -17,6 +17,7 @@
+ #define NAV2_BT_NAVIGATOR__BT_NAVIGATOR_HPP_
+ 
+ #include <memory>
++#include "std_srvs/srv/trigger.hpp"
+ #include <string>
+ #include <vector>
+ 
+@@ -89,6 +90,7 @@
+   pluginlib::ClassLoader<nav2_core::NavigatorBase> class_loader_;
+   std::vector<pluginlib::UniquePtr<nav2_core::NavigatorBase>> navigators_;
+   nav2_core::NavigatorMuxer plugin_muxer_;
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr navigation_idle_srv_;
+ 
+   // Odometry smoother object
+   std::shared_ptr<nav2_util::OdomSmoother> odom_smoother_;
+--- a/nav2_bt_navigator/src/bt_navigator.cpp
++++ b/nav2_bt_navigator/src/bt_navigator.cpp
+@@ -138,6 +138,13 @@
+     }
+   }
+ 
++  navigation_idle_srv_ = create_service<std_srvs::srv::Trigger>(
++    "~/navigation_idle",
++    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++      response->success = !plugin_muxer_.isNavigating();
++      response->message = response->success ? "Navigation idle" : "Navigation owns motion";
++    });
+   return nav2_util::CallbackReturn::SUCCESS;
+ }
+ 
+@@ -178,6 +185,7 @@
+ BtNavigator::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
+ {
+   RCLCPP_INFO(get_logger(), "Cleaning up");
++  navigation_idle_srv_.reset();
+ 
+   // Reset the listener before the buffer
+   tf_listener_.reset();

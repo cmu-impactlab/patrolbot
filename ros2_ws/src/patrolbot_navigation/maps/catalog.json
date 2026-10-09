@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "default_map_id": "cmuq-floor2",
+  "maps": [
+    {
+      "map_id": "cmuq-floor1",
+      "label": "Floor 1",
+      "yaml": "cmuq_1st_floor.yaml",
+      "resolution": 0.05,
+      "origin": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "negate": 0,
+      "occupied_thresh": 0.1,
+      "free_thresh": 0.05,
+      "width": 4235,
+      "height": 3289,
+      "revision": "sha256:f5e10f78b82ddb99d18159996d5f2a7007acaeeaebb8bfa8f1cd5d87a9cff843",
+      "image_sha256": "aee11890f547486d989fbdc7af124fd1fd6ef010d4999d365aa59d66893965d6"
+    },
+    {
+      "map_id": "cmuq-floor2",
+      "label": "Floor 2",
+      "yaml": "second_map.yaml",
+      "resolution": 0.075,
+      "origin": [
+        -1,
+        -1,
+        0.0
+      ],
+      "negate": 0,
+      "occupied_thresh": 0.65,
+      "free_thresh": 0.196,
+      "width": 3192,
+      "height": 2205,
+      "revision": "sha256:6c0b66e5e81120a902055888aaa1985b0c15168aa7bf168a2c3a60d766cbf2b1",
+      "image_sha256": "7c97ad255d4dcdf54e23dff9dd12b9d7cb2b6c3b2373afa400f9a6081b065dcd"
+    }
+  ]
+}

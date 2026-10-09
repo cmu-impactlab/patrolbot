@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import ChangeState, GetState
+from nav_msgs.srv import GetMap
 from nav2_msgs.srv import ManageLifecycleNodes
 from std_srvs.srv import Trigger
 from patrolbot_bridge.bridge_node import PatrolBotBridge
@@ -326,10 +327,29 @@ class FakeAmcl(Node):
         self.create_service(GetState, '/amcl/get_state', self.get_state)
         self.create_service(Trigger, '/amcl/initial_pose_tf_ready', self.tf_ready)
         self.create_service(ChangeState, '/amcl/change_state', self.change_state)
+        self.create_service(GetMap, '/map_server/map', self.map_readback)
+        self.create_service(Trigger, '/amcl/map_consumed', self.map_consumed)
+        self.create_service(Trigger, '/bt_navigator/navigation_idle', self.localization_active)
         self.ack = self.create_publisher(
             PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', 10)
         self.pose = self.create_publisher(PoseWithCovarianceStamped, '/amcl_pose', 10)
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.seed, 10)
+
+    def map_readback(self, _request, response):
+        response.map.header.frame_id = 'map'
+        response.map.info.width = 3192
+        response.map.info.height = 2205
+        response.map.info.resolution = .075
+        response.map.info.origin.position.x = -1.
+        response.map.info.origin.position.y = -1.
+        response.map.info.origin.orientation.w = 1.
+        response.map.info.map_load_time.sec = 1
+        return response
+
+    def map_consumed(self, _request, response):
+        response.success = self.state == 3
+        response.message = '1:0:3192:2205'
+        return response
 
     def tf_ready(self, _request, response):
         response.success = self.state == 3

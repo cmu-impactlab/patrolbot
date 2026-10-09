@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MotorEnable.srv"
   "action/HardwareUndock.action"
   "action/Undock.action"
+  "action/LocalizeOnMap.action"
   DEPENDENCIES action_msgs builtin_interfaces geometry_msgs std_msgs
 )
 

@@ -202,3 +202,23 @@ clean exit during missing-TF activation both directly and with
 case requires forced termination. Both cases pass in the combined diagnostic
 image. Full canonical-image and live acceptance are still required; the
 prototype image inherits old provenance and must not be deployed.
+
+## Map-localization transaction patches
+
+Apply the full numbered series to Nav2 1.3.12 in order:
+
+- `0013-map-consumption.patch`: read-only AMCL and static-layer acknowledgements
+  identify the consumed map-load event after processing, not just receipt.
+- `0014-navigation-idle.patch`: read-only navigator ownership acknowledgement;
+  absence of action status messages is not evidence of an idle navigator.
+- `0015-navigation-configure-first.patch`: optional configure-only autostart for
+  the navigation manager. This avoids activation waiting for a pose while the
+  localization transaction waits for the manager to pause. Pause from the
+  configured state verifies every managed node is inactive. Existing defaults
+  for other lifecycle managers remain unchanged.
+
+The existing bridge recovery coordinator owns the transaction and motion hold.
+These services neither authorize motion nor substitute for fresh localization.
+`docker/tests/integration_floor_maps.py` exercises the patches with real Nav2,
+canonical maps, synthetic scans and a loopback fake SBC in a network-none
+container. Hardware acceptance remains separate under feature #66/#65.

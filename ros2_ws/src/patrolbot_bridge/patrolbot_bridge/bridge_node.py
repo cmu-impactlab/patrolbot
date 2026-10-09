@@ -1094,6 +1094,11 @@ class PatrolBotBridge(Node):
             seed_stamp = self._epoch.recovery._seed_ns or 0
         msg = BaseState()
         msg.localization_seed_stamp_ns = seed_stamp
+        with self._epoch.lock:
+            active_map = self._epoch.maps.active if self._epoch.maps else None
+            msg.map_id = active_map['map_id'] if active_map else ''
+            msg.map_revision = active_map['revision'] if active_map else ''
+            msg.map_activated_stamp_ns = self._epoch.map_activated_stamp_ns
         msg.odom_epoch = origin
         msg.odom_epoch_generation = origin_generation
         msg.odom_epoch_valid = origin_valid
@@ -1157,6 +1162,9 @@ class PatrolBotBridge(Node):
     def _control_service(self, command, request_id, response):
         started = time.monotonic()
         response.request_id = request_id
+        with self._epoch.lock:
+            if self._epoch.maps and self._epoch.maps.hold:
+                return self._fill_control_response(response, None, 3, 'map localization owns the robot', started)
         if not valid_request_id(request_id):
             return self._fill_control_response(
                 response, None, 1, 'request_id must be a canonical UUID',

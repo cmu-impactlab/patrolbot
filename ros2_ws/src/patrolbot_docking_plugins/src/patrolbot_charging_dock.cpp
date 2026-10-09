@@ -68,6 +68,12 @@ void PatrolBotChargingDock::deactivate()
 geometry_msgs::msg::PoseStamped PatrolBotChargingDock::getStagingPose(
   const geometry_msgs::msg::Pose & pose, const std::string & frame)
 {
+  std::scoped_lock lock(mutex_);
+  if (!telemetryFreshLocked(node_->now()) || state_.map_id != "cmuq-floor2" ||
+    state_.map_revision.empty() || state_.localization_recovery_required)
+  {
+    throw std::runtime_error("dock coordinates require localized Floor 2");
+  }
   tf2::Transform dock;
   tf2::fromMsg(pose, dock);
   tf2::Quaternion rotation;
@@ -87,6 +93,12 @@ geometry_msgs::msg::PoseStamped PatrolBotChargingDock::getStagingPose(
 bool PatrolBotChargingDock::getRefinedPose(
   geometry_msgs::msg::PoseStamped & pose, std::string /* id */)
 {
+  std::scoped_lock lock(mutex_);
+  if (!telemetryFreshLocked(node_->now()) || state_.map_id != "cmuq-floor2" ||
+    state_.map_revision.empty() || state_.localization_recovery_required)
+  {
+    return false;
+  }
   pose.header.stamp = node_->now();
   return true;
 }

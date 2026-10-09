@@ -1,0 +1,40 @@
+--- a/nav2_lifecycle_manager/src/lifecycle_manager.cpp
++++ b/nav2_lifecycle_manager/src/lifecycle_manager.cpp
+@@ -41,6 +41,7 @@
+   // of nodes
+   declare_parameter("node_names", rclcpp::PARAMETER_STRING_ARRAY);
+   declare_parameter("autostart", rclcpp::ParameterValue(false));
++  declare_parameter("autostart_configure_only", false);
+   declare_parameter("bond_timeout", 4.0);
+   declare_parameter("bond_respawn_max_duration", 10.0);
+   declare_parameter("attempt_respawn_reconnection", true);
+@@ -97,7 +98,11 @@
+           0s,
+           [this]() -> void {
+             init_timer_->cancel();
+-            startup();
++            if (get_parameter("autostart_configure_only").as_bool()) {
++              configure();
++            } else {
++              startup();
++            }
+           },
+           callback_group_);
+       }
+@@ -397,6 +402,16 @@
+   destroyBondTimer();
+ 
+   message("Pausing managed nodes...");
++  // Configure-only startup has no active navigation to deactivate. Confirm
++  // every managed node rather than trusting a cached manager state alone.
++  if (managed_nodes_state_ == NodeState::INACTIVE) {
++    for (const auto & node_name : node_names_) {
++      if (node_map_[node_name]->get_state() != State::PRIMARY_STATE_INACTIVE) {
++        return false;
++      }
++    }
++    return true;
++  }
+   if (!changeStateForAllNodes(Transition::TRANSITION_DEACTIVATE)) {
+     RCLCPP_ERROR(get_logger(), "Failed to pause nodes: aborting pause");
+     managed_nodes_state_ = NodeState::UNKNOWN;

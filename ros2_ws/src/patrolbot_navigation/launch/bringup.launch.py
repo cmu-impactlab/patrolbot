@@ -20,7 +20,10 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory('patrolbot_navigation')
     launch_dir = os.path.join(pkg_dir, 'launch')
 
-    map_yaml_file = os.path.join(pkg_dir, 'maps', 'second_map.yaml')
+    from patrolbot_bridge.map_catalog import MapCatalog, ActiveMapStore
+    catalog = MapCatalog(os.path.join(pkg_dir, 'maps'))
+    state = ActiveMapStore(os.environ.get('PATROLBOT_STATE_DIR', '/var/lib/patrolbot'), catalog)
+    map_yaml_file = state.load()['path']
     nav2_params_file = os.path.join(pkg_dir, 'config', 'nav2_params.yaml')
     # We do NOT use nav2_bringup's bringup_launch.py because its lifecycle
     # managers hard-code bond_timeout (4.0s) and never read our params file.

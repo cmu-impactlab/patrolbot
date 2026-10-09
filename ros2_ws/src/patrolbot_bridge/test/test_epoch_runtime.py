@@ -89,7 +89,13 @@ class Node:
 
 def setup_runtime():
     node = Node()
-    runtime = EpochRuntime(node)
+    # These tests isolate odometry recovery; map transactions have their own
+    # real-ROS-type coordinator tests in test_map_runtime.py.
+    with patch.object(EpochRuntime, 'init_maps'), patch.object(EpochRuntime, 'poll_navigation_idle'):
+        runtime = EpochRuntime(node)
+    runtime._map_error = ''
+    runtime.maps = NS(active={'map_id': 'cmuq-floor2'}, stage='idle', hold=False)
+    runtime.poll_navigation_idle = Mock()
     session = runtime.begin_session()
     runtime.announce(session, A)
     return node, runtime, session
@@ -377,3 +383,18 @@ def test_seed_before_consumer_readiness_cannot_be_replayed_later():
     assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
     runtime.seed(pose(120))
     assert runtime.recovery.stage == EpochRecovery.WAIT_POSE
+
+
+def test_readonly_startup_probe_can_timeout_without_retrying_a_mutation():
+    node, runtime, _ = setup_runtime()
+    runtime.tick()
+    future = runtime._future
+    assert runtime._phase == 'wait-localization-manager'
+    future.complete = False
+    runtime._deadline = 0
+    runtime.tick()
+    assert future.cancelled and runtime._future is None
+    assert not runtime._failed
+    runtime.tick()
+    assert len(runtime._localization_active.calls) == 2
+    assert not runtime._change.calls

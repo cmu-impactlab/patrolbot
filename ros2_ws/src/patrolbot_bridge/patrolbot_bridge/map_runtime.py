@@ -26,6 +26,9 @@ def map_identity(grid):
 
 
 class MapRuntimeMixin:
+    # Bounded observation of the single requested stationary scan update.
+    MAP_REFRESH_TIMEOUT = 5.0
+
     def init_maps(self):
         self._map_error = ''
         self.maps = None
@@ -137,6 +140,9 @@ class MapRuntimeMixin:
             self._map_request = request
             self._map_deadline = now + 110.
             self._map_refresh_requested = False
+            self._map_refresh_started = None
+            self._map_refresh_deadline = None
+            self._map_refresh_baseline_stamp = None
             self._map_step = 'pause'
             self.node.cmd_vel_callback(Twist())
             self.maps.advance(self.maps.token, 'hold')
@@ -154,7 +160,7 @@ class MapRuntimeMixin:
         while self.node.context.ok() and not self.node._stop_event.is_set():
             with self.lock:
                 tx = self.maps
-                if time.monotonic() > self._map_deadline:
+                if tx.stage not in ('ready', 'failed') and time.monotonic() > self._map_deadline:
                     tx.fail('map localization timed out')
                 feedback = LocalizeOnMap.Feedback()
                 feedback.request_id = goal.request.request_id
@@ -168,7 +174,8 @@ class MapRuntimeMixin:
                     result.request_id = goal.request.request_id
                     result.code = (result.OK if tx.stage == 'ready' else
                                    result.CANCELED if goal.is_cancel_requested else
-                                   result.TIMEOUT if tx.error == 'map localization timed out' else result.FAILED)
+                                   result.TIMEOUT if (tx.error == 'map localization timed out' or
+                                       tx.error.startswith('LOCALIZATION_UPDATE_TIMEOUT:')) else result.FAILED)
                     result.message = tx.error or 'Map activated and localization verified'
                     result.map_activated = tx.activated
                     result.localized = tx.stage == 'ready'
@@ -227,6 +234,11 @@ class MapRuntimeMixin:
                     abs(self.node._vx) > .005 or abs(self.node._vth) > .01):
                 tx.fail('fresh stationary base telemetry lost during map recovery')
                 return True
+        if (self._map_refresh_deadline is not None and
+                time.monotonic() > self._map_refresh_deadline):
+            tx.fail('LOCALIZATION_UPDATE_TIMEOUT: ' + (self._map_refresh_problem() or
+                    'costmap association not confirmed before refresh deadline; motion hold retained'))
+            return True
         try:
             self._tick_map_stage()
         except Exception as exc:
@@ -286,6 +298,8 @@ class MapRuntimeMixin:
                         tx.advance(token, 'verify-map')
                         self._map_store.save(tx.target['map_id'], tx.target['revision'])
                         tx.advance(token, 'persist-map'); self._map_step = 'tf'
+                    elif self._map_refresh_requested:
+                        self._map_finish_refresh()
                     elif self._map_localization_fresh():
                         tx.advance(token, 'verify-costmaps')
                         self._navigation_ready = True
@@ -293,8 +307,18 @@ class MapRuntimeMixin:
                         # Nav2 activation/inflation can outlast pose freshness.
                         # Ask for one new scan update, never another pose seed.
                         self._map_refresh_requested = True
+                        self._map_refresh_deadline = time.monotonic() + self.MAP_REFRESH_TIMEOUT
                         self._map_step = 'refresh-localization'
         elif step == 'refresh-localization':
+            if self._map_refresh_started is None:
+                if not self._refresh_localization.service_is_ready():
+                    return
+                self._map_refresh_started = time.monotonic()
+                self._map_refresh_baseline_stamp = (
+                    self.stamp_ns(self._pending_pose) if self._pending_pose is not None else -1)
+                self.node.get_logger().info(
+                    f'Map localization refresh request={token.request_id} '
+                    f'baseline_scan_ns={self._map_refresh_baseline_stamp}')
             self._map_call(self._refresh_localization, Empty.Request(), 'costmap-map', lambda r: True)
         elif step == 'tf':
             if self.seed_tf_ready:
@@ -316,14 +340,54 @@ class MapRuntimeMixin:
                     'clear-local' if step == 'clear-global' else 'costmap-map', lambda r:True):
                 if step == 'clear-local': tx.advance(token, 'refresh-costmaps')
 
-    def _map_localization_fresh(self):
+    def _map_localization_problem(self):
         pose = self._pending_pose
-        return (pose is not None and self._accepted_seed_stamp == self.maps.seed_stamp
-                and self.recovery.stage == EpochRecovery.READY
-                and self.stamp_ns(pose) > (self.maps.seed_stamp or 0)
-                and 0 <= self.node.get_clock().now().nanoseconds-self.stamp_ns(pose) <= 1_000_000_000
-                and all(math.isfinite(pose.pose.covariance[i]) and
-                        0 < pose.pose.covariance[i] <= .25 for i in (0, 7, 35)))
+        if pose is None:
+            return 'no AMCL pose received'
+        if self._accepted_seed_stamp != self.maps.seed_stamp:
+            return 'AMCL seed acceptance does not match this request'
+        if self.recovery.stage != EpochRecovery.READY:
+            return 'odometry recovery has not accepted post-seed localization'
+        if self.stamp_ns(pose) <= (self.maps.seed_stamp or 0):
+            return 'AMCL scan predates the accepted seed'
+        age = (self.node.get_clock().now().nanoseconds-self.stamp_ns(pose)) / 1e9
+        if not 0 <= age <= 1.:
+            return f'AMCL pose age {age:.3f}s outside [0, 1]s'
+        for index, axis in ((0, 'x'), (7, 'y'), (35, 'yaw')):
+            variance = pose.pose.covariance[index]
+            if not math.isfinite(variance) or not 0 < variance <= .25:
+                return f'{axis} variance {variance:.9g} outside (0, 0.25]'
+        return ''
+
+    def _map_localization_fresh(self):
+        return not self._map_localization_problem()
+
+    def _map_refresh_problem(self):
+        if self._map_step == 'refresh-localization':
+            return ('stationary update service did not complete within '
+                    f'{self.MAP_REFRESH_TIMEOUT:g}s; motion hold retained')
+        pose = self._pending_pose
+        if (pose is None or self._pending_pose_received_at is None or
+                self._pending_pose_received_at < self._map_refresh_started or
+                self.stamp_ns(pose) <= self._map_refresh_baseline_stamp):
+            return 'no newer AMCL scan received after stationary update request; motion hold retained'
+        return self._map_localization_problem()
+
+    def _map_finish_refresh(self):
+        problem = self._map_refresh_problem()
+        if not problem:
+            self.maps.advance(self.maps.token, 'verify-costmaps')
+            self._navigation_ready = True
+            self._map_refresh_deadline = None
+        elif ' variance ' in problem:
+            pose = self._pending_pose
+            self.maps.fail('LOCALIZATION_QUALITY_REJECTED: ' + problem +
+                           '; stationary update exhausted; motion hold retained')
+            self.node.get_logger().warning(
+                f'Map localization request={self.maps.token.request_id} '
+                f'seed_ns={self.maps.seed_stamp} scan_ns={self.stamp_ns(pose)} '
+                f'received_monotonic={self._pending_pose_received_at} '
+                f'refresh_monotonic={self._map_refresh_started}: {self.maps.error}')
 
     @staticmethod
     def _map_geometry(grid, entry):

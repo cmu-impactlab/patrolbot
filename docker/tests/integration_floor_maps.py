@@ -103,10 +103,30 @@ try:
     if '--startup-only' in sys.argv:
         print(json.dumps({'passed':['restart_map_readback','fresh_localization_required'], 'map':expected}),flush=True)
         sequence = ()
-    elif '--cancel' in sys.argv:
+    elif '--cancel' in sys.argv or '--quality-reject' in sys.argv:
         sequence = ('cmuq-floor2',)
     else:
         sequence = ('cmuq-floor2','cmuq-floor1','cmuq-floor2','cmuq-floor1')
+    if '--quality-reject' in sys.argv:
+        # Inject bad final evidence only after actual AMCL seed acceptance and
+        # Nav2 activation. This tests coordinator failure handling, not AMCL
+        # accuracy. Network isolation and FakeSbc assertions above still apply.
+        original_fresh = bridge._epoch._map_localization_fresh
+        def force_final_refresh():
+            if bridge._epoch._map_step == 'costmap-map':
+                return False
+            return original_fresh()
+        bridge._epoch._map_localization_fresh = force_final_refresh
+        original_finish = bridge._epoch._map_finish_refresh
+        def reject_final_covariance():
+            epoch = bridge._epoch
+            pose = epoch._pending_pose
+            if (pose is not None and epoch._pending_pose_received_at is not None and
+                    epoch._pending_pose_received_at >= epoch._map_refresh_started and
+                    epoch.stamp_ns(pose) > epoch._map_refresh_baseline_stamp):
+                pose.pose.covariance[7] = .25718849416411727
+            return original_finish()
+        bridge._epoch._map_finish_refresh = reject_final_covariance
     for map_id in sequence:
         entry=catalog.maps[map_id];x,y,scan=synthetic_scene(entry)
         fake.laser_field=scan+"|LASER_AGE_MS:0"
@@ -147,6 +167,19 @@ try:
             break
         assert wait_until(result.done,timeout=115), (bridge._epoch._map_step,bridge._epoch.maps.error)
         response=result.result().result
+        if '--quality-reject' in sys.argv:
+            assert response.code == response.FAILED and not response.localized
+            assert response.message.startswith('LOCALIZATION_QUALITY_REJECTED:')
+            assert response.map_activated and response.active_map_id == map_id
+            assert not bridge._epoch.commands_allowed
+            assert seed_events[seed_count:] == [(bridge._epoch.maps.seed_stamp, map_id)]
+            before = len(fake.received)
+            bridge.cmd_vel_callback(velocity)
+            time.sleep(.2)
+            assert not any(line.startswith('DRIVE:0.1:') for _, line in fake.received[before:])
+            print(json.dumps({'passed': ['explicit_quality_failure', 'single_seed',
+                'failed_velocity_blocked'], 'detail': response.message}), flush=True)
+            break
         assert response.code==0 and response.localized, (response,bridge._epoch._map_step)
         assert response.active_map_id==map_id and bridge._epoch.commands_allowed
         assert wait_until(lambda: len(seed_events)>seed_count,timeout=3)
@@ -154,7 +187,7 @@ try:
         assert bridge._epoch._accepted_seed_stamp==bridge._epoch.maps.seed_stamp
         assert ActiveMapStore(os.environ.get('PATROLBOT_STATE_DIR','/var/lib/patrolbot'),catalog).load()['map_id']==map_id
         print(json.dumps({'event':'verified','map':map_id,'stages':seen}),flush=True)
-    if '--startup-only' not in sys.argv and '--cancel' not in sys.argv:
+    if '--startup-only' not in sys.argv and '--cancel' not in sys.argv and '--quality-reject' not in sys.argv:
         print(json.dumps({'passed':['floor2-floor1-floor2','real_amcl_consumption','single_seed',
         'real_costmap_refresh','enabled_motor_hold','durable_selection']}),flush=True)
 finally:

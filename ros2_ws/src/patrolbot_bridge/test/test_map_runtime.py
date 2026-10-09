@@ -226,3 +226,93 @@ def test_map_reset_withdraws_tf_evidence_without_erasing_fresh_base_telemetry(ru
     runtime.tick()
     assert runtime.maps.stage != 'failed'
     assert runtime.node._pose_received
+
+
+@pytest.mark.parametrize('variance', [.25718849416411727, 0., float('nan')])
+def test_final_refresh_rejects_invalid_covariance_without_waiting_for_transaction_timeout(runtime, variance):
+    runtime.node.refresh()
+    assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    runtime.node.now += 2_000_000_000
+    run_until(runtime, lambda: runtime._map_step == 'refresh-localization')
+    original = runtime._refresh_localization.call_async
+    def invalid_update(req):
+        result = original(req)
+        runtime._pending_pose.pose.covariance[7] = variance
+        return result
+    runtime._refresh_localization.call_async = invalid_update
+    run_until(runtime, lambda: runtime.maps.stage == 'failed')
+    assert 'LOCALIZATION_QUALITY_REJECTED' in runtime.maps.error
+    assert 'y variance' in runtime.maps.error
+    assert runtime.maps.hold and not runtime.commands_allowed
+    assert len(runtime.node.seeds) == 1
+    assert len(runtime._refresh_localization.calls) == 1
+    assert runtime.maps.active['map_id'] == 'cmuq-floor1'
+
+
+def test_refresh_missing_pose_has_bounded_specific_failure(runtime):
+    runtime.node.refresh(); runtime._map_accept(request(runtime))
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    runtime.node.now += 2_000_000_000
+    run_until(runtime, lambda: runtime._map_step == 'refresh-localization')
+    runtime._refresh_localization.call_async = lambda req: Future(NS())
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    runtime._map_refresh_deadline = time.monotonic() - 1
+    run_until(runtime, lambda: runtime.maps.stage == 'failed')
+    assert 'LOCALIZATION_UPDATE_TIMEOUT' in runtime.maps.error
+    assert 'newer' in runtime.maps.error
+    assert runtime.maps.hold and len(runtime.node.seeds) == 1
+
+
+def test_refresh_rejects_pre_request_pose_even_if_fresh(runtime):
+    runtime.node.refresh(); runtime._map_accept(request(runtime))
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    runtime.node.now += 2_000_000_000
+    run_until(runtime, lambda: runtime._map_step == 'refresh-localization')
+    # Fresh evidence received before dispatch cannot acknowledge that refresh.
+    runtime._pending_pose.header.stamp = runtime.node.stamp()
+    runtime._refresh_localization.call_async = lambda req: Future(NS())
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    for _ in range(6): step(runtime)
+    assert runtime.maps.hold and runtime.maps.stage != 'ready'
+    runtime._map_refresh_deadline = time.monotonic() - 1
+    run_until(runtime, lambda: runtime.maps.stage == 'failed')
+
+
+def test_late_valid_pose_cannot_release_quality_failure(runtime):
+    runtime.node.refresh(); runtime._map_accept(request(runtime))
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    runtime.maps.fail('LOCALIZATION_QUALITY_REJECTED: y variance exceeds limit')
+    runtime.node.publish(runtime.node.seeds[-1])
+    for _ in range(5): step(runtime)
+    assert runtime.maps.stage == 'failed' and not runtime.commands_allowed
+
+
+@pytest.mark.parametrize('failure', ['stale', 'wrong-seed', 'service-pending', 'service-unavailable'])
+def test_refresh_evidence_and_service_failures_remain_held(runtime, failure):
+    runtime.node.refresh(); runtime._map_accept(request(runtime))
+    run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+    runtime.node.now += 2_000_000_000
+    run_until(runtime, lambda: runtime._map_step == 'refresh-localization')
+    if failure == 'service-unavailable':
+        runtime._refresh_localization.service_is_ready = lambda: False
+        for _ in range(4): step(runtime)
+        assert runtime._map_refresh_started is None
+    elif failure == 'service-pending':
+        future = Future(NS()); future.complete = False
+        runtime._refresh_localization.call_async = lambda req: future
+        for _ in range(4): step(runtime)
+    else:
+        run_until(runtime, lambda: runtime._map_step == 'costmap-map')
+        if failure == 'stale': runtime.node.now += 2_000_000_000
+        else: runtime._accepted_seed_stamp = -1
+        for _ in range(4): step(runtime)
+    assert runtime.maps.hold and runtime.maps.stage != 'ready'
+    runtime._map_refresh_deadline = time.monotonic() - 1
+    run_until(runtime, lambda: runtime.maps.stage == 'failed')
+    assert runtime.maps.error.startswith('LOCALIZATION_UPDATE_TIMEOUT:')
+    expected = {'stale': 'pose age', 'wrong-seed': 'seed acceptance',
+                'service-pending': 'service did not complete',
+                'service-unavailable': 'service did not complete'}
+    assert expected[failure] in runtime.maps.error
+    assert len(runtime.node.seeds) == 1 and not runtime.commands_allowed

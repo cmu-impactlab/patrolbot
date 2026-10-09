@@ -46,6 +46,7 @@ class EpochRuntime(MapRuntimeMixin):
             ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
         self._accepted_seed_stamp = None
         self._pending_pose = None
+        self._pending_pose_received_at = None
         self._parameters = node.create_client(
             SetParametersAtomically, '/amcl/set_parameters_atomically')
         self._get = node.create_client(GetState, '/amcl/get_state')
@@ -247,6 +248,7 @@ class EpochRuntime(MapRuntimeMixin):
                     p.orientation.w, *message.pose.covariance)):
                 return
             self._pending_pose = message
+            self._pending_pose_received_at = time.monotonic()
             self._accept_pending_pose()
 
     def seed_accepted(self, message):

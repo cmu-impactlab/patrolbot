@@ -14,6 +14,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_safety_policy test/test_safety_policy.py)
   ament_add_pytest_test(test_joystick_policy test/test_joystick_policy.py)
   ament_add_pytest_test(
+    test_controller_feedback_policy
+    test/test_controller_feedback_policy.py)
+  ament_add_pytest_test(
     test_physical_calibration
     test/test_physical_calibration.py)
   ament_add_pytest_test(
@@ -39,6 +42,7 @@ install(DIRECTORY
 install(PROGRAMS
   scripts/capture_nav_command_path.py
   scripts/patrolbot_joy_teleop.py
+  scripts/patrolbot_controller_feedback.py
   scripts/patrolbot_safety_watchdog.py
   scripts/validate_physical_calibration.py
   scripts/verify_reverse_safety.py
@@ -47,6 +51,7 @@ install(PROGRAMS
 
 install(FILES
   scripts/joystick_policy.py
+  scripts/controller_feedback_policy.py
   scripts/reverse_safety_rules.py
   scripts/safety_policy.py
   DESTINATION lib/${PROJECT_NAME}

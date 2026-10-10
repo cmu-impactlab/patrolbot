@@ -3,6 +3,19 @@
 import math
 
 
+def odometry_values_finite(
+        position_x, position_y, orientation, linear_x, angular_z):
+    """Reject numeric poison even if an upstream publisher bypasses the bridge."""
+    values = (
+        float(position_x),
+        float(position_y),
+        *(float(value) for value in orientation),
+        float(linear_x),
+        float(angular_z),
+    )
+    return all(math.isfinite(value) for value in values)
+
+
 def _missing_or_stale(now, received_at, timeout):
     return received_at is None or (now - received_at) > timeout
 

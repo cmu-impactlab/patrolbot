@@ -1,0 +1,67 @@
+{
+  "issue": 60,
+  "candidate_image": "patrolbot:canonical-f5ab152-20260929",
+  "candidate_image_id": "sha256:e3ec00bf07351bb5b98b3414985284bce3863fee7bda1ff2f4d0c6588b1567a2",
+  "candidate_revision": "f5ab1520f643218d1be880ee999fd2ab992b0225",
+  "candidate_source_sha256": "3fa258045775d239014d71778934315dd11dcffc7864d90cce09552677cdba58",
+  "candidate_nav2_patch_sha256": "62b9d99a157a9ee02095d700cffd294ee7585c8ceffa5ab186bd7eac532e5b45",
+  "expected_previous_image": "patrolbot:epoch-f5931eaf-labels-20260924",
+  "expected_previous_source_sha256": "f5931eaf099b1bd1ddae0a8daa96433227eae4035b57a9c35fddc1e962cb4014",
+  "services": [
+    "bringup",
+    "bridge",
+    "navigation"
+  ],
+  "source_changes": [
+    {
+      "path": "ros2_ws/src/patrolbot_bridge/test/test_epoch_runtime.py",
+      "before": "832d7e55fa199fe26d9c6991955e59ecd3e7254b8f2c46fc2d453243f3adb09f",
+      "after": "830a7898d5d71fd9dcb0a0d1b11c6b3defce2cff7ab0dbc1747c58a0c3a4de8c"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_bridge/test/test_fake_sbc_integration.py",
+      "before": "bd82bc731fa77d4de75e4cd51e8996ab65f1f85a98aa25965a27ea25a6871802",
+      "after": "eb683f22a21fb76a3253fa2e94bacdcebbaacff72b66249dce80940e95e8252d"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/epoch_runtime.py",
+      "before": "fba9cdd24fd71e2d37bbd24b473b997bf02c0463edc89e446c5febe6f486787a",
+      "after": "8ffa5ef79a6f48c9c4cd1070ea549a6822d8dd1f46ec52bb882bb708ab6e1c92"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_navigation/scripts/patrolbot_joy_teleop.py",
+      "before": "a5be97571c4d981a69229119272b78500e43f74f2635a40dc6135b150de649e4",
+      "after": "600334cedb13a19725c4e9c427d43007924fc05c14ae69821019a1d8627a711c"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_navigation/launch/bringup.launch.py",
+      "before": "488ab3600dfb5b7b9b1cff4285b9c1c0efc82e418561479711e796234eb6245d",
+      "after": "5c9134982610b1830700ecafdc94cb07b9216fdac04512fdf8a664ea4a6001dd"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_dock_manager/patrolbot_dock_manager/dock_manager.py",
+      "before": "6c93a4731f46da22f6b8509fe7fe42a9a6932308f1bf0283150449ce49596d1b",
+      "after": "5f3b0d40556db261b71fdbeb6658dc6c5632034d5d3ea52fe3a29d24d3d9e5ae"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_dock_manager/test/test_epoch_policy.py",
+      "before": "7a01459eb77f51e3def7f03031c643277b400e0ff2806a282527a269861c3173",
+      "after": "98543e30566b0ad0027037a025a107a6cec4433ec22cf18c9b0518620b6c6f01"
+    },
+    {
+      "path": "ros2_ws/src/patrolbot_dock_manager/test/test_manager_integration.py",
+      "before": "73068e3bcde493d004d9ff76212e93120898638d1ddd919020fec415188e3856",
+      "after": "50bd61ff8b7bc27a874f4df71f9b352da8ae1098131f4d3faf0b3b5458a692bc"
+    }
+  ],
+  "required_gates": [
+    "canonical exact-image regressions and repeated cold-start seed/recovery acceptance",
+    "completed eight-hour isolated soak including recovery and clean process exits",
+    "fresh read-only stationary hardware preflight with motors disabled and no active undock",
+    "verify all previous/candidate image and source hashes before writes",
+    "backup environment and all source_changes before writes; verify off-host copy before retiring snapshots",
+    "verify new host and embedded source digests, installed files and runtime health; restore source and environment together on failure"
+  ],
+  "physical_acceptance": "Not established by deployment; requires operator seed, stationary stability, geometry and separately authorized motion.",
+  "expected_previous_image_id": "sha256:f2e492ccd2ba1ccf7f818086185f3686cd680cae03f40ba1389d6b614c2163f6"
+}

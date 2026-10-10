@@ -1,0 +1,11 @@
+ARG PATROLBOT_BASE_IMAGE=patrolbot:epoch-f5931eaf-labels-20260924
+FROM ${PATROLBOT_BASE_IMAGE}
+COPY docker/nav2-patches/0009-amcl-post-seed-scan.patch /tmp/amcl-post-seed-scan.patch
+RUN test "$(sha256sum /tmp/amcl-post-seed-scan.patch | cut -d' ' -f1)" = c647dff40f1c13df5b747b614e8bacf97d806b6bf710d3be5b99f7393d5af378 && \
+    patch --batch -d /opt/patrolbot_nav2/src -p1 < /tmp/amcl-post-seed-scan.patch
+WORKDIR /opt/patrolbot_nav2
+RUN . /opt/patrolbot_ws/install/setup.sh && . /opt/patrolbot_nav2/install/setup.sh && MAKEFLAGS=-j2 colcon build --parallel-workers 1 --packages-select nav2_amcl --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+WORKDIR /opt/patrolbot_ws
+ARG PATROLBOT_REVISION=unknown
+LABEL org.opencontainers.image.revision=${PATROLBOT_REVISION} \
+      io.patrolbot.nav2-amcl-post-seed-patch-sha256=c647dff40f1c13df5b747b614e8bacf97d806b6bf710d3be5b99f7393d5af378

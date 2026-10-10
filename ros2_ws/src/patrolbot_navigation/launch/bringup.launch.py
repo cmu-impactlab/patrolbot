@@ -8,6 +8,14 @@ from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch_ros.actions import Node
 
+def shutdown_on_container_exit(event, context):
+    # SIGINT already starts launch shutdown. Emitting it again on the resulting
+    # container exit runs the ROS adapter shutdown handler twice.
+    if context.is_shutdown:
+        return []
+    return [EmitEvent(event=Shutdown(reason='nav2_container exited'))]
+
+
 def generate_launch_description():
     pkg_dir = get_package_share_directory('patrolbot_navigation')
     launch_dir = os.path.join(pkg_dir, 'launch')
@@ -93,7 +101,7 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=container,
-                on_exit=[EmitEvent(event=Shutdown(reason='nav2_container exited'))],
+                on_exit=shutdown_on_container_exit,
             )
         ),
 
@@ -127,6 +135,17 @@ def generate_launch_description():
              name='patrolbot_joy_teleop', output='screen',
              remappings=[('/cmd_vel_joy', '/input/joy')],
              respawn=True, respawn_delay=2.0),
+        # Alert-only controller feedback. Its sole publisher is joy_node's
+        # feedback input; it has no velocity, action, or motor-service client.
+        Node(
+            package='patrolbot_navigation',
+            executable='patrolbot_controller_feedback.py',
+            name='patrolbot_controller_feedback',
+            output='screen',
+            parameters=[nav2_params_file],
+            respawn=True,
+            respawn_delay=2.0,
+        ),
         # Safety watchdog: holds the robot (zero Twist on twist_mux priority-10
         # input/safety_controller) whenever /scan or /odom goes stale, and releases
         # automatically when they return. Sensor-loss safe-hold for the whole stack.

@@ -83,3 +83,122 @@ The overlay also builds `nav2_behaviors`. The isolated
 `integration_epoch_navigation.py` exercises an active real Wait across an
 origin change and requires its terminal result plus completed recovery.
 Compilation or unit tests alone do not establish this acceptance.
+
+## Pending-seed scheduling
+
+`0005-amcl-pending-seed-priority.patch` skips laser processing while an
+initial-pose request is waiting for timestamped TF. This prevents first-scanner
+map preprocessing from occupying the callback group ahead of that request's
+bounded retry. Pending requests already withdraw localization; after seed
+acceptance, the next scan constructs or updates the scanner normally. The
+original deadline, TF requirements and rejection behavior are unchanged.
+
+Validate with the seed acknowledgement timeout/supersession tests and repeated
+real-map startup/origin-recovery tests. A single successful startup does not
+establish repeatable acceptance; retain failed-run evidence.
+
+## Navigator plugin lifetime
+
+`0006-bt-plugin-lifetime.patch` keeps the two navigator shared libraries mapped
+until process exit on Linux using the ELF `NODELETE` linker flag. Executor-held
+entity references can outlive the navigator plugin loader; their control-block
+vtables must still be mapped when those references are released. This does not
+retain active goals or navigator instances, change lifecycle acceptance, or
+relax safety checks. The tradeoff is retaining the two code mappings for the
+process lifetime rather than reclaiming them during plugin unload.
+
+`Dockerfile.bt-lifetime` rebuilds only `nav2_bt_navigator` on an existing epoch
+image, verifies the pinned upstream archive and package version, and checks both
+ELF flags. The full Nav2 and epoch recipes also apply this patch and build the
+package. Its separate patch digest is recorded in the scoped image label.
+
+Validate `integration_component_teardown.py` with and without
+`PATROLBOT_TEST_CLEANUP=1`, then composed epoch recovery/action termination and
+scan-outage recovery through clean shutdown. All integration probes require a
+network-isolated container. A passing component probe alone is insufficient.
+
+Current validation: the scoped candidate passes all 12 component teardown cases
+(six direct shutdown and six explicit cleanup). Composed scan-outage recovery
+passes its recovery assertions, but the container still crashes during final
+shutdown. This patch resolves the isolated navigator-plugin failure only; the
+remaining composed failure is under investigation. Do not treat this candidate
+as a complete shutdown fix or deploy it on the basis of component tests.
+
+## Route-operation plugin lifetime
+
+`0007-route-plugin-lifetime.patch` applies Linux `NODELETE` to the
+`route_operations` library only. Configured RouteServer teardown otherwise
+releases plugin code before retained weak references are destroyed. The native
+trace faults at a control-block vtable inside the unloaded library. This retains
+code mappings until process exit, not operation instances or active execution.
+
+A diagnostic build passes all 16 component cases (eight direct shutdown and
+eight with explicit cleanup), including RouteServer and the navigator controls.
+Full-stack recovery and shutdown acceptance remain separately required before
+production deployment.
+
+The first composed test of the route diagnostic build still faults in lifecycle
+node destruction. The standalone RouteServer regression is fixed in that build;
+the remaining full-stack fault has not been attributed. No production rollout
+is accepted on these results.
+
+## Regulated-pure-pursuit plugin lifetime
+
+`0008-controller-plugin-lifetime.patch` retains the controller library's code
+mappings on Linux until process exit. Configured ControllerServer otherwise
+releases the plugin while lifecycle weak references still need control-block
+vtables defined in it. This does not retain controller instances or enable motion.
+
+The diagnostic build passes all 20 component cases without preload (ten normal,
+ten explicit cleanup). Composed recovery and managed shutdown requests pass,
+but final process exit still crashes during ROS Context destruction. The combined
+candidate remains undeployed; this is not full-stack shutdown acceptance.
+
+## Post-seed scan ordering
+
+`0009-amcl-post-seed-scan.patch` records the timestamp of each successfully
+accepted seed and rejects laser scans at or before that timestamp. A delayed
+scan otherwise consumes AMCL's first forced update while the robot is stationary,
+leaving the bridge correctly waiting for a newer estimate. The barrier is set
+only after TF lookup and filter initialization succeed, follows each new seed,
+and resets during lifecycle cleanup. It preserves the bridge freshness gate.
+
+`integration_amcl_seed_scan_barrier.py` reproduces the deployed failure with a
+scan 150 ms older than the seed. The AMCL-only candidate passes old/equal-stamp
+rejection and produces a newer estimate without motion or a refresh request.
+The five existing seed-acknowledgement cases also pass. Composed recovery and
+live fresh-seed acceptance are still required; wall alignment remains a separate
+physical acceptance gate. `Dockerfile.amcl-seed-scan` builds this scoped overlay
+from the deployed image without the experimental teardown changes.
+
+## Lifecycle-manager callback ownership
+
+`0010-manager-callback-lifetime.patch` retains the Context callback handle and
+removes the callback during manager destruction. Otherwise the Context keeps a
+callback whose bound object and component library have already been destroyed,
+causing a process-exit fault. No library-retention flag is needed for this repair.
+
+A manager with zero managed nodes reproduced the fault twice. With the patch,
+all 12 component cases pass and the composed Nav2 process exits cleanly after
+recovery and managed shutdown. The composed test also exposed Python child
+shutdown errors and a launch exception; complete stack shutdown is still pending.
+The integration fixture now rejects nonzero child and launch exits as well as
+SIGSEGV and forced termination.
+
+## Shutdown during missing-TF startup
+
+`0011-startup-shutdown-order.patch` prevents costmap activation from continuing
+into publishers and the map-update thread when context shutdown ends its TF
+wait. It also defers the lifecycle manager's service-thread join and state
+release to destruction: joining from pre-shutdown prevents context shutdown
+from interrupting an outstanding activation request. The existing destructor
+joins the thread before its maps and timers are destroyed; callback ownership
+from patch 0010 remains in force.
+
+The production initial-transform wait is unchanged, preserving recovery after
+SBC outages. The network-isolated `integration_startup_shutdown.py` requires
+clean exit during missing-TF activation both directly and with
+`PATROLBOT_STARTUP_MANAGER=1`. Baseline direct activation aborts; the manager
+case requires forced termination. Both cases pass in the combined diagnostic
+image. Full canonical-image and live acceptance are still required; the
+prototype image inherits old provenance and must not be deployed.

@@ -1,0 +1,13 @@
+--- a/nav2_amcl/src/amcl_node.cpp
++++ b/nav2_amcl/src/amcl_node.cpp
+@@ -712,6 +712,10 @@
+   // Since the sensor data is continually being published by the simulator or robot,
+   // we don't want our callbacks to fire until we're in the active state
+   if (!active_) {return;}
++  // A pending seed has withdrawn localization. Avoid first-scanner map
++  // preprocessing monopolizing the callback group while its bounded TF
++  // retry is waiting. The next scan resumes normal work after acceptance.
++  if (initial_pose_pending_) {return;}
+   if (!first_map_received_) {
+     if (checkElapsedTime(2s, last_time_printed_msg_)) {
+       RCLCPP_WARN(get_logger(), "Waiting for map....");

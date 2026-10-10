@@ -24,12 +24,14 @@ from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
+from patrolbot_dock_manager.epoch_policy import epoch_hardware_ready
 from patrolbot_dock_manager.contracts import (
     automatic_docking_allowed,
     DOCK_DOCKED_CONFIRMED,
     dock_pose_initialization_failures,
     DOCK_UNKNOWN,
     localization_position_limit,
+    odometry_values_finite,
     planar_covariance_usable,
     precheck_failures,
     resume_failures,
@@ -48,7 +50,7 @@ from rclpy.action import (
     GoalResponse,
 )
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default, qos_profile_sensor_data
 from sensor_msgs.msg import PointCloud2, PointField
@@ -126,9 +128,11 @@ class DockManager(Node):
         self.declare_parameter('docked_max_position_variance', 1.0)
         self.declare_parameter('max_yaw_variance', 0.25)
         self.declare_parameter('sensor_timeout', 0.5)
-        # Comfortably inside sensor_timeout so a docked pose is never reported
-        # stale purely because a stationary AMCL had nothing to say.
-        self.declare_parameter('docked_localization_refresh_period', 0.2)
+        # Every operator-triggered localization phase is bounded independently.
+        # Only calls that actually reach AMCL consume this budget; an absent
+        # service still gets the full phase timeout to appear before the action
+        # fails closed.
+        self.declare_parameter('localization_update_max_attempts', 5)
         self.declare_parameter('precheck_timeout', 5.0)
         # Requested of the SBC, which independently rejects anything outside
         # its own hard caps rather than clamping it.
@@ -155,6 +159,9 @@ class DockManager(Node):
         self.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose',
             self._localization_callback, 10, callback_group=self._callbacks)
+        self.create_subscription(
+            PoseWithCovarianceStamped, '/initialpose',
+            self._initial_pose_callback, 10, callback_group=self._callbacks)
         self._status_subscriptions = []
         for action_name in (
                 'navigate_to_pose', 'navigate_through_poses', 'follow_waypoints',
@@ -194,17 +201,6 @@ class DockManager(Node):
             callback_group=self._callbacks)
         self.create_timer(
             0.5, self._readiness_timer, callback_group=self._callbacks)
-        # AMCL publishes once after initialization and then stays silent until
-        # the robot moves, so a docked robot's last pose is always older than
-        # `sensor_timeout` and idle readiness reported "localization invalid"
-        # permanently — a blocker that the precheck's own forced refresh clears
-        # a moment later. That made the dashboard look like it was refusing to
-        # undock for a localization reason that did not exist. Keeping the docked
-        # view fresh costs one no-motion AMCL update per tick and only while the
-        # robot is docked and idle; a moving robot already publishes on odometry.
-        self.create_timer(
-            float(self.get_parameter('docked_localization_refresh_period').value),
-            self._docked_localization_refresh, callback_group=self._callbacks)
         self.get_logger().info(
             'Guarded undock manager ready. Motion remains fail-closed until '
             'bumper mapping and dock pose are explicitly configured.')
@@ -250,7 +246,8 @@ class DockManager(Node):
                 response.code = InitializeDockPose.Response.PRECONDITION_FAILED
                 response.message = 'an undock goal is active'
                 return self._finish_initialization_response(response, started)
-        failures = dock_pose_initialization_failures(self._snapshot())
+        failures = dock_pose_initialization_failures(
+            self._snapshot(for_pose_initialization=True))
         if failures:
             response.code = InitializeDockPose.Response.PRECONDITION_FAILED
             response.message = '; '.join(failures)
@@ -297,7 +294,8 @@ class DockManager(Node):
             pose_age = (
                 now - self._localization_at if self._localization_at else 1e6)
             state_name = self._state_name
-        failures = precheck_failures(snapshot)
+        failures = precheck_failures(
+            snapshot, require_fresh_localization=False)
         message = DockReadiness()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = 'base_link'
@@ -377,6 +375,24 @@ class DockManager(Node):
         return False
 
     def _odom_callback(self, message):
+        orientation = message.pose.pose.orientation
+        if not odometry_values_finite(
+                message.pose.pose.position.x,
+                message.pose.pose.position.y,
+                (orientation.x, orientation.y, orientation.z, orientation.w),
+                message.twist.twist.linear.x,
+                message.twist.twist.angular.z):
+            rejected_at = time.monotonic()
+            with self._lock:
+                self._odom = None
+                self._odom_at = 0.0
+                # Invalid odometry cannot prove the robot remained parked.
+                self._last_motion_at = rejected_at
+            self.get_logger().error(
+                'Rejected non-finite /odom; freshness and parked-pose '
+                'allowances invalidated.',
+                throttle_duration_sec=5.0)
+            return
         with self._lock:
             self._odom = message
             self._odom_at = time.monotonic()
@@ -396,6 +412,10 @@ class DockManager(Node):
         with self._lock:
             self._localization = message
             self._localization_at = time.monotonic()
+
+    def _initial_pose_callback(self, _message):
+        """Give each newly received pose seed at most one forced AMCL update."""
+        self._request_localization_update(force=True)
 
     def _action_status_callback(self, action_name, message):
         with self._lock:
@@ -673,14 +693,21 @@ class DockManager(Node):
         independent telemetry path before anything commands velocity.
         """
         deadline = time.monotonic() + timeout
+        attempts = 0
+        attempt_limit = self._localization_update_attempt_limit()
         last_failures = ['handoff not evaluated']
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during handoff'
-            self._request_localization_update()
-            failures = resume_failures(self._snapshot(), expected_session)
+            state = self._snapshot()
+            failures = resume_failures(state, expected_session)
             if not failures:
                 return True, ''
+            localization_satisfied = bool(
+                state.localization_fresh and state.localization_valid)
+            if not localization_satisfied and attempts < attempt_limit:
+                if self._request_localization_update(force=attempts == 0):
+                    attempts += 1
             last_failures = failures
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
@@ -697,13 +724,23 @@ class DockManager(Node):
             self, goal_handle, correlation_id, validation_mode=False):
         deadline = time.monotonic() + float(
             self.get_parameter('precheck_timeout').value)
+        attempts = 0
+        attempt_limit = self._localization_update_attempt_limit()
+        localization_satisfied = False
         stable_since = None
         last_failures = ['precheck not evaluated']
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during precheck'
-            self._request_localization_update()
-            failures = precheck_failures(self._snapshot(), validation_mode)
+            state = self._snapshot()
+            if state.localization_fresh and state.localization_valid:
+                localization_satisfied = True
+            failures = precheck_failures(
+                state, validation_mode,
+                require_fresh_localization=not localization_satisfied)
+            if not localization_satisfied and attempts < attempt_limit:
+                if self._request_localization_update(force=attempts == 0):
+                    attempts += 1
             if failures:
                 stable_since = None
                 last_failures = failures
@@ -717,37 +754,29 @@ class DockManager(Node):
 
     def _wait_for_localization(
             self, goal_handle, timeout, correlation_id, newer_than=0.0):
-        """Force AMCL and require a fresh valid estimate after the given epoch."""
+        """Bound AMCL requests and require a fresh valid pose for this phase."""
         deadline = time.monotonic() + timeout
-        self._request_localization_update(force=True)
+        attempts = 0
+        attempt_limit = self._localization_update_attempt_limit()
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False
-            self._request_localization_update()
             state = self._snapshot()
             with self._lock:
                 localization_at = self._localization_at
             if (localization_at > newer_than and
                     state.localization_fresh and state.localization_valid):
                 return True
+            if attempts < attempt_limit:
+                if self._request_localization_update(force=attempts == 0):
+                    attempts += 1
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
         return False
 
-    def _docked_localization_refresh(self):
-        """
-        Keep a docked robot's AMCL pose fresh enough to judge readiness.
-
-        Runs only while the SBC reports mated plates and no undock goal is in
-        flight; an active goal drives its own forced refreshes, and a robot that
-        has left the dock gets pose updates from its own motion.
-        """
-        with self._goal_lock:
-            if self._goal_reserved:
-                return
-        if not self._dock_contact_confirmed():
-            return
-        self._request_localization_update()
+    def _localization_update_attempt_limit(self):
+        return max(0, int(
+            self.get_parameter('localization_update_max_attempts').value))
 
     def _request_localization_update(self, force=False):
         """Ask AMCL to update from the next scan even without odometry motion."""
@@ -797,7 +826,6 @@ class DockManager(Node):
             if goal_handle.is_cancel_requested:
                 reason = 'goal canceled during turn'
                 break
-            self._request_localization_update()
             failures = resume_failures(self._snapshot(), expected_session)
             if failures:
                 reason = '; '.join(failures)
@@ -854,7 +882,45 @@ class DockManager(Node):
             time.sleep(0.02)
         return False
 
-    def _snapshot(self):
+    @staticmethod
+    def _parked_since_the_pose(
+            stationary, odom_age, timeout, last_motion_at, localization_at,
+            base, fault_flags):
+        # Elapsed time is only evidence that a pose has gone stale if the robot
+        # could have moved since it was published. AMCL publishes /amcl_pose
+        # only after update_min_d/update_min_a of motion, so a parked robot
+        # stops producing pose messages entirely and the age climbs without
+        # bound -- 102 s measured live on 2026-08-18 against a 0.5 s timeout.
+        # The robot knew exactly where it was; the message had gone stale, not
+        # the estimate, and navigation goals were refused over it.
+        #
+        # Every conjunct below is load-bearing:
+        #
+        #   stationary          the newest sample shows no motion;
+        #   odom_age            ...and odometry is actually still arriving,
+        #                       because a dead link leaves the last message
+        #                       reading zero velocity while the robot drives
+        #                       away;
+        #   _last_motion_at     ...and nothing has moved SINCE the pose was
+        #                       published. Without this, a robot that drove off
+        #                       while AMCL was silent and then stopped would
+        #                       revalidate the pose it held before it moved --
+        #                       the predicate would prove only "velocity is
+        #                       zero right now", never "this pose still
+        #                       describes the robot";
+        #   encoder faults      ...and the wheels are actually being measured.
+        #                       This allowance is only as good as the odometry
+        #                       it trusts, so a degraded or failed encoder must
+        #                       void it rather than silently supply the zeros
+        #                       that satisfy it.
+        return (
+            stationary and
+            odom_age <= timeout and
+            last_motion_at <= localization_at and
+            base is not None and
+            not fault_flags & ENCODER_FAULT_MASK)
+
+    def _snapshot(self, *, for_pose_initialization=False):
         now = time.monotonic()
         timeout = float(self.get_parameter('sensor_timeout').value)
         self._refresh_command_path()
@@ -883,46 +949,29 @@ class DockManager(Node):
             stationary = (
                 abs(odom.twist.twist.linear.x) <= STATIONARY_LINEAR_LIMIT and
                 abs(odom.twist.twist.angular.z) <= STATIONARY_ANGULAR_LIMIT)
-        # Elapsed time is only evidence that a pose has gone stale if the robot
-        # could have moved since it was published. AMCL publishes /amcl_pose
-        # only after update_min_d/update_min_a of motion, so a parked robot
-        # stops producing pose messages entirely and the age climbs without
-        # bound -- 102 s measured live on 2026-08-18 against a 0.5 s timeout.
-        # The robot knew exactly where it was; the message had gone stale, not
-        # the estimate, and navigation goals were refused over it.
-        #
-        # Every conjunct below is load-bearing:
-        #
-        #   stationary          the newest sample shows no motion;
-        #   odom_age            ...and odometry is actually still arriving,
-        #                       because a dead link leaves the last message
-        #                       reading zero velocity while the robot drives
-        #                       away;
-        #   _last_motion_at     ...and nothing has moved SINCE the pose was
-        #                       published. Without this, a robot that drove off
-        #                       while AMCL was silent and then stopped would
-        #                       revalidate the pose it held before it moved --
-        #                       the predicate would prove only "velocity is
-        #                       zero right now", never "this pose still
-        #                       describes the robot";
-        #   encoder faults      ...and the wheels are actually being measured.
-        #                       This allowance is only as good as the odometry
-        #                       it trusts, so a degraded or failed encoder must
-        #                       void it rather than silently supply the zeros
-        #                       that satisfy it.
         fault_flags = base.fault_flags if base else 0
-        parked_since_the_pose = (
-            stationary and
-            odom_age <= timeout and
-            last_motion_at <= localization_at and
-            base is not None and
-            not fault_flags & ENCODER_FAULT_MASK)
+        parked_since_the_pose = self._parked_since_the_pose(
+            stationary, odom_age, timeout, last_motion_at, localization_at,
+            base, fault_flags)
+        epoch_ready = bool(
+            base and getattr(base, 'odom_epoch_valid', False)
+            and not getattr(base, 'localization_recovery_required', True))
+        hardware_epoch_ready = epoch_hardware_ready(
+            origin_valid=getattr(base, 'odom_epoch_valid', False),
+            recovery_required=getattr(base, 'localization_recovery_required', True),
+            recovery_stage=getattr(base, 'localization_recovery_stage', ''),
+            for_pose_initialization=for_pose_initialization)
+        seed_stamp = getattr(base, 'localization_seed_stamp_ns', 0) if base else 0
+        pose_stamp = (pose.header.stamp.sec * 1_000_000_000 +
+                      pose.header.stamp.nanosec) if pose else 0
         pose_still_describes_the_robot = (
-            pose_age <= timeout or parked_since_the_pose)
+            epoch_ready and seed_stamp > 0 and pose_stamp > seed_stamp
+            and (pose_age <= timeout or parked_since_the_pose))
         return SafetySnapshot(
             link_connected=bool(base and base.link_connected),
             hardware_state_valid=bool(
-                base and base.hardware_state_valid and base_age <= timeout),
+                base and base.hardware_state_valid and base_age <= timeout
+                and hardware_epoch_ready),
             session_generation=base.session_generation if base else 0,
             charge_state_valid=bool(base and base.charge_state_valid),
             charge_state=base.charge_state if base else -1,
@@ -1199,10 +1248,12 @@ def main(args=None):
     executor.add_node(node)
     try:
         executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         executor.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

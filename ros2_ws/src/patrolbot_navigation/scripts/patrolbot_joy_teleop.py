@@ -24,11 +24,21 @@ import rclpy
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import Twist
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 from sensor_msgs.msg import Joy
 
 from joystick_policy import (
+    ANG_SIGN,
+    AX_ANG,
+    AX_DPAD_ANG,
+    AX_DPAD_LIN,
+    AX_LIN,
+    BTN_DEADMAN,
+    DPAD_ANG_SIGN,
+    DPAD_LIN_SIGN,
+    LIN_SIGN,
     apply_deadzone,
     axis_value,
     button_pressed,
@@ -37,23 +47,10 @@ from joystick_policy import (
 )
 
 # ---- Button map (Logitech F710, XInput) ----
-BTN_DEADMAN = 5    # RB
 BTN_LIN_DOWN = 0   # A  -> slower linear
 BTN_LIN_UP = 3     # Y  -> faster linear
 BTN_ANG_DOWN = 2   # X  -> slower angular
 BTN_ANG_UP = 1     # B  -> faster angular
-
-# ---- Axis map (analog left stick + D-pad fallback) ----
-AX_LIN = 1         # left stick Y
-AX_ANG = 0         # left stick X
-AX_DPAD_LIN = 7    # D-pad Y
-AX_DPAD_ANG = 6    # D-pad X
-
-# ---- Direction signs (flip if a direction is reversed) ----
-LIN_SIGN = 1.0          # stick up -> forward
-ANG_SIGN = 1.0          # stick left -> turn left (CCW, +z)
-DPAD_LIN_SIGN = -1.0    # D-pad up is -1 on joydev -> forward
-DPAD_ANG_SIGN = -1.0    # D-pad left is -1 -> turn left
 
 # Safety: if no /joy message arrives for this long (controller unplugged or
 # joy_node died) we drop the deadman and ramp to a stop — never keep republishing
@@ -286,11 +283,11 @@ def main(args=None):
     node = JoyTeleop()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == '__main__':

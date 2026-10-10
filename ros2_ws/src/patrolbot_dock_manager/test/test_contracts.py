@@ -20,6 +20,7 @@ from patrolbot_dock_manager.contracts import (
     HARD_MAX_DISTANCE,
     HARD_MAX_SPEED,
     localization_position_limit,
+    odometry_values_finite,
     planar_covariance_usable,
     precheck_failures,
     resume_failures,
@@ -402,3 +403,15 @@ def test_the_handoff_gate_distinguishes_the_same_two_terms():
     assert any('not refreshed' in failure for failure in failures), failures
     assert 'localization invalid' in resume_failures(
         replace(SAFE_HANDOFF, localization_valid=False), 7)
+
+
+def test_non_finite_odometry_cannot_satisfy_dock_freshness():
+    assert odometry_values_finite(
+        1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
+    for bad in (float('nan'), float('inf'), -float('inf')):
+        assert not odometry_values_finite(
+            bad, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
+        assert not odometry_values_finite(
+            1.0, 2.0, (0.0, bad, 0.0, 1.0), 0.1, 0.2)
+        assert not odometry_values_finite(
+            1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, bad)

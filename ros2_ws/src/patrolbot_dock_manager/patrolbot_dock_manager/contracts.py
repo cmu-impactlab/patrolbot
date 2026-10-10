@@ -9,6 +9,7 @@ command was the split-ownership defect this design removes.
 """
 
 from dataclasses import dataclass
+import math
 from typing import List
 
 
@@ -28,6 +29,19 @@ VALIDATION_MAX_SPEED = 0.05
 # nanounits above their source literals. This tolerance admits only that wire
 # representation error and does not silently clamp an actual over-limit goal.
 FLOAT32_BOUNDARY_EPSILON = 1e-6
+
+
+def odometry_values_finite(
+        position_x, position_y, orientation, linear_x, angular_z):
+    """Reject numeric poison before odometry can satisfy a freshness gate."""
+    values = (
+        float(position_x),
+        float(position_y),
+        *(float(value) for value in orientation),
+        float(linear_x),
+        float(angular_z),
+    )
+    return all(math.isfinite(value) for value in values)
 
 # Nine states, down from sixteen: the six that used to command and monitor
 # contact separation now live inside one SBC operation.
@@ -198,7 +212,8 @@ def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
 
 
 def precheck_failures(
-        state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
+        state: SafetySnapshot, validation_mode: bool = False,
+        require_fresh_localization: bool = True) -> List[str]:
     """
     Validate the Pi-side gates before asking the SBC to undock.
 
@@ -213,6 +228,9 @@ def precheck_failures(
     been observed reporting estop=1 with motors=0, and the SBC's release
     sequence disables and confirms the motors itself before touching the
     charger.
+
+    ``require_fresh_localization`` lets published readiness report a valid
+    stationary pose without weakening the strict pre-motion gate.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:
@@ -234,12 +252,14 @@ def precheck_failures(
         failures.append('SBC undock hardware profile is not commissioned')
     # Two different facts since the parked-robot allowance split them, and an
     # operator acts on them differently. A stationary robot legitimately holds
-    # localization_valid true while localization_fresh goes false, because AMCL
-    # publishes nothing when nothing moves. Calling that "invalid" sends the
+    # localization_valid true while localization_fresh goes false, because it
+    # cannot produce a fresh pose message without being forced to resample.
+    # Message freshness is therefore a question only the caller about to move
+    # the robot may insist on. Calling an unrefreshed pose "invalid" sends the
     # reader hunting for a broken pose estimate that is in fact fine.
     if not state.localization_valid:
         failures.append('localization invalid')
-    elif not state.localization_fresh:
+    elif require_fresh_localization and not state.localization_fresh:
         failures.append('localization not refreshed since the robot last moved')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')

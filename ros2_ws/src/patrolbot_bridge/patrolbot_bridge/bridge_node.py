@@ -19,6 +19,7 @@ from patrolbot_bridge.control_protocol import (
     parse_reply,
     valid_request_id,
 )
+from patrolbot_bridge.epoch_runtime import EpochRuntime
 from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
 from patrolbot_bridge.scan_timing import parse_laser_age, compute_scan_stamp_ns
@@ -294,6 +295,8 @@ class PatrolBotBridge(Node):
         self._odom_tf_stale = False
         self._tf_send_lock = threading.Lock()
 
+        self._epoch = EpochRuntime(self)
+
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
         # buffer BEFORE any scan arrives at the costmap message_filter.
@@ -327,6 +330,11 @@ class PatrolBotBridge(Node):
     # ------------------------------------------------------------------
 
     def _tf_timer(self):
+        with self._epoch.lock:
+            if self._epoch.streams_allowed:
+                self._tf_timer_guarded()
+
+    def _tf_timer_guarded(self):
         """
         Broadcast odom->base_link, but only while the pose is still real.
 
@@ -364,6 +372,11 @@ class PatrolBotBridge(Node):
         self._broadcast_odom_tf(x, y, th)
 
     def _broadcast_odom_tf(self, x, y, th):
+        with self._epoch.lock:
+            if self._epoch.streams_allowed:
+                self._broadcast_odom_tf_guarded(x, y, th)
+
+    def _broadcast_odom_tf_guarded(self, x, y, th):
         """
         Send one odom->base_link, stamped now.
 
@@ -385,6 +398,9 @@ class PatrolBotBridge(Node):
         with self._tf_send_lock:
             t.header.stamp = self.get_clock().now().to_msg()
             self.tf_broadcaster.sendTransform(t)
+            if self._epoch.first_tf_ns is None:
+                self._epoch.first_tf_ns = (t.header.stamp.sec * 1_000_000_000 +
+                                           t.header.stamp.nanosec)
 
     # ------------------------------------------------------------------
     # Connection management — background thread
@@ -406,6 +422,7 @@ class PatrolBotBridge(Node):
                 with self.sock_lock:
                     self.sock = sock
                     self.data_buffer = ''
+                self._epoch.begin_session()
                 with self._state_lock:
                     self._session_generation += 1
                     self._link_connected = True
@@ -420,7 +437,7 @@ class PatrolBotBridge(Node):
                     session = self._session_generation
                 # TCP session identity is not an ARIA odometry epoch. Keep
                 # both the covariance and continuity reference across link
-                # reconnects; the current protocol has no odometry epoch ID.
+                # reconnects; only explicit ODOM_EPOCH changes reset them.
                 # A disconnect must never manufacture renewed confidence.
                 self.get_logger().info('Connected to SBC server.')
                 self._receive_loop(sock)
@@ -436,6 +453,7 @@ class PatrolBotBridge(Node):
                 with self._state_lock:
                     self._link_connected = False
                     session = self._session_generation
+                self._epoch.disconnect(session)
                 self._fail_pending_controls(
                     session, 'hardware session disconnected')
                 self._fail_pending_undock(session)
@@ -469,7 +487,8 @@ class PatrolBotBridge(Node):
                 received_at = time.monotonic()
                 if line.startswith('AUX:'):
                     self._queue_latest(
-                        self._aux_queue, (line, received_at), 'auxiliary')
+                        self._aux_queue, (line, received_at, self._session_generation),
+                        'auxiliary')
                 elif line.startswith('ACK:') or line.startswith('RESULT:'):
                     self._handle_control_reply(line)
                 elif line.startswith('UNDOCK_EVENT:'):
@@ -480,7 +499,8 @@ class PatrolBotBridge(Node):
                     self._handle_hello(line)
                 else:
                     self._queue_latest(
-                        self._nav_queue, (line, received_at), 'navigation')
+                        self._nav_queue, (line, received_at, self._session_generation),
+                        'navigation')
 
     def _handle_control_reply(self, line):
         """Deliver an SBC ACK/RESULT without contaminating odometry parsing."""
@@ -553,7 +573,8 @@ class PatrolBotBridge(Node):
         """Publish one path independently while the socket reader keeps draining."""
         while self.running:
             try:
-                line, received_at = source_queue.get(timeout=0.5)
+                item = source_queue.get(timeout=0.5)
+                line, received_at = item[:2]
             except queue.Empty:
                 continue
             if not self.running:
@@ -566,9 +587,12 @@ class PatrolBotBridge(Node):
                     'ROS publish stall.')
                 continue
             if path_name == 'navigation':
-                parser(line, received_at=received_at)
+                parser(line, received_at=received_at, session=item[2])
             else:
-                parser(line)
+                with self._epoch.lock:
+                    if (item[2] == self._epoch.guard.session and
+                            self._epoch.guard.ready):
+                        parser(line)
 
     def _publish_with_timing(self, publisher, message, topic):
         """Publish and make any unexpected middleware stall visible in logs."""
@@ -617,7 +641,15 @@ class PatrolBotBridge(Node):
         self._publish_with_timing(
             self.diag_pub, diagnostics, '/diagnostics')
 
-    def _parse_telemetry(self, line, received_at=None):
+    def _parse_telemetry(self, line, received_at=None, session=None):
+        with self._epoch.lock:
+            if session is None:
+                session = self._epoch.guard.session
+            if not self._epoch.frame_allowed(session, line):
+                return
+            self._parse_telemetry_guarded(line, received_at)
+
+    def _parse_telemetry_guarded(self, line, received_at=None):
         try:
             receipt_clock = self.get_clock().now()
             queue_age_ns = (0 if received_at is None else
@@ -1012,6 +1044,10 @@ class PatrolBotBridge(Node):
         self._publish_with_timing(self.diag_pub, arr, '/diagnostics')
 
     def _base_state_timer(self):
+        with self._epoch.lock:
+            self._base_state_timer_guarded()
+
+    def _base_state_timer_guarded(self):
         """Publish typed, session-aware state; stale fields are never valid."""
         now = time.monotonic()
         with self._state_lock:
@@ -1049,7 +1085,20 @@ class PatrolBotBridge(Node):
         bumpers_valid = (
             state_valid and bumpers_mapped and front_mask != 0 and rear_mask != 0)
 
+        with self._epoch.lock:
+            origin = self._epoch.guard.epoch or ''
+            origin_valid = self._epoch.guard.ready
+            recovery_required = not self._epoch.commands_allowed
+            recovery_stage = self._epoch.status_stage
+            origin_generation = self._epoch.guard.generation
+            seed_stamp = self._epoch.recovery._seed_ns or 0
         msg = BaseState()
+        msg.localization_seed_stamp_ns = seed_stamp
+        msg.odom_epoch = origin
+        msg.odom_epoch_generation = origin_generation
+        msg.odom_epoch_valid = origin_valid
+        msg.localization_recovery_required = recovery_required
+        msg.localization_recovery_stage = recovery_stage
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
         msg.session_generation = generation
@@ -1200,7 +1249,15 @@ class PatrolBotBridge(Node):
 
         try:
             payload = format_request(command, request_id)
-            with self.sock_lock:
+            with self._epoch.lock, self.sock_lock:
+                if self._session_generation != generation:
+                    self._discard_pending_control(key, pending)
+                    return self._fill_control_response(
+                        response, None, 6, 'hardware session changed', started)
+                if not self._epoch.commands_allowed:
+                    self._discard_pending_control(key, pending)
+                    return self._fill_control_response(
+                        response, None, 3, 'odometry origin recovery required', started)
                 if self.sock is None:
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
@@ -1274,9 +1331,12 @@ class PatrolBotBridge(Node):
             hello = parse_hello(line)
         except ValueError as exc:
             self.get_logger().error(f'Invalid SBC HELLO: {exc}')
+            with self._epoch.lock:
+                self._epoch.invalidate_transport('malformed HELLO')
             return
         if hello is None:
             return
+        self._epoch.announce(self._session_generation, hello.odom_epoch)
         with self._state_lock:
             self._server_hello = hello
         self.get_logger().info(
@@ -1336,6 +1396,9 @@ class PatrolBotBridge(Node):
 
     def _undock_goal_callback(self, request):
         """Admit one undock goal at a time, against an SBC that supports it."""
+        with self._epoch.lock:
+            if not self._epoch.commands_allowed:
+                return GoalResponse.REJECT
         for name, value in (
                 ('clearance_distance', request.clearance_distance),
                 ('reverse_speed', request.reverse_speed),
@@ -1389,7 +1452,15 @@ class PatrolBotBridge(Node):
                 float(goal_handle.request.reverse_speed),
                 float(goal_handle.request.maximum_duration),
                 bool(goal_handle.request.validation_mode))
-            with self.sock_lock:
+            with self._epoch.lock, self.sock_lock:
+                if self._session_generation != session:
+                    return self._undock_abort(
+                        goal_handle, SESSION_CHANGED,
+                        'hardware session changed', started, session)
+                if not self._epoch.commands_allowed:
+                    return self._undock_abort(
+                        goal_handle, LINK_UNAVAILABLE,
+                        'odometry origin recovery required', started, session)
                 if self.sock is None:
                     return self._undock_abort(
                         goal_handle, LINK_UNAVAILABLE,
@@ -1515,7 +1586,10 @@ class PatrolBotBridge(Node):
         try:
             # Serialize all writes so DRIVE bytes can never interleave with an
             # idempotent hardware-control request on the TCP stream.
-            with self.sock_lock:
+            with self._epoch.lock, self.sock_lock:
+                if (not self._epoch.commands_allowed and
+                        (msg.linear.x != 0.0 or msg.angular.z != 0.0)):
+                    return
                 if self.sock is None:
                     return
                 self.sock.sendall(

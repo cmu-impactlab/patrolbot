@@ -15,7 +15,11 @@ import time
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
-from patrolbot_dock_manager.dock_manager import DockManager
+from patrolbot_dock_manager.dock_manager import (
+    DockManager,
+    STATIONARY_ANGULAR_LIMIT,
+    STATIONARY_LINEAR_LIMIT,
+)
 from patrolbot_interfaces.action import HardwareUndock, Undock
 from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
@@ -49,10 +53,20 @@ class PathNode(Node):
             for topic in subscribe_topics]
 
 
+class PassiveGoal:
+    """Minimal action handle for directly exercising bounded wait phases."""
+
+    is_cancel_requested = False
+
+    @staticmethod
+    def publish_feedback(_feedback):
+        pass
+
+
 class FakeWorld(Node):
     """Stands in for the SBC-backed bridge and for Nav2's behavior server."""
 
-    def __init__(self):
+    def __init__(self, localization_needs_a_request=False):
         super().__init__('behavior_server')
         self.callbacks = ReentrantCallbackGroup()
         # Dock observer, exactly as the SBC would publish it.
@@ -76,6 +90,10 @@ class FakeWorld(Node):
         self.localization_restore_delay = 0.0
         self._dock_state_clear_at = 0.0
         self._localization_resume_at = 0.0
+        self.epoch_valid = True
+        self.recovery_required = False
+        self.seed_stamp_ns = 1
+        self.recovery_stage = 'ready'
         self.localization_enabled = True
         # Odometry is its own stream, stoppable independently of /amcl_pose.
         # A gate that infers "parked" must not be satisfiable by telemetry that
@@ -94,6 +112,15 @@ class FakeWorld(Node):
         # Stands in for AMCL's no-motion update service. A real stationary AMCL
         # publishes nothing until asked, which is why the manager asks.
         self.nomotion_update_calls = 0
+        # Off by default so the existing tests keep their free-running pose
+        # stream. Switched on, the fake behaves the way AMCL actually does: a
+        # stationary robot produces a pose ONLY in response to
+        # /request_nomotion_update, and a moving one produces them from its own
+        # motion. Without this the manager's refresh policy is untestable --
+        # poses arrive on a timer regardless of whether anyone asked, so
+        # "stopped asking" and "still asking" look identical from the outside.
+        self.localization_needs_a_request = localization_needs_a_request
+        self._nomotion_requested = False
         # Scripted AMCL output. The defaults are a tight fix at the configured
         # dock pose; tests move them to exercise the docked variance allowance.
         self.position_variance = 0.01
@@ -127,6 +154,7 @@ class FakeWorld(Node):
 
     def _nomotion_update(self, _request, response):
         self.nomotion_update_calls += 1
+        self._nomotion_requested = True
         return response
 
     def _hardware_undock(self, goal_handle):
@@ -236,6 +264,10 @@ class FakeWorld(Node):
         state.link_connected = True
         state.telemetry_age = 0.0
         state.hardware_state_valid = True
+        state.odom_epoch_valid = self.epoch_valid
+        state.localization_recovery_required = self.recovery_required
+        state.localization_seed_stamp_ns = self.seed_stamp_ns
+        state.localization_recovery_stage = self.recovery_stage
         state.charge_state = self.charge_state
         state.charge_state_valid = True
         state.motors_enabled = self.motors_enabled
@@ -282,7 +314,18 @@ class FakeWorld(Node):
             odom.twist.twist.angular.z = self.odom_angular_z
             self.odom_pub.publish(odom)
 
-        if self.localization_enabled:
+        publish_pose = self.localization_enabled
+        if publish_pose and self.localization_needs_a_request:
+            moving = (
+                abs(self.odom_linear_x) > STATIONARY_LINEAR_LIMIT or
+                abs(self.odom_angular_z) > STATIONARY_ANGULAR_LIMIT)
+            if not moving:
+                # One pose per request, then silence again -- update_min_d and
+                # update_min_a keep a real stationary AMCL quiet otherwise.
+                publish_pose = self._nomotion_requested
+                self._nomotion_requested = False
+
+        if publish_pose:
             pose = PoseWithCovarianceStamped()
             pose.header.stamp = now
             pose.header.frame_id = 'map'
@@ -309,7 +352,9 @@ def wait_until(predicate, timeout=5.0):
     return False
 
 
-def _build_harness(extra_parameter_overrides=()):
+def _build_harness(
+        extra_parameter_overrides=(), localization_needs_a_request=False,
+        wait_for_initial_localization=True):
     rclpy.init()
     parameter_overrides = [
         Parameter('dock_pose_configured', value=True),
@@ -328,7 +373,8 @@ def _build_harness(extra_parameter_overrides=()):
     ]
     parameter_overrides.extend(extra_parameter_overrides)
     manager = DockManager(parameter_overrides=parameter_overrides)
-    world = FakeWorld()
+    world = FakeWorld(
+        localization_needs_a_request=localization_needs_a_request)
     nodes = [
         world,
         PathNode('controller_server', publish_topics=['/input/nav_controller']),
@@ -359,21 +405,37 @@ def _build_harness(extra_parameter_overrides=()):
         executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
-    assert wait_until(lambda: manager._snapshot().dock_pose_valid)
+    if wait_for_initial_localization:
+        assert wait_until(lambda: manager._snapshot().dock_pose_valid)
+    else:
+        assert wait_until(
+            lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().command_path_valid)
     yield manager, world, nodes[-1]
-    executor.shutdown(timeout_sec=3.0)
+    # Stop callback workers and the spin thread before destroying ROS handles.
+    assert executor.shutdown(timeout_sec=3.0), 'executor failed to drain callbacks'
+    spin_thread.join(timeout=2.0)
+    assert not spin_thread.is_alive(), 'executor spin thread survived shutdown'
+    executor.remove_node(manager)
     manager.destroy_node()
     for node in nodes:
+        executor.remove_node(node)
         node.destroy_node()
-    spin_thread.join(timeout=2.0)
-    rclpy.shutdown()
+    rclpy.try_shutdown()
 
 
 @pytest.fixture
 def harness():
     """Run the manager against the shared default fake world."""
     yield from _build_harness()
+
+
+@pytest.fixture
+def no_pose_harness():
+    """Start with an AMCL that stays silent until an explicit request."""
+    yield from _build_harness(
+        localization_needs_a_request=True,
+        wait_for_initial_localization=False)
 
 
 @pytest.fixture
@@ -403,6 +465,7 @@ def send_undock(client_node, validation_mode=True):
 
 def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     _manager, world, client_node = harness
+    requests_before_initialization = world.nomotion_update_calls
     initialize = client_node.create_client(
         InitializeDockPose, '/patrolbot/initialize_dock_pose')
     assert initialize.wait_for_service(timeout_sec=1.0)
@@ -412,6 +475,13 @@ def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     response = wait_future(initialize.call_async(request), timeout=3.0)
     assert response.success
     assert response.code == InitializeDockPose.Response.OK
+    assert wait_until(
+        lambda: world.nomotion_update_calls > requests_before_initialization)
+    requests_after_initialization = world.nomotion_update_calls
+    time.sleep(0.4)
+    assert requests_after_initialization == requests_before_initialization + 1
+    assert world.nomotion_update_calls == requests_after_initialization, (
+        'the guarded initializer duplicated its /initialpose-triggered update')
 
     goal_handle = send_undock(client_node)
     assert goal_handle.accepted
@@ -563,34 +633,104 @@ def test_readiness_separates_undock_readiness_from_docking_inhibition(harness):
     assert manager._snapshot().redock_inhibited
 
 
-def test_docked_localization_is_refreshed_while_idle(harness):
-    """
-    PB-AUDIT-026: a stationary AMCL must still be asked, or readiness lies.
+def test_docked_state_never_triggers_background_localization_requests(
+        no_pose_harness):
+    """No telemetry condition may autonomously restart AMCL resampling."""
+    manager, world, _client_node = no_pose_harness
+    assert manager._localization is None
+    time.sleep(0.4)
+    assert world.nomotion_update_calls == 0
 
-    Without this the docked pose is permanently older than `sensor_timeout` and
-    idle readiness reports "localization invalid" — the blocker the operator saw
-    on the dashboard — even though the precheck's own forced refresh clears it.
-    """
+    world.odom_enabled = False
+    time.sleep(0.4)
+    assert world.nomotion_update_calls == 0
+
+    world.odom_enabled = True
+    world.odom_linear_x = 0.25
+    time.sleep(0.4)
+    assert world.nomotion_update_calls == 0
+
+    world.odom_linear_x = 0.0
+    world.fault_flags = 1 << 8
+    time.sleep(0.4)
+    assert world.nomotion_update_calls == 0
+
+
+@pytest.mark.parametrize('phase', ('precheck', 'localization', 'handoff'))
+def test_each_explicit_phase_dispatches_at_most_five_updates(
+        no_pose_harness, phase):
+    manager, world, _client_node = no_pose_harness
+    world.localization_enabled = False
+    assert wait_until(manager._localization_update_client.service_is_ready)
+    goal = PassiveGoal()
+
+    if phase == 'precheck':
+        ok, _reason = manager._wait_for_precheck(goal, 'test')
+    elif phase == 'localization':
+        ok = manager._wait_for_localization(goal, 1.4, 'test')
+    else:
+        ok, _reason = manager._wait_for_handoff(goal, 7, 1.4, 'test')
+
+    assert not ok
+    assert world.nomotion_update_calls == 5
+
+
+def test_explicit_precheck_stops_requesting_after_a_valid_fresh_pose(
+        no_pose_harness):
+    manager, world, _client_node = no_pose_harness
+    assert wait_until(manager._localization_update_client.service_is_ready)
+
+    ok, reason = manager._wait_for_precheck(PassiveGoal(), 'test')
+
+    assert ok, reason
+    assert world.nomotion_update_calls == 1
+
+
+def test_one_initialpose_event_dispatches_at_most_one_update(no_pose_harness):
+    manager, world, client_node = no_pose_harness
+    world.localization_enabled = False
+    publisher = client_node.create_publisher(
+        PoseWithCovarianceStamped, '/initialpose', 10)
+    assert wait_until(lambda: publisher.get_subscription_count() >= 1)
+    publisher.publish(PoseWithCovarianceStamped())
+
+    assert wait_until(lambda: world.nomotion_update_calls == 1)
+    time.sleep(0.5)
+    assert world.nomotion_update_calls == 1
+    assert manager._localization is None
+
+
+def test_spin_never_forces_a_no_motion_update(harness):
     manager, world, _client_node = harness
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
-    baseline = world.nomotion_update_calls
-    assert wait_until(lambda: world.nomotion_update_calls > baseline + 2)
-    assert manager._snapshot().localization_fresh
-
-
-def test_localization_is_not_refreshed_once_clear_of_the_dock(harness):
-    """Away from the dock, motion is what updates AMCL. Do not poll it."""
-    manager, world, _client_node = harness
-    assert wait_until(lambda: world.nomotion_update_calls > 0)
     world.dock_state = 'CLEAR_CONFIRMED'
+    world.motors_enabled = True
     assert wait_until(
         lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
-    # Let any request already in flight land before sampling the counter.
-    time.sleep(0.5)
-    settled = world.nomotion_update_calls
-    time.sleep(1.0)
-    assert world.nomotion_update_calls == settled
+    requests_before_spin = world.nomotion_update_calls
+
+    ok, reason = manager._run_spin(PassiveGoal(), 7, 0.25, 'test')
+
+    assert ok, reason
+    assert world.nomotion_update_calls == requests_before_spin
+
+
+def test_published_parked_readiness_does_not_relax_motion_precheck(harness):
+    manager, world, client_node = harness
+    seen = []
+    client_node.create_subscription(
+        DockReadiness, '/patrolbot/dock_readiness',
+        lambda message: seen.append(message), 10)
+    world.localization_enabled = False
+    timeout = manager.get_parameter('sensor_timeout').value
+
+    assert wait_until(
+        lambda: bool(seen) and seen[-1].localization_age > timeout,
+        timeout=2.0)
+    assert seen[-1].localization_valid
+    assert not seen[-1].localization_fresh
+    assert seen[-1].ready_for_undock
+    assert not precheck_ready(manager), (
+        'physical motion precheck accepted the parked freshness exception')
 
 
 def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
@@ -969,3 +1109,65 @@ def test_an_encoder_fault_voids_the_parked_allowance(harness):
     time.sleep(timeout * 2)
     assert not manager._snapshot().localization_valid, (
         'a degraded encoder still propped up the parked allowance')
+
+
+def test_epoch_recovery_blocks_readiness_despite_fresh_stationary_inputs(harness):
+    manager, world, _ = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    world.recovery_required = True
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not manager._snapshot().localization_valid
+    assert not precheck_ready(manager)
+
+
+def test_new_epoch_seed_barrier_rejects_cached_parked_amcl(harness):
+    manager, world, _ = harness
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+    world.localization_enabled = False
+    time.sleep(.15)
+    world.seed_stamp_ns = world.get_clock().now().nanoseconds
+    assert wait_until(lambda: not manager._snapshot().localization_valid)
+    assert manager._snapshot().hardware_state_valid
+    assert not manager._snapshot().dock_pose_valid
+    world.localization_enabled = True
+    assert wait_until(lambda: manager._snapshot().localization_valid)
+
+
+@pytest.mark.parametrize('stage', ['wait-operator-seed', 'wait-amcl-pose'])
+def test_operator_seed_can_recover_epoch_without_releasing_motion(harness, stage):
+    manager, world, client_node = harness
+    world.recovery_required = True
+    world.recovery_stage = stage
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert manager._snapshot(for_pose_initialization=True).hardware_state_valid
+    assert not precheck_ready(manager)
+    initialize = client_node.create_client(
+        InitializeDockPose, '/patrolbot/initialize_dock_pose')
+    assert initialize.wait_for_service(timeout_sec=1.0)
+    request = InitializeDockPose.Request()
+    request.dock_id = 'main_charger'
+    request.operator_authorized = True
+    response = wait_future(initialize.call_async(request), timeout=3.0)
+    assert response.success
+    assert not manager._snapshot().hardware_state_valid
+    assert not manager._snapshot().localization_valid
+    assert world.undock_calls == 0
+
+
+@pytest.mark.parametrize('stage', [
+    'wait-origin', 'wait-reset', 'wait-first-odometry', 'wait-amcl-tf', 'failed:activate'])
+def test_operator_seed_cannot_bypass_unfinished_origin_reset(harness, stage):
+    manager, world, _ = harness
+    world.recovery_required = True
+    world.recovery_stage = stage
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not manager._snapshot(for_pose_initialization=True).hardware_state_valid
+
+
+def test_operator_seed_cannot_bypass_invalid_origin(harness):
+    manager, world, _ = harness
+    world.recovery_required = True
+    world.recovery_stage = 'wait-operator-seed'
+    world.epoch_valid = False
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not manager._snapshot(for_pose_initialization=True).hardware_state_valid

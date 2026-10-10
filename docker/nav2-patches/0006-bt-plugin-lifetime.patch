@@ -1,0 +1,18 @@
+--- a/nav2_bt_navigator/CMakeLists.txt
++++ b/nav2_bt_navigator/CMakeLists.txt
+@@ -71,6 +71,15 @@
+ add_library(nav2_navigate_through_poses SHARED src/navigators/navigate_through_poses.cpp)
+ ament_target_dependencies(nav2_navigate_through_poses ${dependencies})
+ 
++# Executors can retain action-entity weak references after navigator teardown.
++# Their control-block vtables live in these plugin libraries. Keep the code
++# mapped until process exit, even after the plugin loader releases its handle.
++# This retains code mappings, not navigator instances or active action goals.
++if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
++  target_link_options(nav2_navigate_to_pose_navigator PRIVATE "LINKER:-z,nodelete")
++  target_link_options(nav2_navigate_through_poses PRIVATE "LINKER:-z,nodelete")
++endif()
++
+ pluginlib_export_plugin_description_file(nav2_core navigator_plugins.xml)
+ rclcpp_components_register_nodes(${library_name} "nav2_bt_navigator::BtNavigator")
+ 

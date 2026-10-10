@@ -8,10 +8,14 @@
   <license>MIT</license>
 
   <depend>rclpy</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>rcl_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>patrolbot_interfaces</depend>
   <exec_depend>tf2_ros</exec_depend>

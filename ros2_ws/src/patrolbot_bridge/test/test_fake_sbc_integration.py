@@ -1107,3 +1107,19 @@ def test_explicit_origin_change_holds_commands_until_new_seed(harness):
         seed_harness(bridge, client)
         assert reset.call_count == 1
         assert client.fake_amcl.navigation_transitions[-2:] == [1, 2]
+
+
+def test_close_dock_returns_survive_without_changing_bearings(harness):
+    """Keep measured dock returns and reject invalid slots without re-aiming."""
+    fake, _bridge, client_node, _executor = harness
+    seen = _subscribe_to_scan(client_node)
+    assert wait_until(lambda: len(seen) > 0)
+    fake.laser_field = '0.099,0.124,0.15,0.249,0.25,0.1,0,nan,-1,inf,'
+    seen.clear()
+    scan = _scan_from(seen, field_count=10, second_range=0.124)
+    assert len(scan.ranges) == 10
+    assert scan.range_min == pytest.approx(0.10)
+    assert scan.angle_increment == pytest.approx(math.pi / 9)
+    assert list(scan.ranges[1:6]) == pytest.approx(
+        [0.124, 0.15, 0.249, 0.25, 0.1])
+    assert all(math.isinf(scan.ranges[i]) for i in [0, 6, 7, 8, 9])

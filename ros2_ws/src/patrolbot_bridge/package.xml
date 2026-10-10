@@ -8,6 +8,8 @@
   <license>MIT</license>
 
   <depend>rclpy</depend>
+  <depend>action_msgs</depend>
+  <exec_depend>ament_index_python</exec_depend>
   <depend>lifecycle_msgs</depend>
   <depend>rcl_interfaces</depend>
   <depend>sensor_msgs</depend>

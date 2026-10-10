@@ -232,6 +232,10 @@ class DockManager(Node):
             response.code = InitializeDockPose.Response.REJECTED
             response.message = 'explicit operator authorization is required'
             return self._finish_initialization_response(response, started)
+        if (self._base_state is None or getattr(self._base_state, 'map_id', '') != 'cmuq-floor2'):
+            response.code = InitializeDockPose.Response.PRECONDITION_FAILED
+            response.message = 'dock pose is valid only on confirmed Floor 2'
+            return self._finish_initialization_response(response, started)
         configured_id = str(self.get_parameter('dock_id').value)
         if request.dock_id != configured_id:
             response.code = InitializeDockPose.Response.REJECTED
@@ -439,6 +443,9 @@ class DockManager(Node):
     def _goal_callback(self, request):
         if not request.operator_authorized:
             self.get_logger().error('Undock goal rejected: operator authorization absent.')
+            return GoalResponse.REJECT
+        if self._base_state is None or getattr(self._base_state, 'map_id', '') != 'cmuq-floor2':
+            self.get_logger().error('Undock refused: dock coordinates belong to Floor 2.')
             return GoalResponse.REJECT
         if request.dock_id != self.get_parameter('dock_id').value:
             self.get_logger().error(
@@ -1057,7 +1064,9 @@ class DockManager(Node):
                 'SAFETY GATE OVERRIDE: accepting a degenerate AMCL planar '
                 'covariance',
                 throttle_duration_sec=10.0)
-        configured = bool(self.get_parameter('dock_pose_configured').value)
+        configured = (bool(self.get_parameter('dock_pose_configured').value)
+                      and self._base_state is not None
+                      and getattr(self._base_state, 'map_id', '') == 'cmuq-floor2')
         at_dock = False
         if configured:
             yaw = self._yaw(pose.pose.pose.orientation)

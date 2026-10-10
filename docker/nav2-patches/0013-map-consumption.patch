@@ -1,0 +1,95 @@
+--- a/nav2_amcl/include/nav2_amcl/amcl_node.hpp
++++ b/nav2_amcl/include/nav2_amcl/amcl_node.hpp
+@@ -232,6 +232,8 @@
+   // Let amcl update samples without requiring motion
+   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr nomotion_update_srv_;
+   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr initial_pose_tf_ready_srv_;
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_consumed_srv_;
++  std::string consumed_map_identity_;
+   /*
+    * @brief Request an AMCL update even though the robot hasn't moved
+    */
+--- a/nav2_amcl/src/amcl_node.cpp
++++ b/nav2_amcl/src/amcl_node.cpp
+@@ -346,6 +346,8 @@
+   initial_guess_srv_.reset();
+   nomotion_update_srv_.reset();
+   initial_pose_tf_ready_srv_.reset();
++  map_consumed_srv_.reset();
++  consumed_map_identity_.clear();
+   initial_pose_sub_.reset();
+   laser_scan_connection_.disconnect();
+   tf_listener_.reset();  //  listener may access lase_scan_filter_, so it should be reset earlier
+@@ -1505,6 +1507,9 @@
+   }
+   handleMapMessage(*msg);
+   first_map_received_ = true;
++  consumed_map_identity_ = std::to_string((*msg).info.map_load_time.sec) + ":" +
++    std::to_string((*msg).info.map_load_time.nanosec) + ":" +
++    std::to_string((*msg).info.width) + ":" + std::to_string((*msg).info.height);
+ }
+ 
+ void
+@@ -1665,6 +1670,14 @@
+ void
+ AmclNode::initServices()
+ {
++  map_consumed_srv_ = create_service<std_srvs::srv::Trigger>(
++    "~/map_consumed",
++    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++      std::lock_guard<std::recursive_mutex> lock(mutex_);
++      response->success = active_ && first_map_received_ && !consumed_map_identity_.empty();
++      response->message = consumed_map_identity_;
++    });
+   // Read-only consumer readiness: TF publication/discovery alone cannot prove
+   // this AMCL instance has history covering a subsequent operator pose seed.
+   initial_pose_tf_ready_srv_ = create_service<std_srvs::srv::Trigger>(
+--- a/nav2_costmap_2d/include/nav2_costmap_2d/static_layer.hpp
++++ b/nav2_costmap_2d/include/nav2_costmap_2d/static_layer.hpp
+@@ -38,6 +38,8 @@
+ #ifndef NAV2_COSTMAP_2D__STATIC_LAYER_HPP_
+ #define NAV2_COSTMAP_2D__STATIC_LAYER_HPP_
+ 
++#include "std_srvs/srv/trigger.hpp"
++
+ #include <mutex>
+ #include <string>
+ #include <vector>
+@@ -181,6 +183,8 @@
+     double * max_x,
+     double * max_y);
+ 
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_consumed_srv_;
++  std::string consumed_map_identity_;
+   std::string global_frame_;  ///< @brief The global frame for the costmap
+   std::string map_frame_;  /// @brief frame that map is located in
+ 
+--- a/nav2_costmap_2d/plugins/static_layer.cpp
++++ b/nav2_costmap_2d/plugins/static_layer.cpp
+@@ -93,6 +93,15 @@
+     throw std::runtime_error{"Failed to lock node"};
+   }
+ 
++  map_consumed_srv_ = node->create_service<std_srvs::srv::Trigger>(
++    "~/" + name_ + "/map_consumed",
++    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++      std::lock_guard<Costmap2D::mutex_t> lock(*getMutex());
++      response->success = enabled_ && map_received_ && map_received_in_update_bounds_ &&
++        current_ && !map_buffer_ && !consumed_map_identity_.empty();
++      response->message = consumed_map_identity_;
++    });
+   map_sub_ = node->create_subscription<nav_msgs::msg::OccupancyGrid>(
+     map_topic_, map_qos,
+     std::bind(&StaticLayer::incomingMap, this, std::placeholders::_1));
+@@ -243,6 +252,9 @@
+   }
+ 
+   map_frame_ = new_map.header.frame_id;
++  consumed_map_identity_ = std::to_string(new_map.info.map_load_time.sec) + ":" +
++    std::to_string(new_map.info.map_load_time.nanosec) + ":" +
++    std::to_string(new_map.info.width) + ":" + std::to_string(new_map.info.height);
+ 
+   x_ = y_ = 0;
+   width_ = size_x_;

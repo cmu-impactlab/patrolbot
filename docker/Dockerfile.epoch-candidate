@@ -18,18 +18,21 @@ COPY docker/nav2-patches/0009-amcl-post-seed-scan.patch /tmp/epoch-post-seed-sca
 COPY docker/nav2-patches/0010-manager-callback-lifetime.patch /tmp/epoch-manager-callback.patch
 COPY docker/nav2-patches/0011-startup-shutdown-order.patch /tmp/epoch-startup-shutdown.patch
 COPY docker/nav2-patches/0012-amcl-tf-readiness.patch /tmp/epoch-tf-readiness.patch
+COPY docker/nav2-patches/0013-map-consumption.patch /tmp/map-consumption.patch
+COPY docker/nav2-patches/0014-navigation-idle.patch /tmp/navigation-idle.patch
+COPY docker/nav2-patches/0015-navigation-configure-first.patch /tmp/navigation-configure-first.patch
 ADD --checksum=sha256:bcdf575c86250d63007595c992b9c5785c3ec907e897b79abfb4fc7eacbd1129 https://codeload.github.com/ros-navigation/navigation2/tar.gz/refs/tags/1.3.12 /tmp/epoch-nav2.tar.gz
 ARG PATROLBOT_SOURCE_SHA256
 RUN test -n "${PATROLBOT_SOURCE_SHA256}" && \
     test "$(bash /opt/patrolbot_ws/source-tree-digest.sh /opt/patrolbot_ws)" = "${PATROLBOT_SOURCE_SHA256}"
 WORKDIR /opt/patrolbot_ws
 # Rebuilt packages must not retain installed scripts from the previous source.
-RUN for package in patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation; do \
+RUN for package in patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_docking_plugins patrolbot_navigation; do \
       rm -rf "build/$package" "install/$package"; \
     done && \
     . /opt/patrolbot_ws/install/setup.sh && \
     MAKEFLAGS=-j2 colcon build --parallel-workers 1 \
-      --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation \
+      --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_docking_plugins patrolbot_navigation \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 WORKDIR /opt/patrolbot_nav2
 RUN tar xzf /tmp/epoch-nav2.tar.gz -C src --strip-components=1 navigation2-1.3.12/nav2_behaviors navigation2-1.3.12/nav2_bt_navigator navigation2-1.3.12/nav2_route navigation2-1.3.12/nav2_regulated_pure_pursuit_controller navigation2-1.3.12/nav2_lifecycle_manager && \
@@ -43,6 +46,9 @@ RUN tar xzf /tmp/epoch-nav2.tar.gz -C src --strip-components=1 navigation2-1.3.1
     patch --batch -d src -p1 < /tmp/epoch-manager-callback.patch && \
     patch --batch -d src -p1 < /tmp/epoch-startup-shutdown.patch && \
     patch --batch -d src -p1 < /tmp/epoch-tf-readiness.patch && \
+    patch --batch -d src -p1 < /tmp/map-consumption.patch && \
+    patch --batch -d src -p1 < /tmp/navigation-idle.patch && \
+    patch --batch -d src -p1 < /tmp/navigation-configure-first.patch && \
     . /opt/patrolbot_ws/install/setup.sh && \
     MAKEFLAGS=-j2 colcon build --parallel-workers 1 \
       --packages-select nav2_costmap_2d nav2_amcl nav2_behaviors nav2_bt_navigator nav2_route nav2_regulated_pure_pursuit_controller nav2_lifecycle_manager \

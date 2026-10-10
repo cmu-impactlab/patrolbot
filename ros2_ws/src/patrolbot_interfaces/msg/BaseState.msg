@@ -57,3 +57,8 @@ bool localization_recovery_required
 string localization_recovery_stage
 # Seed barrier used to reject a cached AMCL result from before recovery.
 int64 localization_seed_stamp_ns
+
+# Last map verified in map_server and AMCL; empty means unknown, not Floor 2.
+string map_id
+string map_revision
+int64 map_activated_stamp_ns

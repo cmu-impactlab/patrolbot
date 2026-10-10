@@ -15,6 +15,7 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>patrolbot_bridge</exec_depend>
   <exec_depend>patrolbot_dock_manager</exec_depend>
   <exec_depend>patrolbot_docking_plugins</exec_depend>
   <exec_depend>patrolbot_interfaces</exec_depend>

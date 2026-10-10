@@ -66,6 +66,7 @@ services:
       - --params-file
       - /opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml
     volumes:
+      - patrolbot-state:/var/lib/patrolbot
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
 
@@ -164,8 +165,12 @@ services:
       SDL_JOYSTICK_DISABLE_UDEV: "1"
     command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
     volumes:
+      - patrolbot-state:/var/lib/patrolbot:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/navigation:/root/.ros/log
       - /dev/input:/dev/input:rw
     device_cgroup_rules:
       - "c 13:* rw"
+
+volumes:
+  patrolbot-state:

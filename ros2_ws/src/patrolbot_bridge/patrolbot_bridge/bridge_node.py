@@ -167,19 +167,17 @@ class PatrolBotBridge(Node):
         self.RECV_TIMEOUT = float(
             self.get_parameter('receive_timeout').value)
 
-        # Laser returns closer than this are dropped (footprint-clearance filter).
-        # Set just ABOVE the 0.22 m robot_radius so the only returns removed are
-        # ones at/inside the robot's own body envelope (true self-occlusion, or an
-        # object already in collision) — these can never be a navigable obstacle
-        # and, left in, they sit permanently inside the footprint and deadlock
-        # DWB's ObstacleFootprintCritic ("No valid trajectories out of 20").
-        # 0.25 = 0.22 footprint + 0.03 margin for the laser's 0.037 m forward
-        # mount offset. DO NOT raise much higher: real obstacles can legitimately
-        # be at 0.25-0.40 m (verified live 2026-06-27 — symmetric ~0.25 m returns
-        # that looked like self-occlusion turned out to be REAL nearby objects;
-        # they vanished when the robot was repositioned). A larger value would
-        # blind the robot to real close obstacles.
-        self.SCAN_RANGE_MIN = 0.25
+        # Near-range measurement floor, not a robot-footprint filter. Passive
+        # dock telemetry on 2026-10-10 contains real forward returns at 0.12-
+        # 0.25 m; deleting those blinds localization and obstacle consumers.
+        # Retain them with a 0.10 m floor. This is a software acceptance cutoff,
+        # not a claim of calibrated sensor accuracy at every shorter distance.
+        # Body reflections must be characterized separately; never classify
+        # all nearby objects as self-occlusion using the navigation radius.
+        # Historical ~0.15 m frame reflections near -75 degrees caused DWB
+        # footprint deadlock; lowering this floor requires live verification
+        # of those bearings, not an invented angular mask.
+        self.SCAN_RANGE_MIN = 0.10
 
         self.sock = None
         self.sock_lock = threading.Lock()
@@ -725,11 +723,9 @@ class PatrolBotBridge(Node):
             # /scan — preserve reported acquisition age plus local queue age.
             # After startup/reconnect, older scans may precede TF history and
             # must wait/drop in consumers; never re-stamp them to hide the gap.
-            # Returns below SCAN_RANGE_MIN are dropped to +inf (invalid): the SICK
-            # grazes the robot's own frame near -75 deg (~0.15 m, fixed self-
-            # occlusion), which otherwise paints a permanent phantom obstacle
-            # inside the 0.22 m footprint and blocks Nav2. Anything closer than the
-            # robot radius is inside the footprint anyway.
+            # Preserve close external returns down to the measurement floor.
+            # A navigation footprint is not a valid radial sensor mask: the
+            # scanner's offset and actual chassis geometry differ from it.
             raw_ranges = []
             ranges = []
             # patrolbot_server.cpp writes every reading with a trailing comma;
@@ -1094,6 +1090,11 @@ class PatrolBotBridge(Node):
             seed_stamp = self._epoch.recovery._seed_ns or 0
         msg = BaseState()
         msg.localization_seed_stamp_ns = seed_stamp
+        with self._epoch.lock:
+            active_map = self._epoch.maps.active if self._epoch.maps else None
+            msg.map_id = active_map['map_id'] if active_map else ''
+            msg.map_revision = active_map['revision'] if active_map else ''
+            msg.map_activated_stamp_ns = self._epoch.map_activated_stamp_ns
         msg.odom_epoch = origin
         msg.odom_epoch_generation = origin_generation
         msg.odom_epoch_valid = origin_valid
@@ -1157,6 +1158,9 @@ class PatrolBotBridge(Node):
     def _control_service(self, command, request_id, response):
         started = time.monotonic()
         response.request_id = request_id
+        with self._epoch.lock:
+            if self._epoch.maps and self._epoch.maps.hold:
+                return self._fill_control_response(response, None, 3, 'map localization owns the robot', started)
         if not valid_request_id(request_id):
             return self._fill_control_response(
                 response, None, 1, 'request_id must be a canonical UUID',

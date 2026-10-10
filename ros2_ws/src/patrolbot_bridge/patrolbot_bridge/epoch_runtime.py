@@ -14,9 +14,10 @@ from std_srvs.srv import Trigger
 
 from .epoch_recovery import EpochRecovery
 from .odom_epoch import OdomEpochGuard
+from .map_runtime import MapRuntimeMixin
 
 
-class EpochRuntime:
+class EpochRuntime(MapRuntimeMixin):
     def __init__(self, node):
         self.node = node
         self.lock = threading.RLock()
@@ -45,6 +46,7 @@ class EpochRuntime:
             ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
         self._accepted_seed_stamp = None
         self._pending_pose = None
+        self._pending_pose_received_at = None
         self._parameters = node.create_client(
             SetParametersAtomically, '/amcl/set_parameters_atomically')
         self._get = node.create_client(GetState, '/amcl/get_state')
@@ -55,6 +57,7 @@ class EpochRuntime:
             PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', self.seed_accepted, 10)
         self._pose_sub = node.create_subscription(
             PoseWithCovarianceStamped, '/amcl_pose', self.pose, 10)
+        self.init_maps()
         self._timer = node.create_timer(.05, self.tick)
 
     def begin_session(self):
@@ -69,14 +72,15 @@ class EpochRuntime:
             if session == self.guard.session:
                 self.withdraw()
 
-    def withdraw(self):
+    def withdraw(self, reset_odometry=True):
         self.first_tf_ns = None
         self._tf_generation += 1
         self._tf_ready_at = None
         self._tf_ready_since_ns = None
-        with self.node._pose_lock:
-            self.node._pose_received = False
-            self.node._pose_at = 0.0
+        if reset_odometry:
+            with self.node._pose_lock:
+                self.node._pose_received = False
+                self.node._pose_at = 0.0
 
     def announce(self, session, epoch):
         with self.lock:
@@ -114,6 +118,8 @@ class EpochRuntime:
     @property
     def commands_allowed(self):
         with self.lock:
+            if self.map_hold:
+                return False
             if not (self.guard.ready and not self.recovery.required
                     and self._navigation_ready and self.first_tf_ns is not None):
                 return False
@@ -180,6 +186,10 @@ class EpochRuntime:
 
     @property
     def status_stage(self):
+        if self._map_error:
+            return "failed:map-state"
+        if self.maps and self.maps.hold:
+            return "map:" + self.maps.stage
         if (self.recovery.stage == EpochRecovery.WAIT_SEED and
                 self.first_tf_ns is None):
             return 'wait-first-odometry'
@@ -205,6 +215,10 @@ class EpochRuntime:
 
     def seed(self, message):
         with self.lock:
+            if self.maps and self.maps.hold and (
+                    self.maps.stage != 'wait-localization' or
+                    self.stamp_ns(message) != self.maps.seed_stamp):
+                return
             pose = message.pose.pose
             q = pose.orientation
             values = (pose.position.x, pose.position.y, pose.position.z,
@@ -234,6 +248,7 @@ class EpochRuntime:
                     p.orientation.w, *message.pose.covariance)):
                 return
             self._pending_pose = message
+            self._pending_pose_received_at = time.monotonic()
             self._accept_pending_pose()
 
     def seed_accepted(self, message):
@@ -287,16 +302,26 @@ class EpochRuntime:
                 'deactivate': 4, 'cleanup': 2,
                 'configure': 1, 'activate': 3}[phase]
             self._future = self._change.call_async(request)
-        self._deadline = (None if phase == 'wait-localization-manager' else
-                          time.monotonic() + 10.0)
+        self._deadline = time.monotonic() + (2.0 if phase == 'wait-localization-manager' else 10.0)
 
     def tick(self):
         with self.lock:
             self.recovery.observe_clock(self.node.get_clock().now().nanoseconds)
             token = self.recovery.token
             self._poll_tf_readiness()
+            self.poll_navigation_idle()
+            if self.tick_map():
+                return
+            self.tick_startup_map()
             if self._future is not None:
                 if not self._future.done():
+                    if (self._phase == 'wait-localization-manager' and
+                            self._deadline is not None and time.monotonic() > self._deadline):
+                        # Read-only readiness can be retried; lifecycle mutations cannot.
+                        self._localization_active.remove_pending_request(self._future)
+                        self._future.cancel()
+                        self._future = None
+                        return
                     if (self._deadline is not None and
                             time.monotonic() > self._deadline and not self._failed):
                         self._failed = True

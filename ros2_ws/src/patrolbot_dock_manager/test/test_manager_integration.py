@@ -258,6 +258,8 @@ class FakeWorld(Node):
             self._localization_resume_at = 0.0
         now = self.get_clock().now().to_msg()
         state = BaseState()
+        state.map_id = "cmuq-floor2"
+        state.map_revision = "test-floor2"
         state.header.stamp = now
         state.header.frame_id = 'base_link'
         state.session_generation = 7

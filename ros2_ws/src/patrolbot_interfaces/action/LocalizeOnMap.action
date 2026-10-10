@@ -1,0 +1,25 @@
+# Explicit operator request. map_id/revision must match the local catalog.
+string request_id
+string map_id
+string map_revision
+geometry_msgs/PoseWithCovariance pose
+bool operator_authorized
+---
+uint8 OK=0
+uint8 REJECTED=1
+uint8 FAILED=2
+uint8 CANCELED=3
+uint8 TIMEOUT=4
+string request_id
+uint8 code
+string message
+bool map_activated
+bool localized
+string active_map_id
+string active_map_revision
+---
+string request_id
+string stage
+bool map_activated
+string active_map_id
+string active_map_revision

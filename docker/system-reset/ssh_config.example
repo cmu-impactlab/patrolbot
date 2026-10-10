@@ -1,0 +1,11 @@
+Host patrolbot-reset-sbc
+    HostName 10.0.0.1
+    User ros
+    IdentityFile /home/ubuntu/.ssh/patrolbot-reset-ed25519
+    IdentitiesOnly yes
+    BatchMode yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile /home/ubuntu/patrolbot-support/system-reset/known_hosts
+    ConnectTimeout 5
+    ForwardAgent no
+    ClearAllForwardings yes

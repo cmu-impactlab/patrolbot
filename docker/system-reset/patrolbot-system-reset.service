@@ -1,0 +1,29 @@
+[Unit]
+Description=PatrolBot fixed-operation software reset supervisor
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=patrolbot-reset
+SupplementaryGroups=docker
+UMask=0007
+StateDirectory=patrolbot-system-reset
+RuntimeDirectory=patrolbot-system-reset
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 /home/ubuntu/patrolbot-repo/docker/system-reset/supervisor.py
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/patrolbot-system-reset /var/lib/patrolbot-system-reset
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+
+[Install]
+WantedBy=multi-user.target

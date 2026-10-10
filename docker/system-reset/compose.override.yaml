@@ -1,0 +1,10 @@
+# Opt-in only, after supervisor commissioning. Mount the directory so a
+# supervisor restart can replace the socket without leaving a stale bind mount.
+services:
+  web-bridge:
+    environment:
+      PATROLBOT_RESET_SOCKET: /run/patrolbot-system-reset/supervisor.sock
+    volumes:
+      - /run/patrolbot-system-reset:/run/patrolbot-system-reset:ro
+    group_add:
+      - "${PATROLBOT_RESET_GID:?Set the host patrolbot-reset group ID}"

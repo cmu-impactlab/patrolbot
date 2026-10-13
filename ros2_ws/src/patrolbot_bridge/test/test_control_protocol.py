@@ -40,9 +40,9 @@ def test_motor_enable_is_decoupled_from_charging():
     """Permitted only where dock contact is impossible, never by a timer."""
     assert motor_enable_allowed('CLEAR_CONFIRMED', False)
     assert motor_enable_allowed('UNKNOWN', False)
-    assert not motor_enable_allowed('DOCKED_CONFIRMED', False)
-    assert not motor_enable_allowed('DEPARTING', False)
-    assert not motor_enable_allowed('FAULT_STOPPED', False)
+    assert motor_enable_allowed('DOCKED_CONFIRMED', False)
+    assert motor_enable_allowed('DEPARTING', False)
+    assert motor_enable_allowed('FAULT_STOPPED', False)
     # E-stop always refuses, and there is no post-release back door left.
     assert not motor_enable_allowed('CLEAR_CONFIRMED', True)
 

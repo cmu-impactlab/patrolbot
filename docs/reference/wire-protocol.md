@@ -128,6 +128,7 @@ so a bridge that predates them ignores them instead of logging a parse error on 
 DRIVE:<linear>:<angular>
 CHARGE_RELEASE:<request_id>
 MOTOR_ENABLE:<request_id>
+MOTOR_DISABLE:<request_id>
 DOCK_RESET:<request_id>
 UNDOCK:<request_id>:<clearance_m>:<speed_mps>:<timeout_s>:<validation_mode>
 UNDOCK_CANCEL:<target_request_id>
@@ -137,9 +138,11 @@ UNDOCK_CANCEL:<target_request_id>
 see [Safety Chain](../safety/safety-chain.md).
 
 !!! warning "`DRIVE` never enables motors"
-    Motor enable is a separate, deliberate operation with stationary, released, E-stop-clear,
-    fault-free, fresh-telemetry preconditions. A `DRIVE` line sent to disabled motors does
-    nothing.
+    Motor power is a separate, deliberate operation independent of dock,
+    localization, motion and LiDAR readiness. Enabling preserves the E-stop;
+    controls serialize competing hardware operations and report actual readback.
+    A `DRIVE` line sent to disabled motors does nothing. Enabling never releases
+    charging or grants movement authority.
 
 ### Request identifiers
 

@@ -218,10 +218,8 @@ void DockObserver::update(const UndockInputs& inputs,
       break;
 
     case DOCK_DOCKED_CONFIRMED:
-      // A robot whose charging has genuinely stopped with no contact evidence is
-      // no longer docked. This is the same observational test as from UNKNOWN,
-      // and matches the permission the drive gate granted before this change.
-      if (!debounced_charging_ && !contact && still) {
+      // Manual departure can leave raw FLOAT latched after charger voltage is gone.
+      if (!dock_power_confirmed && !contact && still) {
         state_ = DOCK_CLEAR_CONFIRMED;
         redock_pending_ = false;
       }

@@ -543,7 +543,7 @@ def test_velocity_is_not_replayed_after_hardware_reconnect(harness):
         for session, line in fake.received)
 
 
-def test_motor_enable_is_refused_while_the_dock_state_says_docked(harness):
+def test_motor_enable_is_independent_of_dock_state(harness):
     fake, bridge, client_node, _executor = harness
     with fake._lock:
         fake.estop_pressed = False
@@ -556,11 +556,8 @@ def test_motor_enable_is_refused_while_the_dock_state_says_docked(harness):
     future = client.call_async(request)
     assert wait_until(future.done, timeout=2.0)
     response = future.result()
-    assert not response.success
-    assert response.code == MotorEnable.Response.PRECONDITION_FAILED
-    # Refused before it ever reached the wire.
-    assert not any(
-        line.startswith('MOTOR_ENABLE:') for _session, line in fake.received)
+    assert response.success and response.motors_enabled
+    assert any(line.startswith('MOTOR_ENABLE:') for _session, line in fake.received)
 
 
 def test_hardware_undock_reports_success_with_motors_left_enabled(harness):

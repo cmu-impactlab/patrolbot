@@ -116,8 +116,7 @@ DriveDisposition classifyDrive(double linear, double angular,
                                unsigned int critical_fault_mask,
                                bool undock_active, bool lidar_ready);
 
-// MOTOR_ENABLE is a decoupled maintenance command: it never releases charging
-// and is refused whenever the robot may still be connected to the dock.
+// MOTOR_ENABLE never releases charging or authorizes movement.
 bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed,
                         bool lidar_ready);
 

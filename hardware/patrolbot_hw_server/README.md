@@ -18,7 +18,9 @@ Power commands are refused unless
 `PATROLBOT_LIDAR_POWER_COMMISSIONED=1`, the scanner is configured, fresh base
 telemetry proves the robot stationary, and no local hardware/undock operation
 is pending. The Pi additionally serializes navigation and map operations.
-Readiness gates ordinary DRIVE, UNDOCK, MOTOR_ENABLE, and CHARGE_RELEASE. Zero
+Readiness gates ordinary DRIVE, UNDOCK, and CHARGE_RELEASE. Motor-power
+requests remain available independently of dock, localization and LiDAR state;
+enabling preserves E-stop and confirmed hardware readback. Zero
 DRIVE and UNDOCK_CANCEL retain their existing paths. Losing scans clears drive
 targets and aborts active undock; ON never restores an old motion target.
 

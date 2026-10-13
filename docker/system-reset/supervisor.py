@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed-operation, fail-closed host supervisor for a PatrolBot software reset."""
+"""Fixed-operation host supervisor for an explicit emergency software reset."""
 from __future__ import annotations
 
 import json
@@ -15,9 +15,6 @@ import time
 import uuid
 from pathlib import Path
 
-ROOT = Path('/home/ubuntu/patrolbot-repo')
-PREFLIGHT = ROOT / 'docker/system-reset/preflight.py'
-OVERRIDE = ROOT / 'docker/system-reset/compose.override.yaml'
 SSH_CONFIG = Path('/home/ubuntu/patrolbot-support/system-reset/ssh_config')
 DB = Path('/var/lib/patrolbot-system-reset/status.sqlite3')
 SOCKET = Path('/run/patrolbot-system-reset/supervisor.sock')
@@ -44,20 +41,10 @@ class ProductionAdapter:
             raise ResetError(f'fixed command failed ({result.returncode})')
         return result.stdout
 
-    def capture(self, post=False):
-        code = PREFLIGHT.read_text(encoding='utf-8')
-        shell = ('source /opt/ros/jazzy/setup.bash && '
-                 'source /opt/patrolbot_ws/install/setup.bash && python3 -' +
-                 (' --post-reset' if post else ''))
-        raw = self.run(['/usr/bin/docker', 'exec', '-i', 'patrolbot-navigation',
-                        'bash', '-lc', shell], timeout=18, input_text=code)
-        try:
-            value = json.loads(raw.strip().splitlines()[-1])
-        except (ValueError, IndexError) as exc:
-            raise ResetError('read-only ROS capture was malformed') from exc
-        if not isinstance(value, dict):
-            raise ResetError('read-only ROS capture was malformed')
-        return value
+    def stop_pi(self):
+        # Closing the old bridge session invokes the SBC's stop/motor-disable path.
+        self.run(['/usr/bin/docker', 'stop', '--time', '10',
+                  'patrolbot-bridge', 'patrolbot-navigation', 'patrolbot-bringup'], timeout=60)
 
     def restart_sbc(self):
         # Target and remote command are fixed deployment capabilities. SSH keys
@@ -66,40 +53,17 @@ class ProductionAdapter:
                  timeout=25)
 
     def capability(self):
-        if not all(path.exists() for path in (PREFLIGHT, ROOT / 'docker/.env',
-                                               ROOT / 'docker/docker-compose.yml', OVERRIDE, SSH_CONFIG)):
-            return False
-        try:
-            load_state = self.run(['/usr/bin/ssh', '-F', str(SSH_CONFIG), 'patrolbot-reset-sbc', 'status'], timeout=8).strip()
-            if load_state != 'LoadState=loaded':
-                return False
-            self.run(['/usr/bin/docker', 'compose', '--env-file', str(ROOT / 'docker/.env'),
-                      '-f', str(ROOT / 'docker/docker-compose.yml'), '-f', str(OVERRIDE), 'config', '--quiet'], timeout=20)
-        except ResetError:
-            return False
-        return True
+        # Availability describes installed management access, not robot health.
+        return Path('/usr/bin/docker').is_file() and SSH_CONFIG.is_file()
 
     def restart_pi(self):
-        # Restart the existing commissioned containers, preserving their exact
-        # images/configuration/mounts. A reset must never pull or deploy a tag.
-        self.run(['/usr/bin/docker', 'restart', '--time', '30',
-                  *('patrolbot-' + name for name in CORE)], timeout=180)
-        self.run(['/usr/bin/docker', 'restart', '--time', '30',
-                  'patrolbot-web-bridge'], timeout=90)
+        # Start the existing containers; never pull, recreate or change configuration.
+        self.run(['/usr/bin/docker', 'restart', '--time', '10',
+                  *('patrolbot-' + name for name in CORE)], timeout=90)
 
-    def wait_healthy(self):
-        deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
-            names = ['patrolbot-' + name for name in (*CORE, 'web-bridge')]
-            containers = json.loads(self.run(['/usr/bin/docker', 'inspect', *names], timeout=10))
-            if len(containers) == len(names) and all(
-                c['State']['Running'] and not c['State'].get('Restarting', False) and
-                (c['State'].get('Health', {}).get('Status') == 'healthy'
-                 if c['Name'].lstrip('/') != 'patrolbot-web-bridge' else True)
-                for c in containers):
-                return
-            time.sleep(3)
-        raise ResetError('Pi services did not become healthy before deadline')
+    def restart_web_bridge(self):
+        self.run(['/usr/bin/docker', 'restart', '--time', '10',
+                  'patrolbot-web-bridge'], timeout=60)
 
 
 class Store:
@@ -142,8 +106,16 @@ class Supervisor:
         # A process restart cannot prove whether an interrupted command ran.
         latest = self.store.latest()
         if latest and latest[1] in ('accepted', 'running'):
-            self.store.write(latest[0], 'uncertain', 'supervisor restarted during reset; operator-local reconciliation required')
+            self.store.write(latest[0], 'uncertain', 'supervisor restarted during reset; outcome unknown; no automatic retry')
         self.available = (self.adapter.capability() if hasattr(self.adapter, 'capability') else True)
+        if not self.available:
+            threading.Thread(target=self._recover_capability, daemon=True).start()
+
+    def _recover_capability(self):
+        # Retry local installation checks without blocking status replies.
+        while not self.available:
+            time.sleep(5)
+            self.available = self.adapter.capability()
 
     @staticmethod
     def response(row):
@@ -155,7 +127,7 @@ class Supervisor:
     def submit(self, request_id):
         if not self.available:
             return {'ok': False, 'state': 'unavailable',
-                    'message': 'reset prerequisites are not verified on this host'}
+                    'message': 'reset management tools or access configuration are unavailable'}
         if not isinstance(request_id, str) or not REQUEST_RE.fullmatch(request_id):
             return {'ok': False, 'state': 'rejected', 'message': 'request_id must be a UUID'}
         with self.lock:
@@ -165,51 +137,24 @@ class Supervisor:
             latest = self.store.latest()
             if latest and latest[1] in ('accepted', 'running'):
                 return {'ok': False, 'state': 'busy', 'message': 'another reset is in progress'}
-            if latest and latest[1] == 'uncertain':
-                return {'ok': False, 'state': 'uncertain', 'message':
-                        'operator-local reconciliation is required before another reset'}
-            self.store.write(request_id, 'accepted', 'accepted; waiting for safety capture')
+            self.store.write(request_id, 'accepted', 'accepted; restarting robot software')
             threading.Thread(target=self.execute, args=(request_id,), daemon=True).start()
             return self.response(self.store.get(request_id))
 
     def execute(self, request_id):
-        self.store.write(request_id, 'running', 'capturing fresh docked and stationary state')
-        reset_started = False
-        try:
-            before = self.adapter.capture(False)
-            time.sleep(1)
-            repeated = self.adapter.capture(False)
-            if before.get('safe') is not True or repeated.get('safe') is not True:
-                raise ResetError('fresh docked, stationary, motors-disabled interlock failed')
-            if before.get('odom_epoch') != repeated.get('odom_epoch'):
-                raise ResetError('origin changed during preflight; reset refused')
-            old_epoch = repeated.get('odom_epoch')
-            if not isinstance(old_epoch, str) or not old_epoch:
-                raise ResetError('origin identity unavailable before reset')
-            reset_started = True
-            self.adapter.restart_sbc()
-            self.adapter.restart_pi()
-            self.adapter.wait_healthy()
-            deadline = time.monotonic() + 180
-            after = None
-            while time.monotonic() < deadline:
-                try:
-                    after = self.adapter.capture(True)
-                    if (after.get('safe') is True and after.get('odom_epoch') and
-                            after['odom_epoch'] != old_epoch):
-                        self.store.write(request_id, 'succeeded',
-                                         'services healthy; new origin recovery hold confirmed; '
-                                         'a fresh operator pose seed is required before navigation')
-                        return
-                except ResetError:
-                    pass
-                time.sleep(3)
-            raise ResetError('reset outcome or new-origin recovery hold could not be confirmed')
-        except ResetError as exc:
-            self.store.write(request_id, 'uncertain' if reset_started else 'failed', str(exc))
-        except Exception as exc:  # Keep unexpected partial outcomes non-repeatable.
-            self.store.write(request_id, 'uncertain' if reset_started else 'failed',
-                             f'unexpected failure: {type(exc).__name__}')
+        self.store.write(request_id, 'running', "stopping old software and restarting services on both robot computers")
+        errors = []
+        for name in ('stop_pi', 'restart_sbc', 'restart_pi', 'restart_web_bridge'):
+            try:
+                getattr(self.adapter, name)()
+            except Exception as exc:
+                detail = str(exc) if isinstance(exc, ResetError) else type(exc).__name__
+                errors.append(f'{name}: {detail}')
+        if errors:
+            self.store.write(request_id, 'uncertain', '; '.join(errors))
+        else:
+            self.store.write(request_id, 'succeeded',
+                             'Software restart operations completed. Robot readiness is checked separately.')
 
 
 class Handler(socketserver.StreamRequestHandler):
@@ -228,7 +173,7 @@ class Handler(socketserver.StreamRequestHandler):
         if op == 'current' and set(value) == {'op'}:
             if not self.server.supervisor.available:
                 return self.reply({'ok': False, 'state': 'unavailable',
-                                   'message': 'reset prerequisites are not verified on this host'})
+                                   'message': 'reset management tools or access configuration are unavailable'})
             return self.reply(self.server.supervisor.response(self.server.supervisor.store.latest()))
         if op == 'status' and set(value) in ({'op'}, {'op', 'request_id'}):
             rid = value.get('request_id')

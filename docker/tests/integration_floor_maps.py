@@ -27,39 +27,35 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'diagnostics/localization'))
+from geometry import MapRaster
 
 
 def synthetic_scene(entry):
-    # Find a white free-space square, and ray-cast the actual canonical raster.
-    import numpy as np
-    yaml = Path(entry['path'])
-    image = next(line.split(':', 1)[1].strip() for line in yaml.read_text().splitlines()
-                 if line.startswith('image:'))
-    data = (yaml.parent / image).read_bytes()
-    pixels = np.frombuffer(data[-entry['width']*entry['height']:], dtype=np.uint8).reshape(entry['height'],entry['width'])[::-1]
-    free = pixels > 250
-    chosen = None
-    margin = 12
-    for y in range(margin,entry['height']-margin,15):
-        for x in range(margin,entry['width']-margin,15):
-            if free[y-margin:y+margin,x-margin:x+margin].all():
-                chosen = x,y; break
-        if chosen: break
+    raster=MapRaster(entry['path'],entry['map_id'],entry['revision'])
+    chosen=None
+    margin=12
+    for y in range(margin,raster.height-margin,15):
+        for x in range(margin,raster.width-margin,15):
+            if all(raster.grid_cell(cx,cy)=='free'
+                   for cy in range(y-margin,y+margin)
+                   for cx in range(x-margin,x+margin)):
+                chosen=x,y;break
+        if chosen:break
     assert chosen, 'no synthetic free-space test pose'
-    x,y = chosen; resolution=entry['resolution']
+    x,y=chosen;resolution=raster.resolution;origin=raster.origin
+    lx,ly=(x+.5)*resolution,(y+.5)*resolution
+    wx=origin[0]+lx*math.cos(origin[2])-ly*math.sin(origin[2])
+    wy=origin[1]+lx*math.sin(origin[2])+ly*math.cos(origin[2])
     ranges=[]
     for i in range(361):
-        # Match the existing launch laser roll and x offset; test data only.
-        angle=math.pi/2-i*math.pi/360
-        distance=resolution
-        while distance < 15.:
-            cx=int(x+.5+.037/resolution+math.cos(angle)*distance/resolution)
-            cy=int(y+.5+math.sin(angle)*distance/resolution)
-            if not (0<=cx<entry['width'] and 0<=cy<entry['height']) or not free[cy,cx]: break
-            distance+=resolution/2
-        ranges.append(str(distance))
-    return (entry['origin'][0]+(x+.5)*resolution,
-            entry['origin'][1]+(y+.5)*resolution, ','.join(ranges))
+        hit=raster.raycast((wx+.037,wy),math.pi/2-i*math.pi/360,15.)
+        ranges.append(str(hit['distance']) if hit['classification']=='occupied' else 'nan')
+    print(json.dumps({'event':'fixture_identity','map':raster.identity,'pose':[wx,wy,0.]}),flush=True)
+    return wx,wy,','.join(ranges)
 
 
 launch=bridge=fake=executor=None
@@ -75,6 +71,30 @@ try:
     log=log_path.open('w')
     launch=subprocess.Popen(['ros2','launch','patrolbot_navigation','bringup.launch.py'],
         stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+    from rosidl_runtime_py.convert import message_to_ordereddict
+    from sensor_msgs.msg import LaserScan
+    from nav_msgs.msg import Odometry
+    from nav2_msgs.msg import ParticleCloud
+    from diagnostic_msgs.msg import DiagnosticArray
+    from tf2_msgs.msg import TFMessage
+    capture_path=Path(os.environ.get('LOCALIZATION_CAPTURE','/tmp/floor-capture.jsonl'))
+    capture_file=capture_path.open('w')
+    capture_lock=threading.Lock()
+    def capture(topic,message):
+        record={'event':'sensor','topic':topic,'received_monotonic_ns':time.monotonic_ns(),
+                'message':message_to_ordereddict(message)}
+        with capture_lock:
+            capture_file.write(json.dumps(record,allow_nan=True)+'\n');capture_file.flush()
+    captures=[]
+    for topic,kind in [('/scan',LaserScan),('/scan_unfiltered_candidate',LaserScan),
+                       ('/odom',Odometry),('/amcl_pose',PoseWithCovarianceStamped),
+                       ('/initialpose',PoseWithCovarianceStamped),
+                       ('/amcl/accepted_initial_pose',PoseWithCovarianceStamped),
+                       ('/particle_cloud',ParticleCloud),('/diagnostics',DiagnosticArray),
+                       ('/tf',TFMessage),('/tf_static',TFMessage)]:
+        # Reliable subscribers cannot receive the bridge's best-effort scans.
+        qos=QoSProfile(depth=100,durability=DurabilityPolicy.TRANSIENT_LOCAL) if topic=='/tf_static' else qos_profile_sensor_data
+        captures.append(node.create_subscription(kind,topic,lambda m,t=topic:capture(t,m),qos))
     seed_events=[]
     def observed_seed(message):
         seed_events.append((bridge._epoch.stamp_ns(message),
@@ -134,6 +154,10 @@ try:
             time.monotonic()-bridge._epoch._navigation_idle_at<.4,timeout=10)
         goal=LocalizeOnMap.Goal();goal.request_id=str(uuid4());goal.map_id=map_id
         goal.map_revision=entry['revision'];goal.operator_authorized=True
+        capture_file.write(json.dumps({'event':'transaction','request_id':goal.request_id,
+            'map_id':map_id,'revision':entry['revision'],
+            'fixture':MapRaster(entry['path'],map_id,entry['revision']).identity,
+            'recovery_epoch':str(getattr(bridge._epoch,'epoch','unavailable'))})+'\n')
         goal.pose.pose.position.x=x;goal.pose.pose.position.y=y;goal.pose.pose.orientation.w=1.
         for index in (0,7,35): goal.pose.covariance[index]=.01
         seed_count=len(seed_events)
@@ -167,6 +191,9 @@ try:
             break
         assert wait_until(result.done,timeout=115), (bridge._epoch._map_step,bridge._epoch.maps.error)
         response=result.result().result
+        capture_file.write(json.dumps({'event':'result','request_id':goal.request_id,
+            'response':message_to_ordereddict(response),'seed_stamp':bridge._epoch.maps.seed_stamp,
+            'accepted_seed_stamp':bridge._epoch._accepted_seed_stamp})+'\n');capture_file.flush()
         if '--quality-reject' in sys.argv:
             assert response.code == response.FAILED and not response.localized
             assert response.message.startswith('LOCALIZATION_QUALITY_REJECTED:')

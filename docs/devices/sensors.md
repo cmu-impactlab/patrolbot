@@ -21,8 +21,28 @@ The primary perception sensor: localization and obstacle avoidance both depend o
 | **Protocol (to ROS)** | SBC parses ARIA ranges → `LASER:r1,...,rN` text line → bridge → `/scan` |
 | **ROS topic** | `/scan` (`sensor_msgs/LaserScan`), frame `laser_frame` |
 | **Field of view** | 180° forward: `angle_min = -π/2`, `angle_max = +π/2` |
+| **Beam count** | **181 beams at exactly 1.0°** — ARIA's `lms2xx` defaults |
 | **Range** | `range_min = 0.25 m`, `range_max = 8.0 m` |
 | **Update rate** | ~20 Hz |
+
+!!! danger "`LaserStartDegrees -55` / `LaserEndDegrees 55` do **not** describe this laser"
+    `patrolbot-sh.p` contains two laser sections, and the constrained ±55° / 1.0° angles belong
+    to **`Section Laser 2 parameters`** — `LaserType urg` on `COM5` with
+    `LaserAutoConnect false`, the low URG-04LX that has never connected on this robot
+    (PB-AUDIT-005). The SICK is **`Section Laser parameters`** (Laser_1): `LaserType lms2xx`,
+    `COM3`, `LaserAutoConnect true`, and its `LaserStartDegrees`, `LaserEndDegrees` and
+    `LaserIncrement` are all **blank**, so ARIA's `lms2xx` defaults apply — `"180"` degrees and
+    `"one"` degree increment, i.e. 181 beams spanning −90°…+90°.
+
+    Reading the wrong section produces a very convincing false diagnosis: that the bridge
+    stretches 111 beams across 180° and hands AMCL walls at wrong bearings. It does not. This
+    misreading has already been made once, on 2026-08-21, from a repo copy of `patrolbot-sh.p`
+    that had been head-truncated so only the Laser_2 block was visible. The full file has since
+    been restored.
+
+    Live confirmation, `diagnostics/session1/oneshot/_scan.yaml`: `angle_increment` reads
+    `0.01745329238474369` rad = 0.99999999°. The bridge computes `angle_increment` as
+    `π/(N−1)`, so that header is only reachable at `N = 181`.
 
 ### Calibration / mounting
 
@@ -33,10 +53,39 @@ The primary perception sensor: localization and obstacle avoidance both depend o
   undone).
 - **Footprint-clearance cutoff:** the bridge forces any return `< 0.25 m` to `+inf`. Do not raise
   this much higher; nearby real obstacles can appear in the 0.25-0.40 m range.
+- **`LaserIgnore` does nothing.** Laser_1 carries `LaserIgnore -76--72 72-76`, which reads like
+  the self-occlusion at the robot's own frame is already suppressed at the ARIA level. It is
+  not. `ArLaser::laserProcessReadings` only calls `setIgnoreThisReading(true)` — the reading
+  stays in the list with its real range — and `patrolbot_server.cpp` iterates
+  `laser->getRawReadings()` emitting **every** range without ever consulting
+  `getIgnoreThisReading()`. Those beams reach `/scan` intact. The bridge's `SCAN_RANGE_MIN`
+  cutoff above is what actually suppresses them, which is why its comment names the same
+  ~−75° grazing angle. Changing `LaserIgnore` in `patrolbot-sh.p` will not change `/scan`.
 
 !!! success "Orientation confirmed"
     `roll = π` is the correct static TF for the flipped SICK mount. It is consistent with
     `LaserFlipped=true` in `patrolbot-sh.p`; older `yaw = π` notes are stale.
+
+!!! danger "The scan geometry is two errors that cancel — never fix one half alone"
+    The chain is load-bearing and easy to break by "cleaning up" either end:
+
+    1. `LaserFlipped=true` makes ARIA negate both its offset and its increment
+       (`ArLMS2xx::laserCheckParams`), so the loop in `ArLMS2xx` walks
+       `atDeg = +90, +89, … −90`. **`getRawReadings()` therefore returns the sweep
+       left-to-right, index 0 = +90°.**
+    2. The SBC sends **ranges only** — ARIA's per-reading angles are discarded on the wire.
+    3. The bridge assigns index 0 to `angle_min = −90°`, which **mirrors the scan**.
+    4. The `roll = π` static TF **mirrors it back**.
+
+    Net result is correct, and the robot's walls line up. But there is no single place that is
+    "right": step 3 is wrong, step 4 compensates. Anyone who makes the bridge honour ARIA's
+    angle order, or sets `LaserFlipped false`, or drops the roll to match a physical
+    measurement, will silently mirror every scan the robot takes — which localizes plausibly in
+    a symmetric corridor and catastrophically everywhere else.
+
+    This also applies to the un-deployed rosaria2 work in issue #34, which records a conflicting
+    mount pose of `x = -0.422, yaw = -20.22°`. That is **not** what runs today; the live static
+    TF reads back `x = 0.037, y = 0, z = 0.2, roll = π`. Reconcile the two before deploying it.
 
 ### Failure conditions
 

@@ -18,6 +18,7 @@ from std_srvs.srv import Trigger, Empty
 from .epoch_recovery import EpochRecovery
 from .map_catalog import ActiveMapStore, MapCatalog
 from .map_transaction import MapTransaction
+from .pose_innovation import innovation, propagate, valid_planar_covariance
 
 
 def map_identity(grid):
@@ -75,6 +76,8 @@ class MapRuntimeMixin:
         with self.lock:
             self._navigation_states[name] = any(s.status in (1, 2, 3) for s in msg.status_list)
             self._navigation_status = any(self._navigation_states.values())
+            if self._lidar_reseed and self._navigation_status:
+                self.cancel_lidar_navigation()
             if self._navigation_status and self.maps and self.maps.hold:
                 self.maps.fail('navigation requested during map recovery')
 
@@ -100,13 +103,20 @@ class MapRuntimeMixin:
             self._navigation_probe_at = now
             self._navigation_probe = self._navigation_idle.call_async(Trigger.Request())
 
+    def navigation_idle_problem(self):
+        if not self._navigation_idle.service_is_ready():
+            return 'wait-navigation-idle-service-unavailable'
+        if self._navigation_idle_at is None or not 0 <= time.monotonic()-self._navigation_idle_at <= .5:
+            return 'wait-navigation-idle-confirmation'
+        return ''
+
     @property
     def map_hold(self):
         return bool(self._map_error or self.maps is None or self.maps.active is None or self.maps.hold)
 
     def _map_accept(self, request):
         with self.lock:
-            if (self._map_error or self.maps is None or self._map_goal is not None
+            if (not self.node._lidar_ready() or self._map_error or self.maps is None or self._map_goal is not None
                     or self._future is not None or self._map_future is not None or not self.guard.ready
                     or self.recovery.stage not in (EpochRecovery.READY, EpochRecovery.WAIT_SEED)
                     or self._navigation_status or self._navigation_idle_at is None
@@ -118,7 +128,7 @@ class MapRuntimeMixin:
                       *request.pose.covariance)
             if (not all(math.isfinite(v) for v in values)
                     or abs(sum(v*v for v in (q.x,q.y,q.z,q.w)) - 1) > 1e-3
-                    or any(request.pose.covariance[i] <= 0 for i in (0,7,35))):
+                    or not valid_planar_covariance(request.pose.covariance)):
                 return GoalResponse.REJECT
             now = time.monotonic()
             with self.node._state_lock, self.node._pose_lock, self.node._control_lock, self.node._undock_goal_lock:
@@ -138,6 +148,7 @@ class MapRuntimeMixin:
             self._accepted_seed_stamp = None
             self._pending_pose = None
             self._map_request = request
+            self._pose_anchor = None
             self._map_deadline = now + 110.
             self._map_refresh_requested = False
             self._map_refresh_started = None
@@ -174,6 +185,7 @@ class MapRuntimeMixin:
                     result.request_id = goal.request.request_id
                     result.code = (result.OK if tx.stage == 'ready' else
                                    result.CANCELED if goal.is_cancel_requested else
+                                   result.SEED_INNOVATION_REJECTED if tx.error.startswith('SEED_INNOVATION_REJECTED:') else
                                    result.TIMEOUT if (tx.error == 'map localization timed out' or
                                        tx.error.startswith('LOCALIZATION_UPDATE_TIMEOUT:')) else result.FAILED)
                     result.message = tx.error or 'Map activated and localization verified'
@@ -219,6 +231,8 @@ class MapRuntimeMixin:
         tx = self.maps
         if tx is None or tx.stage in ('idle', 'ready'): return False
         if tx.stage == 'failed': return True
+        if not self.node._lidar_ready():
+            tx.fail('fresh ready LiDAR lost during map recovery'); return True
         if (not self.guard.ready or self.guard.session != tx.token.session
                 or self.recovery.token != tx.token.origin):
             tx.fail('origin/transport changed during map recovery'); return True
@@ -303,6 +317,7 @@ class MapRuntimeMixin:
                     elif self._map_localization_fresh():
                         tx.advance(token, 'verify-costmaps')
                         self._navigation_ready = True
+                        self._anchor_localization()
                     elif not self._map_refresh_requested:
                         # Nav2 activation/inflation can outlast pose freshness.
                         # Ask for one new scan update, never another pose seed.
@@ -357,7 +372,35 @@ class MapRuntimeMixin:
             variance = pose.pose.covariance[index]
             if not math.isfinite(variance) or not 0 < variance <= .25:
                 return f'{axis} variance {variance:.9g} outside (0, 0.25]'
+        if getattr(self._map_request, 'measured_pose', False):
+            try:
+                if self.guard.epoch != self.maps.token.origin.epoch:
+                    raise ValueError('odometry origin mismatch')
+                start = self._odom_history.at(self.maps.seed_stamp, self.guard.epoch)
+                end = self._odom_history.at(self.stamp_ns(pose), self.guard.epoch)
+                seed = self._map_request.pose.pose
+                q = seed.orientation
+                requested = (seed.position.x, seed.position.y, math.atan2(
+                    2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
+                predicted = propagate(requested, start, end)
+                problem = innovation(predicted, self.planar_pose(pose), .10, math.radians(3))
+                if problem:
+                    problem = f'requested={requested} ' + problem
+            except ValueError as exc:
+                problem = str(exc)
+            if problem:
+                self.maps.fail('SEED_INNOVATION_REJECTED: ' + problem + '; motion hold retained')
+                self._navigation_ready = False
+                return self.maps.error
         return ''
+
+    def _anchor_localization(self):
+        if self._pending_pose is None or not valid_planar_covariance(self._pending_pose.pose.covariance):
+            raise ValueError('localization covariance unavailable or invalid')
+        self._pose_anchor = (self.planar_pose(self._pending_pose),
+                             self.stamp_ns(self._pending_pose), self.guard.epoch,
+                             self._odom_history.at(self.stamp_ns(self._pending_pose), self.guard.epoch))
+        self._localization_fault = ""
 
     def _map_localization_fresh(self):
         return not self._map_localization_problem()
@@ -378,6 +421,7 @@ class MapRuntimeMixin:
         if not problem:
             self.maps.advance(self.maps.token, 'verify-costmaps')
             self._navigation_ready = True
+            self._anchor_localization()
             self._map_refresh_deadline = None
         elif ' variance ' in problem:
             pose = self._pending_pose

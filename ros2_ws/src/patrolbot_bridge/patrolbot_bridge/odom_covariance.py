@@ -67,6 +67,8 @@ class OdomCovariance:
         and back is two metres of accumulated error, not zero.
         """
         pose = (float(x), float(y), float(th))
+        if not all(math.isfinite(value) for value in pose):
+            return
         if self._previous_pose is None:
             # The sample that establishes the reference measures nothing. At
             # ~22.7 Hz it costs at most one frame of motion.

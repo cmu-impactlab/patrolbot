@@ -5,6 +5,7 @@ import time
 from unittest.mock import Mock, patch
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from builtin_interfaces.msg import Time
 
 from patrolbot_bridge.epoch_recovery import EpochRecovery
 from patrolbot_bridge.epoch_runtime import EpochRuntime
@@ -65,9 +66,12 @@ class Node:
         self._pose_received = True
         self._pose_at = time.monotonic()
         self._odom_tf_timeout = .5
+        self._vx = self._vth = 0.
+        self.cmd_vel_callback = Mock()
         self._odom_validator = Mock()
         self._odom_covariance = Mock()
         self.logger = Mock()
+        self._lidar_ready = Mock(return_value=True)
         self.clients = {}
 
     def create_client(self, _, name):
@@ -81,7 +85,10 @@ class Node:
         return args
 
     def get_clock(self):
-        return NS(now=lambda: NS(nanoseconds=self.now))
+        if hasattr(self, "runtime") and self.runtime.guard.epoch:
+            self.runtime._odom_history.add(self.now, (0.,0.,0.), self.runtime.guard.epoch)
+        return NS(now=lambda: NS(nanoseconds=self.now,
+            to_msg=lambda: Time(sec=self.now // 1_000_000_000, nanosec=self.now % 1_000_000_000)))
 
     def get_logger(self):
         return self.logger
@@ -93,9 +100,12 @@ def setup_runtime():
     # real-ROS-type coordinator tests in test_map_runtime.py.
     with patch.object(EpochRuntime, 'init_maps'), patch.object(EpochRuntime, 'poll_navigation_idle'):
         runtime = EpochRuntime(node)
+    node.runtime = runtime
     runtime._map_error = ''
     runtime.maps = NS(active={'map_id': 'cmuq-floor2'}, stage='idle', hold=False)
     runtime.poll_navigation_idle = Mock()
+    runtime._navigation_status = False
+    runtime._navigation_idle_at = time.monotonic()
     session = runtime.begin_session()
     runtime.announce(session, A)
     return node, runtime, session
@@ -160,6 +170,38 @@ def test_ack_before_seed_callback_is_correlated_without_republishing_seed():
     for _ in range(3):
         runtime.tick()
     assert runtime.commands_allowed
+
+
+def test_lidar_loss_blocks_seed_without_withdrawing_odometry():
+    node, runtime, _ = setup_runtime()
+    reset(runtime)
+    node._lidar_ready.return_value = False
+    assert runtime.streams_allowed and not runtime.commands_allowed
+    node.now = 110
+    runtime.seed(pose(110))
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+    node._lidar_ready.return_value = True
+    runtime.seed(pose(110))
+    assert runtime.recovery.stage == EpochRecovery.WAIT_POSE
+
+
+def test_power_barrier_drops_cached_localization_preserves_estimators():
+    node, runtime, _ = setup_runtime()
+    reset(runtime)
+    old = runtime.recovery.token
+    node.now = 110; runtime.seed(pose(110))
+    node.now = 120; runtime.seed_accepted(pose(110)); runtime.pose(pose(120))
+    node.now = 200; runtime.require_lidar_seed()
+    assert runtime.recovery.token != old
+    assert runtime.streams_allowed and not runtime.commands_allowed
+    assert node._pose_received
+    node._odom_covariance.reset.assert_not_called()
+    runtime.pose(pose(120))
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+    assert all(client.calls[-1].goal_info.stamp.nanosec == 200 for client in runtime._lidar_cancel)
+    runtime._navigation_status = True
+    node.now = 210; runtime.seed(pose(210))
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
 
 
 def test_reset_refusal_keeps_streams_and_commands_held():

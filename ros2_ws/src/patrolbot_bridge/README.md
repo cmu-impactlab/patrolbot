@@ -89,3 +89,29 @@ wait; `/odom` remains receipt-stamped. Invalid age metadata drops only the scan.
 Legacy servers remain readable, with a throttled warning about missing age.
 Transport latency is not measured by this extension. See the canonical
 [wire protocol](../../../docs/reference/wire-protocol.md).
+
+
+## LiDAR power service
+
+`/patrolbot/set_lidar_power` (`SetLidarPower`) sends an explicit target and UUID
+through the existing SBC socket. `BaseState` reports `lidar_state`,
+`lidar_power_supported`, and `lidar_scan_age` in seconds (`-1` unavailable).
+Fresh READY scans can be usable even when power control is uncommissioned.
+OFF means commanded off; an accepted ON means STARTING until measured fresh
+scans arrive. No electrical power readback is claimed.
+
+Power changes require commissioned, fresh scanner state, fresh stationary base
+telemetry, no active map/undock/hardware control, and a fresh navigation-idle
+readback. The bridge establishes a motion hold and cancels old navigation
+before sending power control. Timeout/disconnect retains the hold until an
+explicit successful power recovery; cached or late replies cannot release it.
+A power transition discards old localization evidence without resetting
+odometry or stopping base telemetry. Fresh scans permit a new operator pose;
+movement still requires fresh accepted localization and existing re-arm gates.
+All nonzero DRIVE, motor-enable, undock and map admission share the scanner
+gate. Stop and undock cancellation remain available.
+
+Firmware boot-on, power wiring/readback, scanner serial reconnect and controller
+mapping require commissioning and supervised live acceptance. See
+`hardware/patrolbot_hw_server/README.md`; never enable the commissioning flag to
+work around an unknown physical mapping.

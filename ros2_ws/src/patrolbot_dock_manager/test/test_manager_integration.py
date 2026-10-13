@@ -94,6 +94,8 @@ class FakeWorld(Node):
         self.recovery_required = False
         self.seed_stamp_ns = 1
         self.recovery_stage = 'ready'
+        self.lidar_state = 'READY'
+        self.lidar_scan_age = 0.0
         self.localization_enabled = True
         # Odometry is its own stream, stoppable independently of /amcl_pose.
         # A gate that infers "parked" must not be satisfiable by telemetry that
@@ -266,6 +268,9 @@ class FakeWorld(Node):
         state.link_connected = True
         state.telemetry_age = 0.0
         state.hardware_state_valid = True
+        state.lidar_state = self.lidar_state
+        state.lidar_scan_age = self.lidar_scan_age
+        state.lidar_power_supported = False
         state.odom_epoch_valid = self.epoch_valid
         state.localization_recovery_required = self.recovery_required
         state.localization_seed_stamp_ns = self.seed_stamp_ns
@@ -1173,3 +1178,35 @@ def test_operator_seed_cannot_bypass_invalid_origin(harness):
     world.epoch_valid = False
     assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
     assert not manager._snapshot(for_pose_initialization=True).hardware_state_valid
+
+
+
+@pytest.mark.parametrize('lidar_state,scan_age', [
+    ('OFF', -1.), ('STARTING', -1.), ('UNKNOWN', -1.), ('FAULT', -1.),
+    ('READY', .6), ('READY', float('nan')),
+])
+def test_lidar_blocks_typed_pose_recovery_and_undock(harness, lidar_state, scan_age):
+    manager, world, client_node = harness
+    world.recovery_required = True
+    world.recovery_stage = 'wait-operator-seed'
+    world.lidar_state, world.lidar_scan_age = lidar_state, scan_age
+    assert wait_until(lambda: not manager._snapshot(for_pose_initialization=True).hardware_state_valid)
+    assert not manager._snapshot().hardware_state_valid
+    initialize = client_node.create_client(
+        InitializeDockPose, '/patrolbot/initialize_dock_pose')
+    assert initialize.wait_for_service(timeout_sec=1.0)
+    response = wait_future(initialize.call_async(InitializeDockPose.Request(
+        dock_id='main_charger', operator_authorized=True)), timeout=3.0)
+    assert not response.success
+    assert response.code == InitializeDockPose.Response.PRECONDITION_FAILED
+    assert world.nomotion_update_calls == 0
+    assert world.undock_calls == 0
+
+
+def test_localization_override_cannot_bypass_missing_lidar(harness_with_degenerate_override):
+    manager, world, _ = harness_with_degenerate_override
+    world.position_variance = world.cross_variance = world.yaw_variance = 0.0
+    world.lidar_state, world.lidar_scan_age = 'OFF', -1.
+    assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
+    assert not precheck_ready(manager)
+    assert world.undock_calls == 0

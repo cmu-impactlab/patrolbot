@@ -115,7 +115,7 @@ class SafetyContractTest(unittest.TestCase):
 
     def test_close_range_scan_filter_remains_pinned(self):
         bridge_text = BRIDGE_FILE.read_text(encoding='utf-8')
-        self.assertIn('SCAN_RANGE_MIN = 0.25', bridge_text)
+        self.assertIn('SCAN_RANGE_MIN = 0.10', bridge_text)
 
     def test_near_field_candidate_is_disabled_and_not_a_safety_source(self):
         bridge_text = BRIDGE_FILE.read_text(encoding='utf-8')

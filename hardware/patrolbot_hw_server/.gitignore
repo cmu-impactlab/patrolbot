@@ -2,3 +2,6 @@
 /patrolbot_commission_probe
 /tests/protocol_test
 /tests/undock_test
+/tests/scan_timing_test
+/tests/lidar_power_test
+/tests/encoder_capture_test

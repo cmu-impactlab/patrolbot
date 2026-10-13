@@ -33,8 +33,8 @@ The bridge decodes the five `FLAGS` integers and publishes a single `DiagnosticS
 | `stall_value` | `getStallValue()` | raw 16-bit stall word |
 | `left_motor_stall` | `stall & 0x0100` | **reliable** left motor stall |
 | `right_motor_stall` | `stall & 0x0001` | **reliable** right motor stall |
-| `left_bumper_bits_raw` | `(stall >> 9) & 0x7F` | reference only (see note) |
-| `right_bumper_bits_raw` | `(stall >> 1) & 0x7F` | reference only (see note) |
+| `left_bumper_bits_raw` | `(stall >> 9) & 0x7F` | legacy diagnostic name; includes the mapped front inputs (see note) |
+| `right_bumper_bits_raw` | `(stall >> 1) & 0x7F` | legacy diagnostic name; includes the mapped rear inputs (see note) |
 
 ### Diagnostic level logic
 
@@ -51,20 +51,25 @@ flowchart TB
 The alarm level is driven by e-stop state, fault flags, motor stalls, and
 motor-enable state. The bumper bit-fields are reported raw but do **not** affect the level.
 
-!!! note "Why bumpers are reference-only"
-    The ARIA stall value packs motor-stall bits (bit 0 of each byte, reliable) together with bits
-    that nominally carry bumper segments. On this PatrolBot-SH a reserved/unwired bit reads high
-    even when the robot is idle and healthy, so trusting the bumper bits would raise false alarms.
-    They are exposed for diagnostics but excluded from the alarm logic. If real bumpers are wired in
-    later, this is where to revisit the decoding.
+!!! note "Measured bumper mapping"
+    The earlier reserved/unwired-bit explanation was superseded by the July 23 physical
+    mapping of all six front and six rear panels: front bits 9–14 (`0x7e00`), rear
+    bits 1–6 (`0x007e`). The dock can hold the centre-front inputs `0x1800` active;
+    that reading is not by itself evidence of an unwired input. `BaseState` reports
+    front/rear group state only when `bumpers_valid` is true. The raw diagnostic names
+    retain their legacy left/right labels and do not imply the bumper wiring.
+    Direction-aware software holds consume the mapped groups separately from the
+    diagnostic alarm level. Firmware BumpStall and enabled-motion cutoff still need
+    acceptance under [robot issue #9](https://github.com/cmu-impactlab/patrolbot/issues/9).
 
 ## Stall word layout
 
 ```
 stall_value (16-bit):
-  high byte = LEFT wheel       low byte = RIGHT wheel
-  bit 0 of each byte = motor stall      (reliable → drives ERROR)
-  bits 1..7 of each byte = bumper segs  (raw, reference only)
+  bit 8 = LEFT motor stall     bit 0 = RIGHT motor stall
+  bits 9..14 = mapped FRONT bumper panels
+  bits 1..6  = mapped REAR bumper panels
+  other bits = raw only; not part of the commissioned bumper masks
 ```
 
 ## Failure conditions

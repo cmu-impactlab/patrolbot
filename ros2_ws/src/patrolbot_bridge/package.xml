@@ -3,8 +3,8 @@
 <package format="3">
   <name>patrolbot_bridge</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="ubuntu@todo.todo">ubuntu</maintainer>
+  <description>ROS 2 bridge for the PatrolBot ARIA hardware server</description>
+  <maintainer email="yousefh@andrew.cmu.edu">Yousef Hussein</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>

@@ -12,11 +12,26 @@ and a custom joystick teleop node.
 | File | Role |
 |------|------|
 | `launch/bringup.launch.py` | Launches the composed Nav2 stack (AMCL + RPP + collision monitor), joystick teleop, controller feedback, safety watchdog, and laser static TF |
-| `scripts/patrolbot_joy_teleop.py` | Logitech F710 Xinput teleop: RB deadman, left-stick drive/turn, publishes `/cmd_vel_joy` |
+| `scripts/patrolbot_joy_teleop.py` | Logitech F710 Xinput teleop: RB deadman, left-stick drive/turn, four-shoulder LiDAR power toggle, publishes `/cmd_vel_joy` |
 | `scripts/patrolbot_controller_feedback.py` | Finite F710 rumble alerts for safety blockers; publishes only `/joy/set_feedback` and cannot command motion or enable motors |
 | `scripts/patrolbot_safety_watchdog.py` | Publishes a priority-10 zero command while `/scan` or `/odom` is stale |
 | `config/nav2_params.yaml` | AMCL differential model, RPP (`0.22 m/s` cruise), `0.26 m/s` Nav2 smoother cap, and a 0.6×0.6 m collision-monitor stop box |
 | `maps/second_map.yaml` + `.pgm` | Active map: 3192×2205 at 0.075 m/px, origin `[-1,-1,0]` |
+
+## Controller LiDAR power
+
+After releasing all four controls, press **LB + RB + LT + RT** together once to
+request the opposite of fresh known LiDAR state. Release all four before another
+request. The chord clears joystick drive intent, suppresses drive until full
+release, and waits for Nav2 cancel-all confirmation. Missing, stale, malformed or
+reconnected input cannot toggle power; unavailable, refused or ambiguous service
+results do not retry automatically. Power control requires commissioned hardware
+and the bridge still enforces stationary/idle safety checks.
+
+The candidate F710 XInput mapping uses LB button 4, RB button 5 and LT/RT axes
+2/5 (released +1, pressed -1). LB and both trigger axes/polarity still require
+physical verification. Ordinary RB deadman behavior is retained outside a chord.
+OFF in telemetry means commanded OFF, not independently measured electrical OFF.
 
 ## Laser TF
 

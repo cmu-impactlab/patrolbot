@@ -9,12 +9,13 @@ from uuid import uuid4
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import ChangeState, GetState
+from nav_msgs.msg import Odometry
 from nav_msgs.srv import GetMap
 from nav2_msgs.srv import ManageLifecycleNodes
 from std_srvs.srv import Trigger
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from patrolbot_interfaces.action import HardwareUndock
-from patrolbot_interfaces.srv import ChargeRelease, MotorEnable
+from patrolbot_interfaces.srv import ChargeRelease, MotorEnable, SetLidarPower
 import pytest
 import rclpy
 from rclpy.action import ActionClient
@@ -47,6 +48,9 @@ class FakeSbc:
         self.received = []
         self.malformed_ids = set()
         self.advertise_undock = advertise_undock
+        self.lidar_state = 'READY'
+        self.lidar_supported = True
+        self.lidar_scan_age_ms = 0
         # Stops the telemetry stream while leaving the socket open: the SBC
         # gone quiet, rather than the connection dropping.
         self.telemetry_paused = False
@@ -93,7 +97,7 @@ class FakeSbc:
                 connection_number = self.connections
                 self._connection = connection
             try:
-                features = 'UNDOCK' if self.advertise_undock else ''
+                features = 'UNDOCK,LIDAR_POWER' if self.advertise_undock else 'LIDAR_POWER'
                 self._send(
                     connection,
                     f'HELLO:PROTOCOL=2:FEATURES={features}:ODOM_EPOCH={self.odom_epoch}\n'.encode('ascii'))
@@ -142,20 +146,30 @@ class FakeSbc:
                 f'{int(self.redock_inhibited)},0,'
                 f'{int(self.profile_commissioned)}')
             odom_x, odom_y, odom_th = self.odom_pose
-            laser_field = self.laser_field
+            laser_field = self.laser_field if self.lidar_state == "READY" else ""
         return (
             f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}'
             f'|ODOM_EPOCH:{self.odom_epoch}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
-            f'DOCK={dock}\n').encode('ascii')
+            f'DOCK={dock}|LIDAR={self.lidar_state},{int(self.lidar_supported)},'
+            f'{self.lidar_scan_age_ms}\n').encode('ascii')
 
     def _reply(self, connection, line):
         fields = line.split(':')
         if not fields:
             return
         verb = fields[0]
-        if verb == 'CHARGE_RELEASE' and len(fields) == 2:
+        if verb in ('LIDAR_ON', 'LIDAR_OFF') and len(fields) == 2:
+            with self._lock:
+                self.lidar_state = 'STARTING' if verb == 'LIDAR_ON' else 'OFF'
+                self.lidar_scan_age_ms = -1
+            self._send(connection, (
+                f'ACK:{verb}:{fields[1]}:ACCEPTED\n'
+                f'RESULT:{verb}:{fields[1]}:OK:0:commanded:2:0:1\n'
+            ).encode('ascii'))
+            if verb == 'LIDAR_ON': self._spawn(self._fresh_lidar)
+        elif verb == 'CHARGE_RELEASE' and len(fields) == 2:
             self._reply_charge_release(connection, fields[1])
         elif verb == 'MOTOR_ENABLE' and len(fields) == 2:
             with self._lock:
@@ -173,6 +187,12 @@ class FakeSbc:
             self._spawn(self._start_undock, connection, fields[1])
         elif verb == 'UNDOCK_CANCEL' and len(fields) == 2:
             self._spawn(self._cancel_undock, connection, fields[1])
+
+    def _fresh_lidar(self):
+        time.sleep(.15)
+        with self._lock:
+            self.lidar_state = 'READY'
+            self.lidar_scan_age_ms = 0
 
     def _spawn(self, target, *args):
         thread = threading.Thread(target=target, args=args, daemon=True)
@@ -1044,6 +1064,8 @@ def test_invalid_scan_age_drops_only_scan_and_recovers(harness, metadata):
 
 
 def test_scan_age_includes_local_queue_wait(harness):
+    from unittest.mock import patch
+
     fake, bridge, _client, _executor = harness
     assert wait_until(lambda: bridge._pose_at > 0)
     fake.telemetry_paused = True
@@ -1054,11 +1076,23 @@ def test_scan_age_includes_local_queue_wait(harness):
     try:
         line = ('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' +
                 '|ODOM_EPOCH:' + fake.odom_epoch)
-        bridge._parse_telemetry(line, received_at=time.monotonic() - .1)
+        clock = bridge.get_clock()
+        receipt_clock = clock.now()
+        received_at = time.monotonic() - .1
+        earliest_queue_age = time.monotonic() - received_at
+        with patch.object(clock, 'now', return_value=receipt_clock):
+            bridge._parse_telemetry(line, received_at=received_at)
+        latest_queue_age = time.monotonic() - received_at
         odom, scan = [msg for _, msg in published]
         def ns(msg):
             return msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
-        assert 220000000 <= ns(odom) - ns(scan) < 240000000
+        # Queue delay ages both stamps; acquisition age separates them.
+        assert ns(odom) - ns(scan) == 120000000
+        odom_age = receipt_clock.nanoseconds - ns(odom)
+        assert int(earliest_queue_age * 1e9) <= odom_age <= int(latest_queue_age * 1e9)
+        assert receipt_clock.nanoseconds - ns(scan) == odom_age + 120000000
+        # The next delayed frame must still have a newer network receipt.
+        time.sleep(.31)
         published.clear()
         bridge._parse_telemetry(line, received_at=time.monotonic() - .4)
         assert [topic for topic, _ in published] == ['/odom']
@@ -1123,3 +1157,52 @@ def test_close_dock_returns_survive_without_changing_bearings(harness):
     assert list(scan.ranges[1:6]) == pytest.approx(
         [0.124, 0.15, 0.249, 0.25, 0.1])
     assert all(math.isinf(scan.ranges[i]) for i in [0, 6, 7, 8, 9])
+
+
+def test_lidar_power_roundtrip_keeps_odometry_and_requires_fresh_pose(harness):
+    fake, bridge, client_node, _ = harness
+    client = client_node.create_client(SetLidarPower, '/patrolbot/set_lidar_power')
+    assert client.wait_for_service(timeout_sec=2.)
+    seen = []
+    subscription = client_node.create_subscription(Odometry, '/odom', seen.append, 10)
+    assert wait_until(lambda: bridge._epoch._navigation_idle_at is not None)
+    off = client.call_async(SetLidarPower.Request(request_id=str(uuid4()), enabled=False))
+    assert wait_until(off.done)
+    assert off.result().success and off.result().state == 'OFF'
+    assert wait_until(lambda: bridge._lidar.snapshot(time.monotonic())[0] == 'OFF')
+    before = len(seen)
+    assert wait_until(lambda: len(seen) > before + 3)
+    assert not bridge._epoch.commands_allowed
+    old_seed = bridge._epoch.recovery._seed_ns
+    initial = PoseWithCovarianceStamped(); initial.header.frame_id = 'map'
+    initial.header.stamp = client_node.get_clock().now().to_msg()
+    initial.pose.pose.orientation.w = 1.
+    for index in (0, 7, 35): initial.pose.covariance[index] = .1
+    bridge._epoch.seed(initial)
+    assert bridge._epoch.recovery._seed_ns == old_seed
+    request_count = len(fake.received)
+    velocity = Twist(); velocity.linear.x = .1
+    bridge.cmd_vel_callback(velocity)
+    assert not any(line.startswith('DRIVE:0.1:') for _, line in fake.received[request_count:])
+    on = client.call_async(SetLidarPower.Request(request_id=str(uuid4()), enabled=True))
+    assert wait_until(on.done)
+    assert on.result().success and on.result().state == 'STARTING'
+    assert wait_until(bridge._lidar_ready)
+    assert not bridge._epoch.commands_allowed
+    seed_harness(bridge, client_node)
+    assert bridge._epoch.commands_allowed
+    client_node.destroy_subscription(subscription)
+
+
+def test_ready_scans_without_power_commissioning_do_not_advertise_control(harness):
+    fake, bridge, client_node, _ = harness
+    fake.lidar_supported = False
+    assert wait_until(lambda: not bridge._lidar.snapshot(time.monotonic())[1])
+    assert bridge._lidar_ready()
+    client = client_node.create_client(SetLidarPower, '/patrolbot/set_lidar_power')
+    assert client.wait_for_service(timeout_sec=2.)
+    before = len(fake.received)
+    future = client.call_async(SetLidarPower.Request(request_id=str(uuid4()), enabled=False))
+    assert wait_until(future.done)
+    assert not future.result().success
+    assert not any(line.startswith('LIDAR_') for _, line in fake.received[before:])

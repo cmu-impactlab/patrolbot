@@ -31,6 +31,7 @@ std::vector<std::string> split(const std::string& text, char delimiter) {
   std::stringstream stream(text);
   std::string field;
   while (std::getline(stream, field, delimiter)) fields.push_back(field);
+  if (!text.empty() && text[text.size() - 1] == delimiter) fields.push_back("");
   return fields;
 }
 
@@ -187,7 +188,8 @@ ParsedCommand parseCommand(const std::string& line) {
   }
   if (fields.size() == 2 &&
       (fields[0] == "CHARGE_RELEASE" || fields[0] == "MOTOR_ENABLE" ||
-       fields[0] == "DOCK_RESET")) {
+       fields[0] == "DOCK_RESET" || fields[0] == "LIDAR_ON" ||
+       fields[0] == "LIDAR_OFF" || fields[0] == "MOTOR_DISABLE")) {
     if (!isCanonicalUuid(fields[1])) {
       command.error = "request ID is not a canonical UUID";
       return command;
@@ -196,6 +198,12 @@ ParsedCommand parseCommand(const std::string& line) {
       command.type = COMMAND_CHARGE_RELEASE;
     } else if (fields[0] == "MOTOR_ENABLE") {
       command.type = COMMAND_MOTOR_ENABLE;
+    } else if (fields[0] == "MOTOR_DISABLE") {
+      command.type = COMMAND_MOTOR_DISABLE;
+    } else if (fields[0] == "LIDAR_ON") {
+      command.type = COMMAND_LIDAR_ON;
+    } else if (fields[0] == "LIDAR_OFF") {
+      command.type = COMMAND_LIDAR_OFF;
     } else {
       command.type = COMMAND_DOCK_RESET;
     }
@@ -244,7 +252,7 @@ DriveDisposition classifyDrive(double linear, double angular,
                                bool motors_enabled, bool estop_pressed,
                                unsigned int fault_flags,
                                unsigned int critical_fault_mask,
-                               bool undock_active) {
+                               bool undock_active, bool lidar_ready) {
   const bool zero =
       std::fabs(linear) < 1e-9 && std::fabs(angular) < 1e-9;
   if (zero) return DRIVE_ALLOWED_ZERO;
@@ -255,7 +263,7 @@ DriveDisposition classifyDrive(double linear, double angular,
 
   const bool bounded =
       std::fabs(linear) <= 0.30 && std::fabs(angular) <= 1.20;
-  if (!bounded || control_pending || !motors_enabled || estop_pressed ||
+  if (!bounded || control_pending || !lidar_ready || !motors_enabled || estop_pressed ||
       (fault_flags & critical_fault_mask) != 0) {
     return DRIVE_REJECTED;
   }
@@ -268,8 +276,9 @@ DriveDisposition classifyDrive(double linear, double angular,
   return DRIVE_ALLOWED_NORMAL;
 }
 
-bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed) {
-  if (estop_pressed) return false;
+bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed,
+                        bool lidar_ready) {
+  if (estop_pressed || !lidar_ready) return false;
   // Refused while the robot may still be physically connected to the dock.
   // Releasing the charger in order to move is the UNDOCK operation's job, and
   // this command never touches charging.
@@ -281,9 +290,12 @@ std::string commandName(CommandType command) {
     case COMMAND_DRIVE: return "DRIVE";
     case COMMAND_CHARGE_RELEASE: return "CHARGE_RELEASE";
     case COMMAND_MOTOR_ENABLE: return "MOTOR_ENABLE";
+    case COMMAND_MOTOR_DISABLE: return "MOTOR_DISABLE";
     case COMMAND_UNDOCK: return "UNDOCK";
     case COMMAND_UNDOCK_CANCEL: return "UNDOCK_CANCEL";
     case COMMAND_DOCK_RESET: return "DOCK_RESET";
+    case COMMAND_LIDAR_ON: return "LIDAR_ON";
+    case COMMAND_LIDAR_OFF: return "LIDAR_OFF";
     default: return "INVALID";
   }
 }
@@ -352,7 +364,7 @@ std::string formatHello(const std::string& odom_epoch) {
     throw std::invalid_argument("invalid odometry epoch UUID");
   }
   std::stringstream stream;
-  stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK";
+  stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE";
   if (!odom_epoch.empty()) stream << ":ODOM_EPOCH=" << odom_epoch;
   stream << "\n";
   return stream.str();

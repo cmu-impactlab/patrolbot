@@ -37,34 +37,39 @@ Send one JSON object followed by newline; requests are limited to 4096 bytes.
 ```
 
 `current` returns `idle` when configured and verified, `unavailable` when
-startup capability checks fail, or the latest durable request. Use it after a
+local management tools or reset access configuration are missing, or the latest durable request. Use it after a
 web bridge reconnect. Reusing a request UUID returns its stored state. While a
-request is running, other requests return `busy`. After an ambiguous partial
-reset, the state remains `uncertain` and blocks new UUIDs until an operator
-checks the robot locally. The dashboard must not automatically retry an
-uncertain request.
+request is running, other requests return `busy`. After an ambiguous partial reset, its record remains `uncertain`. A new explicitly
+confirmed UUID may start another reset; the previous UUID is never replayed.
+The dashboard must not automatically retry an uncertain request. Motion remains
+held while the current result is unknown.
 
-## Interlocks and sequence
+## Emergency reset sequence
 
-Before changing either machine, two independent five-second read-only ROS
-captures must both prove fresh valid base telemetry and odometry, stationary
-motion, `DOCKED_CONFIRMED`, motors disabled, no active undock, and idle
-navigation actions. Unknown or stale state fails before the first restart.
-The supervisor records the prior odometry epoch, restarts only the fixed SBC
-`patrolbot-server.service`, then restarts the existing Pi `bringup`, `bridge`, and
-`navigation` services plus the opt-in `web-bridge` service with fixed Docker arguments, preserving their exact images/configuration. It issues no velocity, pose, motor-enable, charge-release, or
-undock command.
+An authorized operator can reset without dock contact, pose, localization,
+motion telemetry, idle navigation, or healthy ROS. An in-progress reset is
+single-flight; no request is retried automatically. The fixed operation first
+stops the Pi bridge, navigation and bringup containers, closing the old hardware
+client session through the existing SBC stop/motor-disable path. It then
+restarts the fixed SBC `patrolbot-server.service`, restarts the existing Pi core
+containers, and restarts the web bridge. Every operation is bounded, and later
+operations are attempted even if an earlier one fails.
 
-Success requires every core Compose service to report healthy, the web bridge
-to be running, and a fresh read-only post-reset capture to show the robot
-docked, stationary, motors disabled, navigation idle, a changed valid origin,
-`localization_recovery_required`, and an empty seed timestamp. Success means
-software recovery is up and a fresh operator pose seed is still required
-before navigation. Any ambiguous command result or missing postcondition is
-durably `uncertain`; it is never repeated automatically.
+The supervisor reads no ROS topics and waits for no dock, new-origin,
+localization or health postcondition. `succeeded` means the fixed restart
+commands returned successfully, not that the robot is ready to navigate.
+Errors are recorded honestly as `uncertain`, retaining their request UUID.
+A later reset requires a new explicit confirmation. No velocity, goal, pose,
+motor-enable, charge-release or undock request is issued. Existing robot startup
+and navigation holds remain independent of reset completion; old dashboard
+intents are discarded, with no automatic resume.
 
-Offline fake-adapter tests live beside the supervisor and do not contact a
-robot. No live reset is part of installation or verification.
+Images, configuration, maps and audit history are preserved. This restarts
+software services, not either computer or controller firmware. The dashboard
+request still travels through its existing web bridge connection: recovery
+when that process itself is dead needs an independent host management channel.
+Offline fake-adapter tests do not contact a robot. No live reset is part of
+installation or verification.
 
 ## Opt-in deployment
 
@@ -79,9 +84,11 @@ subsequent Compose operation on the web bridge. Set `PATROLBOT_RESET_GID` in the
 host's backed-up `docker/.env` to the numeric `patrolbot-reset` group ID. The
 supervisor restarts existing containers without recreating them, preserving socket
 access across its own reset. The web bridge advertises `software_reset` only when
-`PATROLBOT_RESET_SOCKET` is configured and the host capability check succeeds.
+`PATROLBOT_RESET_SOCKET` is configured and the local management configuration is present.
 Mount the directory rather than the socket inode so listener restarts remain
-reachable. Never mount the host Docker socket into the web bridge.
+reachable. Preserve that runtime directory across systemd restarts with
+`RuntimeDirectoryPreserve=restart`; replacing it leaves an existing container
+bound to the old directory. Never mount the host Docker socket into the web bridge.
 
 The override is not automatically discovered in this subdirectory. Validate the
 combined configuration without printing credentials before recreating the bridge:
@@ -98,10 +105,10 @@ on recreation removes socket access and makes reset unavailable. A normal Docker
 restart preserves the existing mount and environment.
 
 Before enabling: validate Compose without printing its environment, verify the
-dedicated SBC SSH alias using the read-only `status` operation, and run
-`preflight.py` as a subscriber-only capture. Do not call the request operation to
-check connectivity. End-to-end reset execution needs an operator window and
-subsequent seed acceptance; offline tests do not commission the button.
+dedicated SBC SSH alias using the read-only `status` operation. `preflight.py`
+remains a subscriber-only diagnostic and is never called by reset. Do not call the request operation to
+check connectivity. End-to-end reset execution needs explicit operator authorization; navigation
+acceptance is separate. Offline tests do not establish live reset acceptance.
 
 Back up every existing deployment file under `~/backups/<UTC>-system-reset/`,
 verify its off-host copy, and preserve the two-snapshot policy before changing
@@ -109,8 +116,8 @@ Compose, the environment, or services. Rollback removes the opt-in override and
 socket environment, restores the prior web image/config, and stops/disables the
 host supervisor only after checking no reset is in progress. Never delete the
 SQLite history or mark an uncertain request successful to make the button usable.
-An uncertain outcome requires local inspection and a reviewed recovery action;
-this feature deliberately does not offer a browser bypass.
+An uncertain record is retained. Another reset must be a newly confirmed
+request; never rewrite the previous result or replay it automatically.
 
 ## Restricted SBC access
 

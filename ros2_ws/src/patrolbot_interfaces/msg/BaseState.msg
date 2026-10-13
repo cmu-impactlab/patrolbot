@@ -9,6 +9,13 @@ uint64 session_generation
 bool link_connected
 float32 telemetry_age
 
+# OFF is commanded off, not electrical power readback. Scan readiness is
+# independent of commissioned power-control support; age includes local queues.
+# UNKNOWN | OFF | STARTING | READY | FAULT
+string lidar_state
+bool lidar_power_supported
+float32 lidar_scan_age
+
 bool hardware_state_valid
 int16 charge_state
 bool charge_state_valid

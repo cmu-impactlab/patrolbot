@@ -78,6 +78,7 @@ class Node:
         self._odom_validator = Mock(); self._odom_covariance = Mock()
         self._odom_tf_timeout = .5
         self._link_connected = True; self._fault_flags = 0
+        self._lidar_ready = Mock(return_value=True)
         self._undock_active = False; self._undock_goal_reserved = False
         self._pending_controls = {}; self._vx = self._vth = 0.
         self.clients = {}; self.seeds = []; self.cmd_vel_callback = Mock()
@@ -99,6 +100,7 @@ class Node:
         self.runtime.seed_accepted(msg)
         self.now += 1
         pose = copy.deepcopy(msg); pose.header.stamp = self.stamp()
+        self.runtime._odom_history.add(self.now, (0.,0.,0.), self.runtime.guard.epoch)
         self.runtime.pose(pose)
 
 
@@ -135,6 +137,7 @@ def step(runtime):
     if runtime._navigation_probe is None:
         runtime._navigation_probe_at = time.monotonic() - .11
     runtime.first_tf_ns = runtime.node.now - 100
+    runtime._odom_history.add(runtime.node.now, (0.,0.,0.), runtime.guard.epoch)
     runtime.tick()
 
 
@@ -201,6 +204,17 @@ def test_late_map_ack_does_not_release_failed_transaction(runtime):
     for _ in range(4): step(runtime)
     assert runtime.maps.active['map_id'] == 'cmuq-floor2'
     assert not runtime.commands_allowed and runtime.node.seeds == []
+
+
+def test_lidar_blocks_map_admission_and_failure_keeps_hold(runtime):
+    runtime.node._lidar_ready.return_value = False
+    assert runtime._map_accept(request(runtime)) == GoalResponse.REJECT
+    runtime.node._lidar_ready.return_value = True
+    runtime.node.refresh()
+    assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
+    runtime.node._lidar_ready.return_value = False
+    runtime.tick()
+    assert runtime.maps.stage == 'failed' and runtime.maps.hold
 
 
 
@@ -316,3 +330,128 @@ def test_refresh_evidence_and_service_failures_remain_held(runtime, failure):
                 'service-unavailable': 'service did not complete'}
     assert expected[failure] in runtime.maps.error
     assert len(runtime.node.seeds) == 1 and not runtime.commands_allowed
+
+
+@pytest.mark.parametrize("dx,yaw", [(.11, 0.), (0., .0541052068)])
+@pytest.mark.parametrize("phase", ['localization', 'costmap-map'])
+def test_measured_seed_rejects_confident_displacement(runtime, dx, yaw, phase):
+    import math
+    runtime.node.refresh(); goal = request(runtime)
+    assert runtime._map_accept(goal) == GoalResponse.ACCEPT
+    runtime._map_request = NS(pose=goal.pose, measured_pose=True)
+    run_until(runtime, lambda: runtime._map_step == phase)
+    pose = runtime._pending_pose
+    pose.pose.pose.position.x += dx
+    pose.pose.pose.orientation.z = math.sin(yaw / 2)
+    pose.pose.pose.orientation.w = math.cos(yaw / 2)
+    for i in (0, 7, 35): pose.pose.covariance[i] = .0009
+    assert not runtime._map_localization_fresh()
+    assert runtime.maps.stage == 'failed'
+    assert 'SEED_INNOVATION_REJECTED' in runtime.maps.error
+    assert not runtime.commands_allowed
+    runtime.node.publish(runtime.node.seeds[-1])
+    for _ in range(3): step(runtime)
+    assert runtime.maps.stage == 'failed' and not runtime.commands_allowed
+
+
+def test_measured_seed_missing_history_retains_hold(runtime):
+    goal=request(runtime);runtime.node.refresh();runtime._map_accept(goal)
+    runtime._map_request=NS(pose=goal.pose, measured_pose=True)
+    run_until(runtime,lambda:runtime._map_step=='localization')
+    runtime._odom_history.samples.clear()
+    assert not runtime._map_localization_fresh()
+    assert 'history unavailable' in runtime.maps.error
+    assert runtime.maps.hold
+
+
+def test_startup_idle_probe_unavailable_has_specific_reason(runtime):
+    runtime._navigation_idle.service_is_ready=lambda:False
+    assert runtime.navigation_idle_problem()=='wait-navigation-idle-service-unavailable'
+
+
+def test_stationary_accumulated_drift_withdraws_readiness(runtime):
+    goal=request(runtime);runtime.node.refresh();runtime._map_accept(goal)
+    run_until(runtime,lambda:runtime.maps.stage=='ready')
+    for dx in (.04,.08,.12):
+        runtime.node.refresh()
+        pose=copy.deepcopy(runtime.node.seeds[-1]);pose.header.stamp=runtime.node.stamp()
+        pose.pose.pose.position.x+=dx
+        runtime._odom_history.add(runtime.node.now,(0.,0.,0.),runtime.guard.epoch)
+        runtime.pose(pose)
+    assert not runtime.commands_allowed
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+    assert runtime._localization_fault.startswith('LOCALIZATION_DEGRADED:')
+
+
+@pytest.mark.parametrize('delta,accepted', [(.19,True),(.21,False)])
+def test_moving_updates_use_odometry_and_bounded_corrections(runtime,delta,accepted):
+    runtime.node.refresh();runtime._map_accept(request(runtime))
+    run_until(runtime,lambda:runtime.maps.stage=='ready')
+    runtime.node.refresh();runtime.node._vx=.1
+    pose=copy.deepcopy(runtime.node.seeds[-1]);pose.header.stamp=runtime.node.stamp()
+    pose.pose.pose.position.x += .2 + delta
+    runtime._odom_history.add(runtime.node.now,(.2,0.,0.),runtime.guard.epoch)
+    runtime.pose(pose)
+    assert runtime.commands_allowed == accepted
+    if accepted:
+        assert runtime._pose_anchor[0][0] == pose.pose.pose.position.x
+    else:
+        assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+
+
+def test_stationary_anchor_survives_bounded_history_eviction(runtime):
+    runtime.node.refresh();runtime._map_accept(request(runtime))
+    run_until(runtime,lambda:runtime.maps.stage=='ready')
+    runtime._odom_history.samples.clear()
+    runtime.node.refresh()
+    pose=copy.deepcopy(runtime.node.seeds[-1]);pose.header.stamp=runtime.node.stamp()
+    runtime._odom_history.add(runtime.node.now,(0.,0.,0.),runtime.guard.epoch)
+    runtime.pose(pose)
+    assert runtime.commands_allowed
+
+
+@pytest.mark.parametrize('bad', [float('nan'),0.,.26])
+def test_invalid_tracking_covariance_requires_new_localization(runtime,bad):
+    runtime.node.refresh();runtime._map_accept(request(runtime))
+    run_until(runtime,lambda:runtime.maps.stage=='ready')
+    runtime.node.refresh();pose=copy.deepcopy(runtime.node.seeds[-1]);pose.header.stamp=runtime.node.stamp()
+    pose.pose.covariance[0]=bad
+    runtime._odom_history.add(runtime.node.now,(0.,0.,0.),runtime.guard.epoch)
+    runtime.pose(pose)
+    assert not runtime.commands_allowed
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+
+
+@pytest.mark.parametrize('components', [(0.,0.,0.,0.), (0.,0.,0.,2.)])
+def test_initial_amcl_invalid_quaternion_never_mutates_pending_pose(runtime, components):
+    from geometry_msgs.msg import PoseWithCovarianceStamped
+    runtime.node.refresh()
+    runtime._map_accept(request(runtime))
+    run_until(runtime, lambda: runtime._map_step == 'seed')
+    assert runtime._pose_anchor is None
+    previous = runtime._pending_pose
+    pose = PoseWithCovarianceStamped()
+    pose.header.frame_id = 'map'
+    pose.header.stamp = runtime.node.stamp()
+    q = pose.pose.pose.orientation
+    q.x, q.y, q.z, q.w = components
+    for index in (0,7,35): pose.pose.covariance[index] = .001
+    runtime.pose(pose)
+    assert runtime._pending_pose is previous
+    assert not runtime.commands_allowed
+
+
+def test_tracking_negative_eigenvalue_covariance_withdraws_readiness(runtime):
+    runtime.node.refresh();runtime._map_accept(request(runtime))
+    run_until(runtime,lambda:runtime.maps.stage=='ready')
+    runtime.node.refresh()
+    pose=copy.deepcopy(runtime.node.seeds[-1]);pose.header.stamp=runtime.node.stamp()
+    for index in (0,7,35): pose.pose.covariance[index] = .001
+    pose.pose.covariance[1] = pose.pose.covariance[6] = .01
+    runtime._odom_history.add(runtime.node.now,(0.,0.,0.),runtime.guard.epoch)
+    runtime.node.cmd_vel_callback.reset_mock()
+    runtime.pose(pose)
+    assert not runtime.commands_allowed
+    assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
+    assert 'invalid localization covariance' in runtime._localization_fault
+    runtime.node.cmd_vel_callback.assert_called_once()

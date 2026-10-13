@@ -4,7 +4,8 @@ The Compose stack runs the three active Raspberry Pi services:
 
 - `bringup`: `twist_mux` and the final velocity smoother
 - `bridge`: TCP bridge to the SBC at `10.0.0.1:7272`
-- `navigation`: Nav2, joystick teleop, safety watchdog, and static laser TF
+- `navigation`: Nav2, joystick teleop, alert-only controller feedback, safety
+  watchdog, and static laser TF
 
 The legacy `rosaria2` package is versioned in the monorepo but is not built or
 run. Never run it alongside `patrolbot_bridge`.

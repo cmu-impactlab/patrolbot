@@ -54,12 +54,40 @@ void test_maintenance_command_parsing() {
   ParsedCommand enable = parseCommand("MOTOR_ENABLE:" + kId);
   CHECK(enable.type == COMMAND_MOTOR_ENABLE);
 
+  ParsedCommand disable = parseCommand("MOTOR_DISABLE:" + kId);
+  CHECK(disable.type == COMMAND_MOTOR_DISABLE);
+  CHECK(commandName(disable.type) == "MOTOR_DISABLE");
+  CHECK(parseCommand("MOTOR_DISABLE:not-a-uuid").type == COMMAND_INVALID);
+
   ParsedCommand reset = parseCommand("DOCK_RESET:" + kId);
   CHECK(reset.type == COMMAND_DOCK_RESET);
   CHECK(reset.request_id == kId);
 
   CHECK(parseCommand("MOTOR_ENABLE:not-a-uuid").type == COMMAND_INVALID);
   CHECK(parseCommand("DOCK_RESET:not-a-uuid").type == COMMAND_INVALID);
+}
+
+void test_lidar_power_protocol() {
+  CHECK(parseCommand("LIDAR_ON:" + kId).type == COMMAND_LIDAR_ON);
+  CHECK(parseCommand("LIDAR_OFF:" + kId).type == COMMAND_LIDAR_OFF);
+  CHECK(parseCommand("LIDAR_OFF:" + kId).request_id == kId);
+  CHECK(parseCommand("LIDAR_ON:not-a-uuid").type == COMMAND_INVALID);
+  CHECK(parseCommand("LIDAR_ON:" + kId + ":").type == COMMAND_INVALID);
+  CHECK(parseCommand("LIDAR_OFF:" + kId + ":extra").type == COMMAND_INVALID);
+  CHECK(formatHello().find("FEATURES=UNDOCK,LIDAR_POWER") != std::string::npos);
+  CHECK(formatResult(COMMAND_LIDAR_OFF, kId, true, 0, "lidar_off_commanded",
+                     0, false, false) ==
+        "RESULT:LIDAR_OFF:" + kId + ":OK:0:lidar_off_commanded:0:0:0\n");
+
+  RequestTracker tracker;
+  std::string cached;
+  tracker.begin(COMMAND_LIDAR_OFF, kId);
+  CHECK(tracker.inspect(COMMAND_LIDAR_OFF, kId, &cached) == REQUEST_DUPLICATE_PENDING);
+  CHECK(tracker.inspect(COMMAND_LIDAR_ON, kOtherId, &cached) == REQUEST_BUSY);
+  tracker.finish(COMMAND_LIDAR_OFF, kId, "off_result");
+  CHECK(tracker.inspect(COMMAND_LIDAR_OFF, kId, &cached) == REQUEST_COMPLETED);
+  CHECK(cached == "off_result");
+  CHECK(tracker.inspect(COMMAND_LIDAR_ON, kId, &cached) == REQUEST_NEW);
 }
 
 void test_drive_command_parsing() {
@@ -107,69 +135,78 @@ void test_undock_cancel_names_its_target() {
 void test_drive_requires_a_proven_clear_dock_state() {
   // Zero is always accepted so a stop can never be refused.
   CHECK(classifyDrive(0.0, 0.0, true, DOCK_DOCKED_CONFIRMED, false, true,
-                      0xffff, kCritical, true) == DRIVE_ALLOWED_ZERO);
+                      0xffff, kCritical, true, true) == DRIVE_ALLOWED_ZERO);
 
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false) == DRIVE_ALLOWED_NORMAL);
+                      kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
   CHECK(classifyDrive(0.0, 0.70, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false) == DRIVE_ALLOWED_NORMAL);
+                      kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
 
   // Every state other than CLEAR_CONFIRMED refuses motion, including UNKNOWN
   // at process start.
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_UNKNOWN, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_DOCKED_CONFIRMED, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_DEPARTING, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_FAULT_STOPPED, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
 }
 
 void test_drive_is_refused_while_undock_owns_motion() {
   // The exact reverse the undock itself commands is still refused when it
   // arrives as an ordinary DRIVE, in every dock state.
   CHECK(classifyDrive(-0.10, 0.0, false, DOCK_DEPARTING, true, false, 0,
-                      kCritical, true) == DRIVE_REJECTED);
+                      kCritical, true, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.10, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, true) == DRIVE_REJECTED);
+                      kCritical, true, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(0.0, 0.5, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, true) == DRIVE_REJECTED);
+                      kCritical, true, true) == DRIVE_REJECTED);
   // A stop is still honoured during an undock.
   CHECK(classifyDrive(0.0, 0.0, false, DOCK_DEPARTING, true, false, 0,
-                      kCritical, true) == DRIVE_ALLOWED_ZERO);
+                      kCritical, true, true) == DRIVE_ALLOWED_ZERO);
 }
 
 void test_drive_bounds_and_hardware_gates() {
   CHECK(classifyDrive(0.31, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(0.0, 1.21, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, true, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, false, false, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, true, 0,
-                      kCritical, false) == DRIVE_REJECTED);
+                      kCritical, false, true) == DRIVE_REJECTED);
 
   // Critical faults block; a non-critical flag such as low_battery (bit 3)
   // does not, because a robot that has just left the dock reports it normally.
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
-                      0x0100, kCritical, false) == DRIVE_REJECTED);
+                      0x0100, kCritical, false, true) == DRIVE_REJECTED);
   CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
-                      0x0008, kCritical, false) == DRIVE_ALLOWED_NORMAL);
+                      0x0008, kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
+}
+
+void test_lidar_gates_motion_but_never_stop() {
+  CHECK(classifyDrive(.05, 0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                      kCritical, false, false) == DRIVE_REJECTED);
+  CHECK(classifyDrive(0, 0, true, DOCK_UNKNOWN, false, true, 0xffff,
+                      kCritical, false, false) == DRIVE_ALLOWED_ZERO);
+  CHECK(!motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, false));
+  CHECK(!motorEnableAllowed(DOCK_UNKNOWN, false, false));
 }
 
 void test_motor_enable_is_decoupled_from_charging() {
   // Permitted only where the robot cannot still be connected to the dock.
-  CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false));
-  CHECK(motorEnableAllowed(DOCK_UNKNOWN, false));
-  CHECK(!motorEnableAllowed(DOCK_DOCKED_CONFIRMED, false));
-  CHECK(!motorEnableAllowed(DOCK_DEPARTING, false));
-  CHECK(!motorEnableAllowed(DOCK_FAULT_STOPPED, false));
+  CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, true));
+  CHECK(motorEnableAllowed(DOCK_UNKNOWN, false, true));
+  CHECK(!motorEnableAllowed(DOCK_DOCKED_CONFIRMED, false, true));
+  CHECK(!motorEnableAllowed(DOCK_DEPARTING, false, true));
+  CHECK(!motorEnableAllowed(DOCK_FAULT_STOPPED, false, true));
   // E-stop always refuses, and there is no "recent release" back door.
-  CHECK(!motorEnableAllowed(DOCK_CLEAR_CONFIRMED, true));
-  CHECK(!motorEnableAllowed(DOCK_UNKNOWN, true));
+  CHECK(!motorEnableAllowed(DOCK_CLEAR_CONFIRMED, true, true));
+  CHECK(!motorEnableAllowed(DOCK_UNKNOWN, true, true));
 }
 
 void test_line_buffer_reassembles_fragments() {
@@ -196,9 +233,9 @@ void test_control_frame_formatting() {
   CHECK(formatResult(COMMAND_CHARGE_RELEASE, kId, true, 0, "charge released", 0,
                      false, false) ==
         "RESULT:CHARGE_RELEASE:" + kId + ":OK:0:charge_released:0:0:0\n");
-  CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK\n");
+  CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE\n");
   CHECK(formatHello(kId) ==
-        "HELLO:PROTOCOL=2:FEATURES=UNDOCK:ODOM_EPOCH=" + kId + "\n");
+        "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE:ODOM_EPOCH=" + kId + "\n");
   bool rejected = false;
   try { formatHello("bad:ODOM_EPOCH=injection"); }
   catch (const std::invalid_argument&) { rejected = true; }
@@ -261,12 +298,14 @@ void test_request_tracker_lifecycle() {
 int main() {
   RUN(test_uuid_validation);
   RUN(test_maintenance_command_parsing);
+  RUN(test_lidar_power_protocol);
   RUN(test_drive_command_parsing);
   RUN(test_undock_command_parsing);
   RUN(test_undock_cancel_names_its_target);
   RUN(test_drive_requires_a_proven_clear_dock_state);
   RUN(test_drive_is_refused_while_undock_owns_motion);
   RUN(test_drive_bounds_and_hardware_gates);
+  RUN(test_lidar_gates_motion_but_never_stop);
   RUN(test_motor_enable_is_decoupled_from_charging);
   RUN(test_line_buffer_reassembles_fragments);
   RUN(test_control_frame_formatting);

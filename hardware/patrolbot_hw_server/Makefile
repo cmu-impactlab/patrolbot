@@ -12,10 +12,10 @@ SOURCES = patrolbot_server.cpp protocol.cpp undock.cpp
 PROBE = patrolbot_commission_probe
 PROBE_SOURCES = patrolbot_commission_probe.cpp
 
-HEADERS = protocol.hpp undock.hpp scan_timing.hpp
+HEADERS = protocol.hpp undock.hpp scan_timing.hpp lidar_power.hpp encoder_capture.hpp
 
 # Neither test binary links ARIA, so both build and run on a workstation.
-TESTS = tests/protocol_test tests/undock_test tests/scan_timing_test
+TESTS = tests/protocol_test tests/undock_test tests/scan_timing_test tests/lidar_power_test tests/encoder_capture_test
 
 .PHONY: all clean test probe
 
@@ -38,10 +38,18 @@ tests/undock_test: tests/undock_test.cpp undock.cpp $(HEADERS)
 tests/scan_timing_test: tests/scan_timing_test.cpp scan_timing.hpp
 	$(CXX) $(CXXFLAGS) tests/scan_timing_test.cpp -o $@
 
+tests/lidar_power_test: tests/lidar_power_test.cpp lidar_power.hpp scan_timing.hpp
+	$(CXX) $(CXXFLAGS) tests/lidar_power_test.cpp -o $@
+
+tests/encoder_capture_test: tests/encoder_capture_test.cpp encoder_capture.hpp
+	$(CXX) $(CXXFLAGS) tests/encoder_capture_test.cpp -o $@
+
 test: $(TESTS)
 	./tests/protocol_test
 	./tests/undock_test
 	./tests/scan_timing_test
+	./tests/lidar_power_test
+	./tests/encoder_capture_test
 
 clean:
 	rm -f $(TARGET) $(PROBE) $(TESTS)

@@ -422,10 +422,7 @@ finally:
         capture['teardown_errors'] = exits
         capture['complete_teardown_passed'] = not exits
         for line in exits:
-            # Report the existing base double-shutdown separately; all other child failures fail.
-            if not ('[lifecycle_mgr.py-' in line and 'exit code 1,' in line and
-                    'rcl_shutdown already called on the given context' in teardown_log):
-                cleanup_errors.append('unexpected launched process failure: ' + line)
+            cleanup_errors.append('unexpected launched process failure: ' + line)
         capture['total_elapsed_s'] = 120 - (deadline - time.monotonic())
         if capture['total_elapsed_s'] > 120:
             cleanup_errors.append('120-second case budget exceeded including teardown')

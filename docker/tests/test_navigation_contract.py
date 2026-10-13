@@ -167,7 +167,8 @@ def test_outer_recovery_pairs_both_costmaps_and_excludes_contextual_global_clear
     assert parse('\n'.join([global_, backup])) == ['backup']
 
 
-def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path):
+@pytest.mark.parametrize('child_failure', [False, True])
+def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path, child_failure):
     import ast
     import json
     import time
@@ -180,6 +181,10 @@ def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path):
     cycle = [local, global_] + ['[behavior_server]: Running ' + name for name in ('backup', 'spin', 'wait')]
     log_path = tmp_path / 'raw.log'
     log_path.write_text('\n'.join(cycle * 2))
+    if child_failure:
+        with log_path.open('a') as stream:
+            stream.write('\n[lifecycle_mgr.py-1]: rcl_shutdown already called on the given context\n'
+                '[ERROR] [lifecycle_mgr.py-1]: process has died [pid 1, exit code 1, cmd lifecycle_mgr.py].')
     def flush_last_clear():
         with log_path.open('a') as stream:
             stream.write('\n' + local + '\n' + global_)
@@ -194,4 +199,5 @@ def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path):
         deadline=time.monotonic()+120, outer_recovery_stages=load_contract().outer_recovery_stages,
         validate_outcome=validate, args=SimpleNamespace(output=tmp_path / 'capture.json'))
     exec(compile(ast.Module(body=final, type_ignores=[]), '<runner teardown>', 'exec'), namespace)
-    assert capture.get('passed') is True
+    assert capture.get('passed') is (not child_failure)
+    assert capture['complete_teardown_passed'] is (not child_failure)

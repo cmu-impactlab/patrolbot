@@ -3,6 +3,7 @@ import importlib.util
 import math
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import threading
 import time
@@ -19,11 +20,26 @@ class FakeSbc:
     def _telemetry(self):
         return (f'ODOM:{self.odom_pose[0]},{self.odom_pose[1]},{self.odom_pose[2]},0,0|LASER:'+self.laser_field).encode()
 fake_module.FakeSbc=FakeSbc
-sys.modules['test_fake_sbc_integration']=fake_module
 spec=importlib.util.spec_from_file_location('fixture',Path(__file__).with_name('closed_loop_fixture.py'))
-fixture=importlib.util.module_from_spec(spec);spec.loader.exec_module(fixture)
+fixture=importlib.util.module_from_spec(spec)
+with patch.dict(sys.modules,{'test_fake_sbc_integration':fake_module}):
+    spec.loader.exec_module(fixture)
 
 class PlantTests(unittest.TestCase):
+    def test_import_restores_real_fake_sbc_module(self):
+        code="""
+import importlib.util, sys, types
+sentinel=types.ModuleType('test_fake_sbc_integration')
+sentinel.harness=object();sentinel.wait_until=object()
+sys.modules['test_fake_sbc_integration']=sentinel
+spec=importlib.util.spec_from_file_location('plant_test',sys.argv[1])
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+assert sys.modules['test_fake_sbc_integration'] is sentinel
+from test_fake_sbc_integration import harness, wait_until
+"""
+        result=subprocess.run([sys.executable,'-c',code,str(Path(__file__).resolve())],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
     def test_drive_feedback_and_frozen_progress(self):
         with tempfile.TemporaryDirectory() as directory:
             p=Path(directory)

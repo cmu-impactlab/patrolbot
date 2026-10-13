@@ -96,6 +96,10 @@ def convert(records,identity,request=None):
             result['missing'].append('scan_derived_pose_after_seed')
     result['evidence']={'now_ns':record['now_ns'],'scan_stamp_ns':stamp_ns(scan),
         'transforms':transforms,'poses':poses}
+    if latest.get('/amcl_pose'):
+        result['evidence']['amcl_stamp_ns']=stamp_ns(latest['/amcl_pose'])
+        if result['evidence']['amcl_stamp_ns']!=stamp_ns(scan):
+            result['missing'].append('amcl_scan_timestamp_mismatch')
     if latest.get('/odom'):result['evidence']['odom_stamp_ns']=stamp_ns(latest['/odom'])
     if len(transforms)!=4:result['missing'].append('timestamped_tf_chain')
     if seed and ack and stamp_ns(seed)!=stamp_ns(ack):result['missing'].append('matching_seed_ack')

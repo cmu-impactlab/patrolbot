@@ -211,7 +211,7 @@ def check_evidence(evidence):
     Edge names without timed values are insufficient evidence.
     """
     now=evidence['now_ns']
-    ages={key:(now-evidence[key])/1e9 for key in ('scan_stamp_ns','odom_stamp_ns') if key in evidence}
+    ages={key:(now-evidence[key])/1e9 for key in ('scan_stamp_ns','odom_stamp_ns','amcl_stamp_ns') if key in evidence}
     required={('map','odom'),('odom','base_link'),('base_link','laser_frame'),('map','base_link')}
     transforms={}
     for transform in evidence.get('transforms',[]):
@@ -236,7 +236,8 @@ def check_evidence(evidence):
     poses=evidence.get('poses',[])
     spread=max((math.hypot(a[0]-b[0],a[1]-b[1]) for a in poses for b in poses),default=None)
     # Use the existing scan/odometry watchdog freshness limit.
-    timing=len(ages)==2 and all(0<=age<=.5 for age in ages.values())
+    timing=(len(ages)==3 and all(0<=age<=.5 for age in ages.values()) and
+            evidence['amcl_stamp_ns']==evidence['scan_stamp_ns'])
     return {'ages_s':ages,'timing_ok':timing,'tf_chain_ok':valid and timing,
             'tf_composition_error':error,'spread_m':spread,
             'note':'Numerical TF consistency does not establish physical alignment'}
@@ -247,8 +248,11 @@ def main():
     parser.add_argument('capture',type=Path);parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args();capture=json.loads(args.capture.read_text())
     identity=capture['map'];raster=MapRaster(identity['yaml'],identity['map_id'],identity['revision'])
-    if capture.get('complete') is False:
-        args.output.write_text(json.dumps({'verdict':'inconclusive','missing':capture.get('missing',[]),'physical_acceptance':False},indent=2)+'\n')
+    missing=list(capture.get('missing',[]))
+    if any(identity.get(key)!=raster.identity[key] for key in ('yaml_sha256','image_sha256')):
+        missing.append('map_identity_mismatch')
+    if capture.get('complete') is False or missing:
+        args.output.write_text(json.dumps({'verdict':'inconclusive','missing':missing,'physical_acceptance':False},indent=2)+'\n')
         return
     result=analyze(raster,capture['scan'],capture['supplied_pose'],capture['amcl_pose'],capture['laser_transform'])
     result['capture_identity']=capture.get('identity',{})

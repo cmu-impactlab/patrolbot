@@ -1,4 +1,7 @@
 import importlib.util
+import json
+import sys
+from unittest.mock import patch
 from pathlib import Path
 import tempfile
 import unittest
@@ -47,6 +50,22 @@ class GeometryTests(unittest.TestCase):
             self.assertEqual(len(result['overlays']['supplied']['hits']),1)
             self.assertEqual(result['overlays']['supplied']['excluded_ranges_count'],1)
 
+    def test_replay_rejects_changed_map_files(self):
+        for changed in ('map.pgm','map.yaml'):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as d:
+                p=Path(d);raster=self.scene(d)
+                capture={'complete':True,'map':raster.identity,'scan':{'angle_min':0,'angle_increment':0,'ranges':[.15]},
+                         'supplied_pose':[2.25,3.25,0],'amcl_pose':[2.25,3.25,0],'laser_transform':[0,0,0]}
+                (p/'capture.json').write_text(json.dumps(capture))
+                target=p/changed
+                if changed.endswith('.pgm'):
+                    data=bytearray(target.read_bytes());data[-1]=1;target.write_bytes(data)
+                else: target.write_text(target.read_text().replace('resolution: 0.1','resolution: 0.2'))
+                with patch.object(sys,'argv',['geometry',str(p/'capture.json'),'--output',str(p/'result.json')]): g.main()
+                result=json.loads((p/'result.json').read_text())
+                self.assertEqual(result['verdict'],'inconclusive')
+                self.assertIn('map_identity_mismatch',result['missing'])
+
     def test_motion_is_nonzero_feedback(self):
         pose=g.integrate([0,0,0],.2,.5,1)
         self.assertGreater(pose[0],0)
@@ -64,10 +83,15 @@ class EvidenceTests(unittest.TestCase):
 
     def test_timing_uses_existing_half_second_sensor_limit(self):
         result=g.check_evidence({'now_ns':1_400_000_000,'scan_stamp_ns':1_000_000_000,
-            'odom_stamp_ns':1_000_000_000})
+            'odom_stamp_ns':1_000_000_000,'amcl_stamp_ns':1_000_000_000})
         self.assertTrue(result['timing_ok'])
         result=g.check_evidence({'now_ns':1_501_000_000,'scan_stamp_ns':1_000_000_000,
-            'odom_stamp_ns':1_000_000_000})
+            'odom_stamp_ns':1_000_000_000,'amcl_stamp_ns':1_000_000_000})
+        self.assertFalse(result['timing_ok'])
+
+    def test_fresh_scan_does_not_mask_old_amcl_pose(self):
+        result=g.check_evidence({'now_ns':100_100_000_000,'scan_stamp_ns':100_000_000_000,
+            'odom_stamp_ns':100_000_000_000,'amcl_stamp_ns':2_000_000_000})
         self.assertFalse(result['timing_ok'])
 
 class StructuralTests(unittest.TestCase):
@@ -148,7 +172,7 @@ class StructuralTests(unittest.TestCase):
     def test_tf_numerical_composition_and_time(self):
         import math
         evidence={'now_ns':1_100_000_000,'scan_stamp_ns':1_000_000_000,
-            'odom_stamp_ns':1_000_000_000,'transforms':[
+            'odom_stamp_ns':1_000_000_000,'amcl_stamp_ns':1_000_000_000,'transforms':[
                 {'parent':'map','child':'odom','stamp_ns':1_000_000_000,'pose':[1,2,math.pi/2]},
                 {'parent':'odom','child':'base_link','stamp_ns':1_000_000_000,'pose':[2,0,0]},
                 {'parent':'map','child':'base_link','stamp_ns':1_000_000_000,'pose':[1,4,math.pi/2]},

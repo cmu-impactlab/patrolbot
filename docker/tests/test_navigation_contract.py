@@ -198,6 +198,11 @@ def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path, child_failu
         rclpy=SimpleNamespace(ok=lambda: False), json=json, time=time,
         deadline=time.monotonic()+120, outer_recovery_stages=load_contract().outer_recovery_stages,
         validate_outcome=validate, args=SimpleNamespace(output=tmp_path / 'capture.json'))
-    exec(compile(ast.Module(body=final, type_ignores=[]), '<runner teardown>', 'exec'), namespace)
+    teardown = compile(ast.Module(body=final, type_ignores=[]), '<runner teardown>', 'exec')
+    if child_failure:
+        with pytest.raises(AssertionError, match='unexpected launched process failure'):
+            exec(teardown, namespace)
+    else:
+        exec(teardown, namespace)
     assert capture.get('passed') is (not child_failure)
     assert capture['complete_teardown_passed'] is (not child_failure)

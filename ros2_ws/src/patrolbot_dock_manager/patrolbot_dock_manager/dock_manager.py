@@ -24,7 +24,7 @@ from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
-from patrolbot_dock_manager.epoch_policy import epoch_hardware_ready
+from patrolbot_dock_manager.epoch_policy import epoch_hardware_ready, lidar_ready
 from patrolbot_dock_manager.contracts import (
     automatic_docking_allowed,
     DOCK_DOCKED_CONFIRMED,
@@ -960,6 +960,10 @@ class DockManager(Node):
         parked_since_the_pose = self._parked_since_the_pose(
             stationary, odom_age, timeout, last_motion_at, localization_at,
             base, fault_flags)
+        base_stamp_age = ((self.get_clock().now().nanoseconds -
+                           base.header.stamp.sec * 1_000_000_000 -
+                           base.header.stamp.nanosec) / 1e9 if base else math.inf)
+        scans_ready = lidar_ready(base, receipt_age=base_age, stamp_age=base_stamp_age)
         epoch_ready = bool(
             base and getattr(base, 'odom_epoch_valid', False)
             and not getattr(base, 'localization_recovery_required', True))
@@ -978,7 +982,7 @@ class DockManager(Node):
             link_connected=bool(base and base.link_connected),
             hardware_state_valid=bool(
                 base and base.hardware_state_valid and base_age <= timeout
-                and hardware_epoch_ready),
+                and hardware_epoch_ready and scans_ready),
             session_generation=base.session_generation if base else 0,
             charge_state_valid=bool(base and base.charge_state_valid),
             charge_state=base.charge_state if base else -1,

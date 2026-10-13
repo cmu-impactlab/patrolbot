@@ -3,6 +3,7 @@ string request_id
 string map_id
 string map_revision
 geometry_msgs/PoseWithCovariance pose
+bool measured_pose
 bool operator_authorized
 ---
 uint8 OK=0
@@ -10,6 +11,7 @@ uint8 REJECTED=1
 uint8 FAILED=2
 uint8 CANCELED=3
 uint8 TIMEOUT=4
+uint8 SEED_INNOVATION_REJECTED=5
 string request_id
 uint8 code
 string message

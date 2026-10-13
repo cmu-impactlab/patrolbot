@@ -377,3 +377,15 @@ def test_the_accumulator_never_hands_out_its_own_mutable_state():
     first = acc.pose_covariance()
     first[X] = 12345.0
     assert acc.pose_covariance()[X] != 12345.0
+
+
+@pytest.mark.parametrize('bad', [math.nan, math.inf, -math.inf])
+@pytest.mark.parametrize('axis', range(3))
+def test_nonfinite_sample_does_not_lose_next_valid_motion(bad, axis):
+    acc = make(min_variance=0.0)
+    acc.update(0.0, 0.0, 0.0)
+    pose = [0.0, 0.0, 0.0]
+    pose[axis] = bad
+    acc.update(*pose)
+    acc.update(0.1, 0.0, 0.0)
+    assert acc.pose_covariance()[X] == pytest.approx(SIGMAS['sigma_xy_per_m'] ** 2 * 0.1)

@@ -41,6 +41,33 @@ That is the intended response, not a bug.
 Charging contact inhibits motion. Leaving the dock is the undock operation's job — see
 [Running the Robot](../operations/running-the-robot.md).
 
+## The F710 does not vibrate for a blocker
+
+First confirm input still works: the receiver should appear as Logitech F710 in
+XInput mode, `/dev/input/js0` should exist, and `/joy` should be fresh. Then
+inspect the `joy_node` startup log. `No haptic (rumble) available` means SDL
+could read the controller but could not open the event device for
+force-feedback effect upload.
+
+The F710 also has a dedicated **Vibration** button that enables or disables
+rumble inside the handheld controller. This state is not visible to Linux:
+effect upload and playback can report success while the controller suppresses
+the motors. Press the button once; Logitech documents a short vibration as
+disabled and a long vibration as enabled. If the controller cannot produce
+that local acknowledgement, replace its AA batteries before changing ROS or
+container configuration. Keep the rear mode switch at `X` (XInput).
+
+The `navigation` Compose service must have both
+`/dev/input:/dev/input:rw` and `c 13:* rw`. The `gimbal` service must remain
+`/dev/input:/dev/input:ro` with `c 13:* r`; it consumes `/joy` from ROS and
+never needs device write access. Recreate only `patrolbot-navigation` after a
+permission change, then verify its log reports haptic availability.
+
+For a no-motion channel check, publish one finite `JoyFeedback` pulse only with
+the operator's consent, follow it with intensity `0.0`, and confirm odometry
+twist stays zero. Do not press RB with a nonzero stick as a haptic test unless a
+separate bounded velocity attempt has been explicitly authorized.
+
 ## The robot freezes mid-doorway
 
 Check that `use_collision_detection` is still `false` on the controller. With `true`, RPP

@@ -53,6 +53,12 @@ class EpochRecovery:
         self._reset_ns = None
         self._seed_ns = None
 
+    def require_seed(self, now_ns):
+        """Discard pre-power localization without resetting the odometry origin."""
+        if self.token is not None:
+            self._start_reset(self.token.epoch)
+            self.reset_complete(self.token, now_ns)
+
     def observe_clock(self, now_ns):
         """Clock regression invalidates ordering and all in-flight reset ACKs."""
         if isinstance(now_ns, bool) or not isinstance(now_ns, int) or now_ns < 0:

@@ -1,0 +1,6 @@
+# Both roles inherit the same rebuilt LocalizeOnMap action.
+ARG PATROLBOT_BASE_IMAGE
+FROM ${PATROLBOT_BASE_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends python3-websockets python3-psutil && rm -rf /var/lib/apt/lists/*
+COPY --from=dashboard ros2_ws/src/patrolbot_web_bridge /opt/patrolbot_ws/src/patrolbot_web_bridge
+RUN . /opt/patrolbot_ws/install/setup.sh && cd /opt/patrolbot_ws && colcon build --packages-select patrolbot_web_bridge

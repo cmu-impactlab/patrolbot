@@ -1,5 +1,6 @@
 """Run only in a network-isolated ROS container; never against live ROS."""
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -14,6 +15,7 @@ from rclpy.duration import Duration
 from tf2_ros import TransformBroadcaster
 
 assert os.environ.get('PATROLBOT_ISOLATED_TEST') == '1'
+assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}
 process = None
 log_path = Path('/tmp/amcl-tf-retry.log')
 try:
@@ -55,15 +57,15 @@ try:
             rclpy.spin_once(node, timeout_sec=.02)
         assert future.done() and future.result().success
 
-    def seed(offset=0.0):
+    def seed(offset=0.0, frame='map'):
         msg = PoseWithCovarianceStamped()
-        msg.header.frame_id = 'map'
+        msg.header.frame_id = frame
         msg.header.stamp = (node.get_clock().now() + Duration(seconds=offset)).to_msg()
         msg.pose.pose.position.x = 1.0
         msg.pose.pose.position.y = 2.0
         msg.pose.pose.orientation.w = 1.0
-        msg.pose.covariance[0] = msg.pose.covariance[7] = .25
-        msg.pose.covariance[35] = .0685
+        msg.pose.covariance[0] = msg.pose.covariance[7] = .0009
+        msg.pose.covariance[35] = .00030461742
         publisher.publish(msg)
         return msg.header.stamp
 
@@ -98,6 +100,10 @@ try:
     spin(.5)
     assert count('Setting pose') == 0 and not accepted, 'replayed an expired seed'
     assert ready(), 'AMCL did not report received TF'
+    seed(frame='odom')
+    spin(.2)
+    assert not accepted and count('Setting pose') == 0, 'wrong-frame seed was applied'
+
     # No transform covers this fresh seed until TF resumes 150 ms later.
     first_stamp = seed()
     spin(.15, tf=False)
@@ -135,6 +141,11 @@ try:
     assert ready()
     spin(1.2, tf=False)
     assert not ready(), 'stale TF reported ready'
+    seed()
+    spin(1.4, tf=False)
+    assert count('Setting pose') == 2 and accepted == [first_stamp, second_stamp], 'stale TF seed was applied'
+    assert count('Rejecting initial pose') == 3, 'stale TF seed was not bounded'
+
     spin(.3)
     assert ready(), 'fresh TF did not restore readiness'
     future_tf = TransformStamped()
@@ -152,7 +163,17 @@ try:
     assert not ready(), 'cleanup preserved previous TF readiness'
     transition(4)
     transition(2)
-    print(json.dumps({'passed': ['readiness_missing_tf', 'readiness_inactive', 'readiness_fresh_tf', 'readiness_stale_tf', 'readiness_future_tf', 'readiness_lifecycle_reset', 'cold_start_missing_tf_rejected', 'expired_seed_not_replayed', 'fresh_seed_after_tf', 'delayed_tf', 'bounded_timeout', 'supersession', 'deactivation_cleanup', 'accepted_seed_correlation'],
+    diagnostics = [json.loads(line.split('Applied initial pose: ', 1)[1])
+                   for line in log_path.read_text().splitlines() if 'Applied initial pose: ' in line]
+    assert [d['request_stamp_ns'] for d in diagnostics] == [
+        stamp.sec * 10**9 + stamp.nanosec for stamp in accepted], 'applied diagnostics diverged from accepted requests'
+    assert all(d['application_stamp_ns'] >= d['request_stamp_ns'] for d in diagnostics)
+    assert all(d['mean'] == [1., 2., 0.] and d['covariance'] == [
+        .0009, 0., 0., 0., .0009, 0., 0., 0., .00030461742] for d in diagnostics)
+    assert all(math.hypot(d['sample_mean'][0]-d['mean'][0], d['sample_mean'][1]-d['mean'][1]) <= .01
+               and abs(math.remainder(d['sample_mean'][2]-d['mean'][2], 2*math.pi)) <= math.radians(.3)
+               and d['within_envelope']/d['sample_count'] >= .99 for d in diagnostics), 'measured particles dispersed before weighting'
+    print(json.dumps({'passed': ['readiness_missing_tf', 'readiness_inactive', 'readiness_fresh_tf', 'readiness_stale_tf', 'readiness_future_tf', 'readiness_lifecycle_reset', 'cold_start_missing_tf_rejected', 'expired_seed_not_replayed', 'fresh_seed_after_tf', 'delayed_tf', 'bounded_timeout', 'supersession', 'deactivation_cleanup', 'accepted_seed_correlation', 'wrong_frame_seed_rejected', 'stale_tf_seed_rejected', 'applied_seed_diagnostics'],
                       'settings': count('Setting pose'), 'timeouts': count('Rejecting initial pose')}))
 finally:
     if process is not None and process.poll() is None:

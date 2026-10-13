@@ -135,8 +135,10 @@ keeps waiting. If the smoother respawns unconfigured, it re-applies configure/ac
 | **Purpose** | Reads `/dev/input/js*` and publishes raw gamepad state. |
 
 **Publishers:** `/joy` (`sensor_msgs/Joy`).
+**Subscribers:** `/joy/set_feedback` (`sensor_msgs/JoyFeedback`, rumble id 0).
 **Failure mode:** no `/dev/input/js*` (controller unplugged) ⇒ no `/joy` ⇒ teleop simply has
-nothing to act on; navigation is unaffected.
+nothing to act on; navigation is unaffected. If the input device is not writable,
+input still works but SDL cannot upload force-feedback effects.
 
 ### patrolbot_joy_teleop
 
@@ -156,6 +158,26 @@ D-pad axes 7/6 are fallbacks; A/Y and X/B trim the speed limits.
 zeroed and the command ramps to a stop. RB takeover cancels any active Nav2
 goal; priority-8 zero remains asserted until cancellation is confirmed, then
 one final zero is published before silence. The canceled goal does not resume.
+
+### patrolbot_controller_feedback
+
+| Field | Value |
+|---|---|
+| **Host** | Raspberry Pi |
+| **Executable** | `patrolbot_controller_feedback.py` (package `patrolbot_navigation`) |
+| **Purpose** | Gives finite F710 rumble alerts for active drive blockers without changing robot state. |
+
+**Subscribers:** `/scan`, `/odom`, `/battery`, `/patrolbot/base_state`, `/joy`,
+and `/cmd_vel_out` for the same direction-aware bumper context as the safety
+watchdog. **Sole publisher:** `/joy/set_feedback`
+(`sensor_msgs/JoyFeedback`). It has no velocity publisher, action client,
+service client, or motor-enable path.
+
+**Parameters:** `intensity` (1.0), `event_pulse` (0.6 s), `retry_pulse`
+(0.35 s), `retry_interval` (1.5 s), `startup_grace` (2.0 s),
+`joystick_timeout` (0.4 s), and `deadzone` (0.12); all are bounded ROS
+parameters. Feedback is always explicitly zeroed on pulse completion,
+recovery, and shutdown.
 
 ### laser_static_tf
 

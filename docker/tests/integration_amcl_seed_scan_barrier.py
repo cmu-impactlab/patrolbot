@@ -48,9 +48,20 @@ try:
   assert seed_pub.get_subscription_count()==1
   seed=PoseWithCovarianceStamped();seed.header.frame_id='map';seed.header.stamp=node.get_clock().now().to_msg()
   seed.pose.pose.position.x=seed.pose.pose.position.y=5.;seed.pose.pose.orientation.w=1.
-  seed.pose.covariance[0]=seed.pose.covariance[7]=.25;seed.pose.covariance[35]=.0685
+  seed.pose.covariance[0]=seed.pose.covariance[7]=.0009;seed.pose.covariance[35]=.00030461742
   seed_pub.publish(seed);spin(.3)
   assert any(ns(m.header.stamp)==ns(seed.header.stamp) for m in acks),'seed was not accepted'
+  applied=[json.loads(line.split('Applied initial pose: ',1)[1]) for line in log_path.read_text().splitlines() if 'Applied initial pose: ' in line]
+  assert len(applied)==1,'missing or duplicate pf_init application diagnostic'
+  diagnostic=applied[0]
+  assert diagnostic['request_stamp_ns']==ns(seed.header.stamp),'diagnostic lost original request correlation'
+  assert diagnostic['application_stamp_ns']>=ns(seed.header.stamp)
+  assert diagnostic['mean']==[5.,5.,0.] and diagnostic['covariance']==[.0009,0.,0.,0.,.0009,0.,0.,0.,.00030461742]
+  assert math.hypot(diagnostic['sample_mean'][0]-5.,diagnostic['sample_mean'][1]-5.)<=.01
+  assert abs(diagnostic['sample_mean'][2])<=math.radians(.3)
+  assert diagnostic['within_envelope']/diagnostic['sample_count']>=.99
+  assert diagnostic['sample_count']==4000,'unexpected initialization particle count'
+  assert list(acks[0].pose.covariance)==list(seed.pose.covariance),'ACK changed original seed covariance'
   old=(rclpy.time.Time.from_msg(seed.header.stamp)-Duration(seconds=.15)).to_msg()
   spin(.4,old)
   assert not poses, 'pre-seed scan consumed the first stationary update: '+str([ns(m.header.stamp)-ns(seed.header.stamp) for m in poses])
@@ -58,7 +69,7 @@ try:
   assert not poses, 'scan at seed timestamp must not satisfy the post-seed barrier'
   fresh=node.get_clock().now().to_msg();spin(.8,fresh)
   assert poses and all(ns(m.header.stamp)>ns(seed.header.stamp) for m in poses),'no post-seed estimate without motion or refresh'
-  print(json.dumps({'passed':['pre_seed_scan_rejected','equal_stamp_scan_rejected','stationary_post_seed_estimate_without_refresh'],'seed_ns':ns(seed.header.stamp),'pose_stamps':[ns(m.header.stamp) for m in poses]}),flush=True)
+  print(json.dumps({'passed':['pre_seed_scan_rejected','equal_stamp_scan_rejected','stationary_post_seed_estimate_without_refresh'],'seed_ns':ns(seed.header.stamp),'pose_stamps':[ns(m.header.stamp) for m in poses],'applied_seed':diagnostic}),flush=True)
 finally:
  if process is not None and process.poll() is None:
   os.killpg(process.pid,signal.SIGINT)

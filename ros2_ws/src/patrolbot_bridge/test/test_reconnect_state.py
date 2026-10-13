@@ -7,6 +7,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from patrolbot_bridge.lidar_state import LidarState
 from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
 
@@ -46,7 +47,7 @@ def test_repeated_reconnect_preserves_estimator_but_invalidates_controls():
         RECONNECT_DELAY=0.0, server_ip='unused', server_port=0,
         sock_lock=threading.Lock(), _state_lock=threading.Lock(),
         _pose_lock=threading.Lock(), _session_generation=0,
-        _odom_covariance=covariance, _odom_validator=validator,
+        _odom_covariance=covariance, _odom_validator=validator, _lidar=LidarState(),
         _epoch=Mock(spec=['begin_session', 'disconnect']),
         _stop_event=Mock(), get_logger=Mock(return_value=Mock()),
         _fail_pending_controls=Mock(), _fail_pending_undock=Mock())

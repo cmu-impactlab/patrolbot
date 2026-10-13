@@ -37,7 +37,11 @@ void test_empty_scan_is_invalid() {
 }
 
 void test_zero_age_is_valid() {
-  CHECK_EQ(oldestScanAgeMs(std::vector<long>{0}), 0);
+  CHECK_EQ(oldestScanAgeMs(std::vector<long>{0, 0}), 0);
+}
+
+void test_single_beam_cannot_establish_scan_geometry() {
+  CHECK_EQ(oldestScanAgeMs(std::vector<long>{0}), -1);
 }
 
 void test_boundary_age_is_valid() {
@@ -56,15 +60,25 @@ void test_over_boundary_age_is_invalid() {
   CHECK_EQ(oldestScanAgeMs(std::vector<long>{499, 501}), -1);
 }
 
+void test_snapshot_processing_time_is_added() {
+  CHECK_EQ(patrolbot::elapsedScanAgeMs(400, 100), 500);
+  CHECK_EQ(patrolbot::elapsedScanAgeMs(400, 101), -1);
+  CHECK_EQ(patrolbot::elapsedScanAgeMs(-1, 0), -1);
+  CHECK_EQ(patrolbot::elapsedScanAgeMs(0, -1), -1);
+  CHECK_EQ(patrolbot::elapsedScanAgeMs(0, 9223372036854775807LL), -1);
+}
+
 }  // namespace
 
 int main() {
   RUN(test_empty_scan_is_invalid);
   RUN(test_zero_age_is_valid);
+  RUN(test_single_beam_cannot_establish_scan_geometry);
   RUN(test_boundary_age_is_valid);
   RUN(test_mixed_ages_return_oldest);
   RUN(test_negative_age_is_invalid);
   RUN(test_over_boundary_age_is_invalid);
+  RUN(test_snapshot_processing_time_is_added);
 
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;

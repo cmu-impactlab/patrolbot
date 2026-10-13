@@ -5,7 +5,9 @@ import socket
 import threading
 import time
 
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from action_msgs.srv import CancelGoal
+
+from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import ManageLifecycleNodes
 from rcl_interfaces.srv import SetParametersAtomically
@@ -15,6 +17,7 @@ from std_srvs.srv import Trigger
 from .epoch_recovery import EpochRecovery
 from .odom_epoch import OdomEpochGuard
 from .map_runtime import MapRuntimeMixin
+from .pose_innovation import OdomHistory, innovation, propagate, valid_planar_covariance
 
 
 class EpochRuntime(MapRuntimeMixin):
@@ -23,6 +26,9 @@ class EpochRuntime(MapRuntimeMixin):
         self.lock = threading.RLock()
         self.guard = OdomEpochGuard()
         self.recovery = EpochRecovery()
+        self._odom_history = OdomHistory()
+        self._pose_anchor = None
+        self._localization_fault = ""
         self._token = None
         self.first_tf_ns = None
         self._tf_generation = 0
@@ -42,6 +48,9 @@ class EpochRuntime(MapRuntimeMixin):
         self._deadline = None
         self._failed = False
         self._navigation_ready = False
+        self._lidar_reseed = False
+        self._lidar_cancel = [node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
+                              for name in ('navigate_to_pose', 'navigate_through_poses')]
         self._navigation = node.create_client(
             ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
         self._accepted_seed_stamp = None
@@ -118,6 +127,8 @@ class EpochRuntime(MapRuntimeMixin):
     @property
     def commands_allowed(self):
         with self.lock:
+            if not self.node._lidar_ready():
+                return False
             if self.map_hold:
                 return False
             if not (self.guard.ready and not self.recovery.required
@@ -186,6 +197,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     @property
     def status_stage(self):
+        if self._localization_fault:
+            return "failed:localization-innovation"
         if self._map_error:
             return "failed:map-state"
         if self.maps and self.maps.hold:
@@ -199,6 +212,8 @@ class EpochRuntime(MapRuntimeMixin):
             return 'failed:' + self._phase
         if self.recovery.stage == EpochRecovery.READY and not self._navigation_ready:
             return self._phase if self._phase.endswith('navigation') else 'wait-navigation'
+        if self.recovery.stage == EpochRecovery.WAIT_SEED and self.navigation_idle_problem():
+            return self.navigation_idle_problem()
         return self.recovery.stage
 
     def frame_allowed(self, session, line):
@@ -215,6 +230,12 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed(self, message):
         with self.lock:
+            if not self.node._lidar_ready():
+                return
+            if self._lidar_reseed and (self._navigation_status or
+                    self._navigation_idle_at is None or
+                    not 0 <= time.monotonic() - self._navigation_idle_at <= .5):
+                return
             if self.maps and self.maps.hold and (
                     self.maps.stage != 'wait-localization' or
                     self.stamp_ns(message) != self.maps.seed_stamp):
@@ -236,23 +257,102 @@ class EpochRuntime(MapRuntimeMixin):
                     self.node.get_clock().now().nanoseconds):
                 self._pending_pose = None
                 self._navigation_ready = False
+                self._lidar_reseed = False
+                self._pose_anchor = None
+                self._localization_fault = ""
+
+    def require_lidar_seed(self):
+        """Power changes invalidate localization, while odometry keeps flowing."""
+        with self.lock:
+            self.recovery.require_seed(self.node.get_clock().now().nanoseconds)
+            self._navigation_ready = False
+            self._accepted_seed_stamp = None
+            self._pending_pose = None
+            self._pending_pose_received_at = None
+            self._lidar_reseed = True
+            self.cancel_lidar_navigation()
+            # Keep the reset token current: this barrier needs a fresh operator
+            # seed, not an odometry/AMCL origin reset or a new cached goal.
+            self._token = self.recovery.token
+
+    def cancel_lidar_navigation(self):
+        # A delayed cancellation must never cancel goals issued after recovery.
+        request = CancelGoal.Request()
+        request.goal_info.stamp = self.node.get_clock().now().to_msg()
+        for client in self._lidar_cancel:
+            if client.service_is_ready():
+                client.call_async(request)
 
     def pose(self, message):
         with self.lock:
-            if not self.streams_allowed or message.header.frame_id != 'map':
+            if (not self.node._lidar_ready() or not self.streams_allowed or
+                    message.header.frame_id != 'map'):
                 return
             p = message.pose.pose
             if not all(math.isfinite(v) for v in (
                     p.position.x, p.position.y, p.position.z,
                     p.orientation.x, p.orientation.y, p.orientation.z,
                     p.orientation.w, *message.pose.covariance)):
+                if self._pose_anchor is not None:
+                    self._reject_localization('non-finite AMCL pose or covariance')
                 return
+            q = p.orientation
+            if abs(sum(v*v for v in (q.x,q.y,q.z,q.w))-1.) > 1e-3:
+                if self._pose_anchor is not None:
+                    self._reject_localization('invalid AMCL quaternion')
+                return
+            if self._pose_anchor is not None and self.recovery.stage == EpochRecovery.READY:
+                anchor, stamp, origin, start = self._pose_anchor
+                if self.stamp_ns(message) <= stamp:
+                    return
+                try:
+                    if (not valid_planar_covariance(message.pose.covariance) or
+                            any(message.pose.covariance[i] > .25 for i in (0, 7, 35))):
+                        raise ValueError('invalid localization covariance')
+                    if not 0 <= (self.node.get_clock().now().nanoseconds-self.stamp_ns(message))/1e9 <= 1.:
+                        raise ValueError('localization scan is stale or future dated')
+                    if origin != self.guard.epoch:
+                        raise ValueError("odometry origin mismatch")
+                    end = self._odom_history.at(self.stamp_ns(message), self.guard.epoch)
+                    predicted = propagate(anchor, start, end)
+                    with self.node._pose_lock:
+                        stationary = abs(self.node._vx) <= .005 and abs(self.node._vth) <= .01
+                    problem = innovation(predicted, self.planar_pose(message),
+                                         .1 if stationary else .2,
+                                         math.radians(3 if stationary else 5))
+                except ValueError as exc:
+                    problem = str(exc)
+                if problem:
+                    self._reject_localization(problem)
+                    return
+                if not stationary:
+                    self._pose_anchor = (self.planar_pose(message), self.stamp_ns(message), self.guard.epoch, end)
             self._pending_pose = message
             self._pending_pose_received_at = time.monotonic()
             self._accept_pending_pose()
 
+    def _reject_localization(self, problem):
+        self._localization_fault = 'LOCALIZATION_DEGRADED: ' + problem
+        self._navigation_ready = False
+        self.recovery.require_seed(self.node.get_clock().now().nanoseconds)
+        self._token = self.recovery.token
+        self.cancel_lidar_navigation()
+        self.node.cmd_vel_callback(Twist())
+        if self.maps and self.maps.hold:
+            self.maps.fail(self._localization_fault)
+        self.node.get_logger().error(self._localization_fault)
+
+    @staticmethod
+    def planar_pose(message):
+        p = message.pose.pose
+        q = p.orientation
+        return (p.position.x, p.position.y,
+                math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
+
     def seed_accepted(self, message):
         with self.lock:
+            if not self.node._lidar_ready():
+                return
             stamp = self.stamp_ns(message)
             if (message.header.frame_id != 'map' or not self.streams_allowed
                     or self.recovery._reset_ns is None
@@ -353,6 +453,7 @@ class EpochRuntime(MapRuntimeMixin):
                         elif self._phase == 'pause-navigation':
                             self._phase = 'resume-navigation'
                         elif self._phase == 'resume-navigation':
+                            self._anchor_localization()
                             self._navigation_ready = True
                             self._phase = 'navigation-ready'
                             return

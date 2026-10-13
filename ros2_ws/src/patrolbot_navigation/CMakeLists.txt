@@ -13,6 +13,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_safety_contract test/test_safety_contract.py)
   ament_add_pytest_test(test_safety_policy test/test_safety_policy.py)
   ament_add_pytest_test(test_joystick_policy test/test_joystick_policy.py)
+  ament_add_pytest_test(test_joy_teleop_runtime test/test_joy_teleop_runtime.py)
   ament_add_pytest_test(
     test_controller_feedback_policy
     test/test_controller_feedback_policy.py)

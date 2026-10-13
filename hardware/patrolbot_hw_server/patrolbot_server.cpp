@@ -1,4 +1,6 @@
 #include <new>
+#include <chrono>
+#include "encoder_capture.hpp"
 #include <iterator>
 #include <cstddef>
 #include <cstdio>
@@ -23,12 +25,73 @@
 #include "protocol.hpp"
 #include "undock.hpp"
 #include "scan_timing.hpp"
+#include "lidar_power.hpp"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace {
+
+// Opt-in, bounded packet observation in the existing sole ARIA owner.
+class EncoderObserver {
+ public:
+  explicit EncoderObserver(ArRobot& robot) : robot_(robot), callback_(this, &EncoderObserver::packet) {}
+  void start(const std::string& origin) {
+    const char* count = std::getenv("PATROLBOT_ENCODER_CAPTURE_SAMPLES");
+    if (!count) return;
+    char* end = NULL;
+    const long samples = std::strtol(count, &end, 10);
+    if (!end || *end || samples < 1 || samples > 4096) {
+      ArLog::log(ArLog::Terse, "Invalid encoder capture budget; diagnostics disabled.");
+      return;
+    }
+    // Research PatrolBot user guide p72: ENCODERpac 0x90, two LE uint32 counters.
+    capture_.start(origin, static_cast<unsigned>(samples), 60000, now(), true);
+    robot_.addPacketHandler(&callback_, ArListPos::FIRST);
+    robot_.requestEncoderPackets();
+    requested_ = true;
+  }
+  bool packet(ArRobotPacket* packet) {
+    const long long stamp = now();
+    if (!capture_.active(stamp)) {
+      if (requested_) { robot_.stopEncoderPackets(); requested_=false; }
+      return false;
+    }
+    if (packet->getID()==0x32 || packet->getID()==0x33) capture_.observeSip(stamp);
+    if (packet->getID()!=0x90 || packet->getDataLength()!=8) return false;
+    patrolbot::SipPoseSnapshot sip;
+    sip.x_m=robot_.getX()/1000.; sip.y_m=robot_.getY()/1000.;
+    sip.yaw_rad=robot_.getTh()*M_PI/180.;
+    capture_.recordEncoder(reinterpret_cast<const std::uint8_t*>(packet->getBuf()+packet->getReadLength()),
+                           8, stamp, sip);
+    return false;  // Preserve ARIA's own encoder handler and packet cursor.
+  }
+  void drain() {
+    std::vector<patrolbot::EncoderCaptureRow> fresh;
+    robot_.lock();
+    const auto& rows=capture_.rows();
+    fresh.assign(rows.begin()+emitted_,rows.end()); emitted_=rows.size();
+    robot_.unlock();
+    for (const auto& row : fresh) {
+      ArLog::log(ArLog::Normal,
+        "ENCODER_DIAGNOSTIC origin=%s capture_ms=%lld sip_receipt_ms=%lld left=%lu right=%lu sip=%.9g,%.9g,%.9g",
+        row.origin.c_str(), row.captured_at_ms, row.sip_captured_at_ms,
+        static_cast<unsigned long>(row.left_counts), static_cast<unsigned long>(row.right_counts),
+        row.sip_x_m,row.sip_y_m,row.sip_yaw_rad);
+    }
+  }
+ private:
+  static long long now() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+  ArRobot& robot_;
+  ArRetFunctor1C<bool, EncoderObserver, ArRobotPacket*> callback_;
+  patrolbot::EncoderCapture capture_;
+  std::size_t emitted_=0;
+  bool requested_=false;
+};
 
 const int kControlOk = 0;
 const int kInvalidRequest = 1;
@@ -45,6 +108,8 @@ const long kOperationTimeoutMs = 5000;
 // halts the robot and deploys the charging mechanism, is never sent anywhere.
 const unsigned char kUarcsChargeCommand = 68;
 const char* kProfilePath = "/home/ros/patrolbot_hw_server/undock_profile.conf";
+const std::string kLidarStatePath = "/run/user/" +
+    std::to_string(static_cast<unsigned long>(getuid())) + "/patrolbot_lidar_power_state";
 // Outgoing bytes are coalesced per iteration so a control reply no longer
 // displaces a whole telemetry frame. Capped so back-pressure cannot grow it.
 const std::size_t kMaxPendingWrite = 65536;
@@ -72,6 +137,7 @@ struct HardwareSnapshot {
   bool estop_pressed;
   unsigned int fault_flags;
   unsigned int stall_value;
+  bool fresh;
 };
 
 struct PendingOperation {
@@ -332,6 +398,8 @@ HardwareSnapshot readSnapshot(ArRobot* robot) {
   state.estop_pressed = robot->isEStopPressed();
   state.fault_flags = robot->getFaultFlags();
   state.stall_value = robot->getStallValue();
+  const long packet_age_ms = robot->getLastPacketTime().mSecSince();
+  state.fresh = robot->isConnected() && packet_age_ms >= 0 && packet_age_ms <= 500;
   robot->unlock();
   return state;
 }
@@ -471,6 +539,93 @@ void rejectControl(const patrolbot::ParsedCommand& command, int code,
                   tracker);
 }
 
+struct LaserSnapshot {
+  LaserSnapshot() : age_ms(-1) {}
+  long age_ms;
+  std::vector<double> ranges;
+};
+
+LaserSnapshot readLaser(ArLaser* laser) {
+  LaserSnapshot scan;
+  if (!laser) return scan;
+  laser->lockDevice();
+  const std::list<ArSensorReading*>* readings = laser->getRawReadings();
+  if (laser->isConnected() && readings && !readings->empty()) {
+    std::vector<long> ages;
+    for (std::list<ArSensorReading*>::const_iterator it = readings->begin();
+         it != readings->end(); ++it) {
+      ages.push_back(*it ? (*it)->getTimeTaken().mSecSince() : -1);
+      scan.ranges.push_back(*it ? (*it)->getRange() / 1000.0 : 0.0);
+    }
+    scan.age_ms = patrolbot::oldestScanAgeMs(ages);
+  }
+  laser->unlockDevice();
+  return scan;
+}
+
+void handleLidarPower(const patrolbot::ParsedCommand& command, ArRobot* robot,
+                      ArLaser* laser, patrolbot::LidarPower* lidar,
+                      MonotonicClock* clock, bool undock_active,
+                      const std::string& boot_id,
+                      std::deque<std::string>* responses,
+                      patrolbot::RequestTracker* tracker) {
+  std::string completed;
+  const patrolbot::RequestDisposition disposition = tracker->inspect(
+      command.type, command.request_id, &completed);
+  if (disposition == patrolbot::REQUEST_COMPLETED ||
+      disposition == patrolbot::REQUEST_DUPLICATE_PENDING) {
+    responses->push_back(patrolbot::formatAck(command.type, command.request_id, true));
+    if (disposition == patrolbot::REQUEST_COMPLETED) responses->push_back(completed);
+    return;
+  }
+  HardwareSnapshot state = readSnapshot(robot);
+  const bool busy = disposition == patrolbot::REQUEST_BUSY || undock_active;
+  if (!lidar->requestAllowed(state.linear, state.angular, state.fresh, busy) || !laser) {
+    const char* reason = !lidar->supported() ? "lidar_power_not_commissioned" :
+        !laser ? "laser_not_configured" : busy ? "another_operation_pending" :
+        lidar->state() == patrolbot::LIDAR_STARTING ? "lidar_starting" :
+        !state.fresh ? "base_state_stale" : "robot_not_stationary";
+    rejectControl(command, kPreconditionFailed, reason, state, responses, tracker);
+    return;
+  }
+  const bool enable = command.type == patrolbot::COMMAND_LIDAR_ON;
+  const bool already = enable ? lidar->ready()
+                              : lidar->state() == patrolbot::LIDAR_OFF;
+  responses->push_back(patrolbot::formatAck(command.type, command.request_id, false));
+  tracker->begin(command.type, command.request_id);
+  bool sent = true;
+  bool saved = true;
+  if (!already) {
+    // A crash between persistence and the command leaves FAULT, never a
+    // fabricated OFF report or automatic startup ON.
+    lidar->commandFailed();
+    robot->lock();
+    robot->setVel(0);
+    robot->setRotVel(0);
+    robot->unlock();
+    saved = patrolbot::saveLidarState(kLidarStatePath, boot_id, patrolbot::LIDAR_FAULT);
+    if (saved) {
+      robot->lock();
+      sent = robot->comInt(ArCommands::POWER_LRF, enable ? 1 : 0);
+      robot->unlock();
+      if (sent) {
+        saved = patrolbot::saveLidarState(kLidarStatePath, boot_id,
+            enable ? patrolbot::LIDAR_STARTING : patrolbot::LIDAR_OFF);
+        if (saved && enable) lidar->onRequested(clock->tick());
+        else if (saved) lidar->offRequested();
+      }
+    }
+  }
+  const bool success = sent && saved;
+  const std::string result = patrolbot::formatResult(
+      command.type, command.request_id, success, success ? kControlOk : kHardwareRejected,
+      !saved ? "lidar_state_persistence_failed" : !sent ? "lidar_power_command_failed" :
+      enable ? "lidar_on_commanded" : "lidar_off_commanded",
+      state.charge_state, state.motors_enabled, state.estop_pressed);
+  tracker->finish(command.type, command.request_id, result);
+  responses->push_back(result);
+}
+
 // CHARGE_RELEASE and MOTOR_ENABLE are decoupled, zero-motion maintenance
 // commands. CHARGE_RELEASE never enables motors and never authorizes motion.
 // MOTOR_ENABLE never releases charging and is refused whenever the robot may
@@ -483,7 +638,7 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
                   patrolbot::DockObserver* observer,
                   const patrolbot::UndockInputs& inputs,
                   const patrolbot::UndockHardwareProfile& profile,
-                  bool undock_active) {
+                  bool undock_active, bool lidar_ready) {
   std::string completed_result;
   const patrolbot::RequestDisposition disposition = tracker->inspect(
       command.type, command.request_id, &completed_result);
@@ -505,6 +660,27 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
   }
 
   const HardwareSnapshot state = readSnapshot(robot);
+  if (command.type == patrolbot::COMMAND_MOTOR_DISABLE) {
+    responses->push_back(patrolbot::formatAck(command.type, command.request_id, false));
+    robot->lock();
+    robot->setVel(0);
+    robot->setRotVel(0);
+    robot->disableMotors();
+    robot->unlock();
+    pending->active = true;
+    pending->type = command.type;
+    pending->request_id = command.request_id;
+    pending->stable_cycles = 0;
+    pending->started.setToNow();
+    tracker->begin(command.type, command.request_id);
+    return;
+  }
+  if (!lidar_ready && (command.type == patrolbot::COMMAND_MOTOR_ENABLE ||
+                       command.type == patrolbot::COMMAND_CHARGE_RELEASE)) {
+    rejectControl(command, kPreconditionFailed, "lidar_not_ready", state,
+                  responses, tracker);
+    return;
+  }
   if (undock_active) {
     rejectControl(command, kPreconditionFailed, "undock_owns_motion", state,
                   responses, tracker);
@@ -579,7 +755,7 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
     // Permitted only where the robot cannot still be connected to the dock.
     // There is no post-release window and no charge-state exception: enabling
     // motors in order to leave the dock is the UNDOCK operation's job.
-    if (!patrolbot::motorEnableAllowed(observer->state(), state.estop_pressed)) {
+    if (!patrolbot::motorEnableAllowed(observer->state(), state.estop_pressed, lidar_ready)) {
       const char* reason =
           state.estop_pressed ? "estop_asserted" : "dock_contact_possible";
       rejectControl(command, kPreconditionFailed, reason, state, responses,
@@ -600,6 +776,8 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
     robot->lock();
     // Deliberate command only. DRIVE and startup never call enableMotors(),
     // and this path never touches the charger.
+    robot->setVel(0);
+    robot->setRotVel(0);
     robot->enableMotors();
     robot->unlock();
     pending->phase = MOTOR_ENABLE_WAIT_ENABLED;
@@ -624,11 +802,24 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
                    std::deque<std::string>* responses,
                    patrolbot::RequestTracker* tracker,
                    const patrolbot::DockObserver& observer,
-                   const patrolbot::UndockHardwareProfile& profile) {
+                   const patrolbot::UndockHardwareProfile& profile,
+                   bool lidar_ready) {
   if (!pending->active) return;
   HardwareSnapshot state = readSnapshot(robot);
+  if (!lidar_ready && pending->type != patrolbot::COMMAND_MOTOR_DISABLE) {
+    robot->lock();
+    robot->setVel(0);
+    robot->setRotVel(0);
+    robot->disableMotors();
+    robot->unlock();
+    finishOperation(pending, false, kPreconditionFailed, "lidar_not_ready",
+                    readSnapshot(robot), responses, tracker);
+    return;
+  }
   bool confirmed = false;
-  if (pending->type == patrolbot::COMMAND_CHARGE_RELEASE) {
+  if (pending->type == patrolbot::COMMAND_MOTOR_DISABLE) {
+    confirmed = !state.motors_enabled;
+  } else if (pending->type == patrolbot::COMMAND_CHARGE_RELEASE) {
     if (!isStationary(state)) {
       robot->lock();
       robot->disableMotors();
@@ -668,7 +859,7 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
       confirmed = state.charge_state == 0;
     }
   } else if (pending->type == patrolbot::COMMAND_MOTOR_ENABLE) {
-    if (!patrolbot::motorEnableAllowed(observer.state(), state.estop_pressed) ||
+    if (!patrolbot::motorEnableAllowed(observer.state(), state.estop_pressed, lidar_ready) ||
         (state.fault_flags & profile.precheck_blocking_fault_mask) != 0 ||
         !isStationary(state)) {
       robot->lock();
@@ -690,7 +881,8 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
     finishOperation(
         pending, true, kControlOk,
         pending->type == patrolbot::COMMAND_CHARGE_RELEASE
-            ? "charge_released" : "motors_enabled",
+            ? "charge_released" : pending->type == patrolbot::COMMAND_MOTOR_DISABLE
+            ? "motors_disabled" : "motors_enabled",
         state, responses, tracker);
     return;
   }
@@ -736,7 +928,7 @@ void handleUndockRequest(const patrolbot::ParsedCommand& command,
                          const patrolbot::UndockHardwareProfile& profile,
                          std::deque<std::string>* responses,
                          patrolbot::RequestTracker* tracker,
-                         UndockLeaseWatchdog* watchdog) {
+                         UndockLeaseWatchdog* watchdog, bool lidar_ready) {
   std::string completed_result;
   const patrolbot::RequestDisposition disposition = tracker->inspect(
       patrolbot::COMMAND_UNDOCK, command.request_id, &completed_result);
@@ -760,6 +952,15 @@ void handleUndockRequest(const patrolbot::ParsedCommand& command,
     responses->push_back(undockResultFor(
         command.request_id, false, patrolbot::UNDOCK_BUSY,
         "another_operation_pending", rejected, inputs, *observer));
+    return;
+  }
+
+  if (!lidar_ready) {
+    responses->push_back(patrolbot::formatAck(command.type, command.request_id, false));
+    const std::string result = undockResultFor(command.request_id, false,
+        patrolbot::UNDOCK_SAFETY_FAULT, "lidar_not_ready", rejected, inputs, *observer);
+    request_tracker_begin_and_finish(tracker, command.request_id, result);
+    responses->push_back(result);
     return;
   }
 
@@ -858,6 +1059,8 @@ int main(int argc, char** argv) {
     Aria::exit(1);
   }
 
+  EncoderObserver encoder_observer(robot);
+  encoder_observer.start(odom_epoch);
   robot.runAsync(true);
   robot.lock();
   // Sonar is telemetry and a safety input. Motors deliberately remain in their
@@ -903,10 +1106,24 @@ int main(int argc, char** argv) {
 
   const patrolbot::UndockHardwareProfile profile = loadProfile(kProfilePath);
 
+  const char* lidarCommissioned = std::getenv("PATROLBOT_LIDAR_POWER_COMMISSIONED");
+  std::string boot_id;
+  { std::ifstream boot_file("/proc/sys/kernel/random/boot_id"); boot_file >> boot_id; }
+  patrolbot::LidarPower lidar(lidarCommissioned && std::strcmp(lidarCommissioned, "1") == 0,
+                            patrolbot::loadLidarState(kLidarStatePath, boot_id));
+  MonotonicClock clock;
   ArLaserConnector laserConnector(&parser, &robot, &robotConnector);
-  if (!laserConnector.connectLasers()) {
-    ArLog::log(ArLog::Terse,
-               "Warning: Target laser configuration not found.");
+  ArLaser* laser = NULL;
+  // connectLasers() powers ON and can power-cycle by default. Parse/configure
+  // only: serial reconnect runs asynchronously and never changes power.
+  if (laserConnector.parseArgs()) {
+    laser = laserConnector.getLaser(1);
+    if (laser) {
+      laser->setRobot(&robot);
+      robot.lock();
+      robot.addLaser(laser, 1);
+      robot.unlock();
+    }
   }
 
   ArSocket serverSock;
@@ -918,8 +1135,6 @@ int main(int argc, char** argv) {
   ArLog::log(ArLog::Normal,
              "PatrolBot text server listening on port 7272.");
 
-  ArLaser* laser = robot.findLaser(1);
-  if (!laser) laser = robot.findLaser(0);
   if (laser) {
     ArLog::log(ArLog::Normal, "Laser hooked: %s", laser->getName());
   } else {
@@ -929,7 +1144,7 @@ int main(int argc, char** argv) {
 
   PendingOperation pending;
   patrolbot::RequestTracker request_tracker;
-  MonotonicClock clock;
+  long long last_laser_connect_ms = -5000;
   // Both survive client reconnects, so a replayed request id is answered
   // consistently and the dock state is not forgotten when the Pi restarts.
   // The observer starts UNKNOWN: nothing is assumed at process start.
@@ -974,7 +1189,7 @@ int main(int argc, char** argv) {
     lastCmdTime.setToNow();
     bool watchdogStopped = false;
     int auxCounter = 0;
-    const int auxInterval = 5;
+    const int auxInterval = 2;  // BaseState remains at 10 Hz while power is OFF.
     bool client_connected = true;
     // A bridge that never sees FEATURES=UNDOCK refuses undock goals rather
     // than waiting for a reply that will not come.
@@ -982,6 +1197,17 @@ int main(int argc, char** argv) {
 
     while (robot.isRunning() && client_connected) {
       const long long now_ms = clock.tick();
+      const LaserSnapshot scan = readLaser(laser);
+      lidar.observe(scan.age_ms, now_ms);
+      if (lidar.shouldReconnect() && laser && now_ms - last_laser_connect_ms >= 5000) {
+        laser->lockDevice();
+        if (!laser->isConnected() && !laser->isTryingToConnect()) {
+          // asyncConnect schedules work on ARIA's laser thread, never this control loop.
+          laser->asyncConnect();
+          last_laser_connect_ms = now_ms;
+        }
+        laser->unlockDevice();
+      }
       const patrolbot::UndockInputs undock_inputs =
           readUndockInputs(&robot, profile, now_ms);
       dock_observer.update(undock_inputs, profile);
@@ -1021,7 +1247,7 @@ int main(int argc, char** argv) {
                     command.linear, command.angular, pending.active,
                     dock_observer.state(), state.motors_enabled,
                     state.estop_pressed, state.fault_flags,
-                    profile.critical_fault_mask, false);
+                    profile.critical_fault_mask, false, lidar.ready());
             const bool permitted = drive != patrolbot::DRIVE_REJECTED;
             const bool zero = drive == patrolbot::DRIVE_ALLOWED_ZERO;
             robot.lock();
@@ -1044,19 +1270,51 @@ int main(int argc, char** argv) {
                          state.motors_enabled ? 1 : 0,
                          state.estop_pressed ? 1 : 0, state.fault_flags);
             }
+          } else if (command.type == patrolbot::COMMAND_MOTOR_DISABLE) {
+            std::string replay;
+            const patrolbot::RequestDisposition disposition = request_tracker.inspect(
+                command.type, command.request_id, &replay);
+            if (disposition != patrolbot::REQUEST_COMPLETED &&
+                disposition != patrolbot::REQUEST_DUPLICATE_PENDING) {
+              if (pending.active) {
+                finishOperation(&pending, false, kPreconditionFailed,
+                    "canceled_by_motor_disable", readSnapshot(&robot),
+                    &responses, &request_tracker);
+              }
+              if (undock.active()) {
+                const std::string id = undock.requestId();
+                patrolbot::UndockOutputs terminal;
+                terminal.phase = undock.phase();
+                terminal.release_attempts = undock.releaseAttempts();
+                undock.invalidate("motor_disable", &dock_observer);
+                const std::string result = undockResultFor(id, false,
+                    patrolbot::UNDOCK_SAFETY_FAULT, "motor_disable_interrupted", terminal,
+                    undock_inputs, dock_observer);
+                request_tracker.finish(patrolbot::COMMAND_UNDOCK, id, result);
+                responses.push_back(result);
+              }
+              watchdog.disarm();
+            }
+            startControl(command, &robot, &pending, &responses,
+                         &request_tracker, &dock_observer, undock_inputs,
+                         profile, undock.active(), lidar.ready());
           } else if (command.type == patrolbot::COMMAND_UNDOCK) {
             handleUndockRequest(command, &undock, &dock_observer, undock_inputs,
                                 profile, &responses, &request_tracker,
-                                &watchdog);
+                                &watchdog, lidar.ready());
           } else if (command.type == patrolbot::COMMAND_UNDOCK_CANCEL) {
             handleUndockCancel(command, &undock, undock_inputs, dock_observer,
                                &responses, &request_tracker);
+          } else if (command.type == patrolbot::COMMAND_LIDAR_ON ||
+                     command.type == patrolbot::COMMAND_LIDAR_OFF) {
+            handleLidarPower(command, &robot, laser, &lidar, &clock, undock.active(),
+                             boot_id, &responses, &request_tracker);
           } else if (command.type == patrolbot::COMMAND_CHARGE_RELEASE ||
                      command.type == patrolbot::COMMAND_MOTOR_ENABLE ||
                      command.type == patrolbot::COMMAND_DOCK_RESET) {
             startControl(command, &robot, &pending, &responses,
                          &request_tracker, &dock_observer, undock_inputs,
-                         profile, undock.active());
+                         profile, undock.active(), lidar.ready());
           } else {
             ArLog::log(ArLog::Terse, "Rejected command: %s",
                        command.error.c_str());
@@ -1066,8 +1324,33 @@ int main(int argc, char** argv) {
         client_connected = false;
       }
 
+      const long long after_commands_ms = clock.tick();
+      lidar.observe(patrolbot::elapsedScanAgeMs(scan.age_ms, after_commands_ms - now_ms),
+                    after_commands_ms);
       updateControl(&robot, &pending, &responses, &request_tracker,
-                    dock_observer, profile);
+                    dock_observer, profile, lidar.ready());
+
+      if (!lidar.ready()) {
+        robot.lock();
+        robot.setVel(0);
+        robot.setRotVel(0);
+        if (undock.active()) robot.disableMotors();
+        robot.unlock();
+        watchdogStopped = true;
+        if (undock.active()) {
+          const std::string request_id = undock.requestId();
+          patrolbot::UndockOutputs terminal;
+          terminal.phase = undock.phase();
+          terminal.release_attempts = undock.releaseAttempts();
+          undock.invalidate("lidar_not_ready", &dock_observer);
+          const std::string result = undockResultFor(request_id, false,
+              patrolbot::UNDOCK_SAFETY_FAULT, "lidar_not_ready", terminal,
+              undock_inputs, dock_observer);
+          request_tracker.finish(patrolbot::COMMAND_UNDOCK, request_id, result);
+          responses.push_back(result);
+          watchdog.disarm();
+        }
+      }
 
       // The independent watchdog thread has already stopped the base and
       // disabled the motors; invalidate the operation and report it.
@@ -1144,37 +1427,26 @@ int main(int argc, char** argv) {
         watchdogStopped = true;
       }
 
+      encoder_observer.drain();
       HardwareSnapshot motion = readSnapshot(&robot);
       std::stringstream telemetry;
       robot.lock();
       const double x = robot.getX() / 1000.0;
       const double y = robot.getY() / 1000.0;
       const double th = robot.getTh() * M_PI / 180.0;
+      motion.linear = robot.getVel() / 1000.;
+      motion.angular = robot.getRotVel() * M_PI / 180.;
       robot.unlock();
       telemetry << "ODOM:" << x << "," << y << "," << th << ","
                 << motion.linear << "," << motion.angular << "|LASER:";
 
-      long laserAgeMs = -1;
-      if (laser) {
-        laser->lockDevice();
-        const std::list<ArSensorReading*>* readings = laser->getRawReadings();
-        if (laser->isConnected() && readings && !readings->empty()) {
-          std::vector<long> ages;
-          for (std::list<ArSensorReading*>::const_iterator it = readings->begin();
-               it != readings->end(); ++it) {
-            // Missing beams invalidate the scan rather than rotating subsequent
-            // ranges by silently dropping a bearing.
-            ages.push_back(*it ? (*it)->getTimeTaken().mSecSince() : -1);
-          }
-          laserAgeMs = patrolbot::oldestScanAgeMs(ages);
-        }
-        if (laserAgeMs >= 0) {
-          for (std::list<ArSensorReading*>::const_iterator it = readings->begin();
-               it != readings->end(); ++it) {
-            telemetry << ((*it)->getRange() / 1000.0) << ",";
-          }
-        }
-        laser->unlockDevice();
+      const long long wire_time_ms = clock.tick();
+      const long measuredAgeMs = patrolbot::elapsedScanAgeMs(scan.age_ms, wire_time_ms - now_ms);
+      lidar.observe(measuredAgeMs, wire_time_ms);
+      const long laserAgeMs = lidar.ready() ? measuredAgeMs : -1;
+      if (laserAgeMs >= 0) {
+        for (std::vector<double>::const_iterator it = scan.ranges.begin();
+             it != scan.ranges.end(); ++it) telemetry << *it << ",";
       }
       // Relative duration, never SBC wall time: this host may not share the
       // Pi's clock epoch. Unknown/old scans carry no ranges and age -1.
@@ -1226,7 +1498,9 @@ int main(int argc, char** argv) {
                   << ","
                   << dock_observer.redockInhibitRemainingMs(undock_inputs,
                                                             profile)
-                  << "," << (profile.commissioned() ? 1 : 0) << "\n";
+                  << "," << (profile.commissioned() ? 1 : 0)
+                  << "|LIDAR=" << patrolbot::lidarStateName(lidar.state()) << ","
+                  << (lidar.supported() ? 1 : 0) << "," << laserAgeMs << "\n";
       }
 
       // Control replies and the telemetry frame are coalesced into one buffer

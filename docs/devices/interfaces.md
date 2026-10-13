@@ -17,7 +17,7 @@ The **only** device wired to the Pi, and the operator's manual-override interfac
 | **Hardware** | Logitech gamepad in **Xinput** mode (X/D switch on **X**) |
 | **Host machine** | **Pi 5** (USB, main runtime) |
 | **Connection** | USB → Linux `joydev` → `/dev/input/js*` |
-| **ROS interface** | `joy_node` → `/joy` (`sensor_msgs/Joy`) → `patrolbot_joy_teleop` → `input/joy` |
+| **ROS interface** | Input: `joy_node` → `/joy` (`sensor_msgs/Joy`) → `patrolbot_joy_teleop` → `input/joy`; feedback: `patrolbot_controller_feedback` → `/joy/set_feedback` (`sensor_msgs/JoyFeedback`) → `joy_node` |
 | **Update rate** | event-driven (on input change) |
 
 ### Controls
@@ -43,6 +43,21 @@ above 0.30 m/s makes the hardware server reject the command and force zero
 velocity, which feels like intermittent or chunky control rather than a clean
 speed clamp.
 
+### Blocker rumble
+
+The controller gives alert-only feedback; no controller gesture enables the
+motors. A new blocker produces one 0.6 s full-strength pulse after a 2.0 s
+startup grace. While fresh input shows **RB plus nonzero stick or D-pad
+intent**, a still-blocked attempt produces a 0.35 s pulse at most every 1.5 s.
+Every pulse ends with an explicit zero, and recovery and node shutdown also
+send zero. Motors disabled while `CLEAR_CONFIRMED` is a blocker; motors disabled
+while normally docked are not.
+
+`joy_node` accepts one `TYPE_RUMBLE`, id `0` command. Its SDL `LEFTRIGHT`
+implementation applies the single intensity to both the F710's large and small
+motors. The navigation container therefore needs read/write access to
+`/dev/input`; the gimbal container remains read-only.
+
 ### Failure conditions
 
 | Condition | Symptom | Effect |
@@ -50,6 +65,7 @@ speed clamp.
 | Controller unplugged | no `/dev/input/js*`, no `/joy` | 0.4 s watchdog drops the deadman and ramps to zero; a canceled goal stays canceled |
 | Switch on **D** (DirectInput) | wrong axis/button map | sticks do nothing useful — set the switch to **X** |
 | Deadman not held | sticks ignored | by design (interlock) |
+| Rumble unavailable | `joy_node` logs `No haptic (rumble) available` | verify the navigation input mount and cgroup rule are read/write; do not weaken the gimbal service |
 
 ## SBC telemetry socket (machine-to-machine)
 

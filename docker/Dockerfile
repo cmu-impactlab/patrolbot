@@ -48,7 +48,7 @@ RUN actual=$(/usr/local/bin/patrolbot-source-tree-digest /opt/patrolbot_ws) && \
     printf '%s\n' "$actual" > /opt/patrolbot_ws/PATROLBOT_SOURCE_SHA256
 
 RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
-    colcon build --symlink-install \
+    colcon build \
       --packages-select patrolbot_interfaces patrolbot_bridge \
         patrolbot_dock_manager patrolbot_docking_plugins patrolbot-launch \
         patrolbot_navigation

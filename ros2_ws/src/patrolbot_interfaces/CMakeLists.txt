@@ -17,6 +17,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/DockReset.srv"
   "srv/InitializeDockPose.srv"
   "srv/MotorEnable.srv"
+  "srv/MotorDisable.srv"
+  "srv/SetLidarPower.srv"
   "action/HardwareUndock.action"
   "action/Undock.action"
   "action/LocalizeOnMap.action"

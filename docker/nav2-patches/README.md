@@ -222,3 +222,35 @@ These services neither authorize motion nor substitute for fresh localization.
 `docker/tests/integration_floor_maps.py` exercises the patches with real Nav2,
 canonical maps, synthetic scans and a loopback fake SBC in a network-none
 container. Hardware acceptance remains separate under feature #66/#65.
+
+
+## Applied-seed diagnostics
+
+`0016-amcl-applied-seed-diagnostics.patch` logs one JSON record after each
+successful `pf_init`, before sensor weighting. It records the original request
+stamp, application time, actual TF-adjusted mean and 3-by-3 covariance passed to
+`pf_init`, initialized sample mean/count, and the number inside 15 cm and 4 degrees
+of that applied mean. It changes no particles or gates. The existing accepted
+seed topic still echoes the original request, and the post-seed scan barrier
+still uses the original request timestamp.
+
+For the measured seed, the isolated scan regression sends covariance x/y
+`0.0009` and yaw `0.00030461742`, requires sample mean within 1 cm / 0.3 degrees,
+and at least 99% of samples inside 15 cm / 4 degrees, then requires old/equal
+scans to be rejected and a fresh stationary scan to produce the first estimate.
+The seed ACK regression additionally covers wrong frames, stale TF, bounded
+retry, supersession and lifecycle reset without an extra seed refresh.
+
+Offline check against the pinned Nav2 1.3.12 source with all patches applied:
+
+```bash
+python3 docker/tests/test_amcl_seed_diagnostics.py /path/to/navigation2-1.3.12
+```
+
+This compiles the actual upstream particle filter and added diagnostic block;
+it does not establish ROS integration or physical wall alignment. Run both
+`integration_amcl_seed_ack.py` and `integration_amcl_seed_scan_barrier.py` in the
+exact candidate image with `--network none` and `PATROLBOT_ISOLATED_TEST=1` before
+deployment. A live supervised measured seed and independent scan/map wall
+alignment remain required; do not widen readiness gates or repeat seeds to
+obtain acceptance.

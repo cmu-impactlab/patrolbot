@@ -94,3 +94,20 @@ def test_epoch_reset_is_explicit_not_a_side_effect_of_rejection():
 def test_invalid_validator_configuration_fails_closed(kwargs):
     with pytest.raises(ValueError):
         OdomValidator(**kwargs)
+
+
+def test_receipt_time_regression_does_not_change_reference():
+    check = validator()
+    assert check.check_and_accept(sample(), 10.0).accepted
+    rejected = check.check_and_accept(sample(x=.01), 9.9)
+    assert rejected.reason == 'receipt-time-regressed'
+    assert check.check_and_accept(sample(x=.02), 10.05).accepted
+
+
+def test_queue_delay_must_not_be_used_as_motion_time():
+    check = validator()
+    assert check.check_and_accept(sample(), 10.0).accepted
+    # Parsing this frame at 12.0 would falsely admit 0.6 m of motion.
+    # Its socket receipt at 10.05 only admits 0.03 m.
+    rejected = check.check_and_accept(sample(x=.6), 10.05)
+    assert rejected.reason == 'position-discontinuity'

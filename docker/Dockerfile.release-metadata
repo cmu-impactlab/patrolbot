@@ -1,0 +1,7 @@
+ARG PATROLBOT_BASE_IMAGE
+FROM ${PATROLBOT_BASE_IMAGE}
+COPY docker/source-tree-digest.sh /usr/local/bin/patrolbot-source-tree-digest
+ARG PATROLBOT_SOURCE_SHA256
+RUN actual=$(bash /usr/local/bin/patrolbot-source-tree-digest /opt/patrolbot_ws) && \
+    test "$actual" = "$PATROLBOT_SOURCE_SHA256" && \
+    printf '%s\n' "$actual" > /opt/patrolbot_ws/PATROLBOT_SOURCE_SHA256

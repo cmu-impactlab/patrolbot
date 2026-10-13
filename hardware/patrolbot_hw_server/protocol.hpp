@@ -26,7 +26,10 @@ enum CommandType {
   COMMAND_MOTOR_ENABLE,
   COMMAND_UNDOCK,
   COMMAND_UNDOCK_CANCEL,
-  COMMAND_DOCK_RESET
+  COMMAND_DOCK_RESET,
+  COMMAND_LIDAR_ON,
+  COMMAND_LIDAR_OFF,
+  COMMAND_MOTOR_DISABLE
 };
 
 enum RequestDisposition {
@@ -111,11 +114,12 @@ DriveDisposition classifyDrive(double linear, double angular,
                                bool motors_enabled, bool estop_pressed,
                                unsigned int fault_flags,
                                unsigned int critical_fault_mask,
-                               bool undock_active);
+                               bool undock_active, bool lidar_ready);
 
 // MOTOR_ENABLE is a decoupled maintenance command: it never releases charging
 // and is refused whenever the robot may still be connected to the dock.
-bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed);
+bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed,
+                        bool lidar_ready);
 
 std::string commandName(CommandType command);
 std::string formatAck(CommandType command, const std::string& request_id,

@@ -1,6 +1,7 @@
 """Offline tests for the SBC hardware-control wire contract."""
 
 from patrolbot_bridge.control_protocol import (
+    COMMAND_MOTOR_DISABLE,
     COMMAND_CHARGE_RELEASE,
     COMMAND_DOCK_RESET,
     COMMAND_MOTOR_ENABLE,
@@ -74,3 +75,10 @@ def test_malformed_replies_fail_closed(line):
 
 def test_telemetry_is_not_misclassified_as_control():
     assert parse_reply('AUX:SONAR=|BATT=24.0,80,0,25|FLAGS=0,0,0,0,0') is None
+
+
+def test_motor_disable_uses_explicit_idempotent_protocol():
+    request_id = "123e4567-e89b-12d3-a456-426614174000"
+    assert format_request(COMMAND_MOTOR_DISABLE, request_id) == f"MOTOR_DISABLE:{request_id}\n".encode()
+    reply = parse_reply(f"RESULT:MOTOR_DISABLE:{request_id}:OK:0:motors_disabled:0:0:1")
+    assert reply.success and not reply.motors_enabled and reply.estop_pressed

@@ -53,6 +53,7 @@
 **/tests/protocol_test
 **/tests/undock_test
 **/tests/scan_timing_test
+**/tests/lidar_power_test
 **/*.bak
 **/*.bak.*
 **/*~

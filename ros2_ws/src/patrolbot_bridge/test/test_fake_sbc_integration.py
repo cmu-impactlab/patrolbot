@@ -548,7 +548,8 @@ def test_motor_enable_is_independent_of_dock_state(harness):
     with fake._lock:
         fake.estop_pressed = False
         fake.dock_state = 'DOCKED_CONFIRMED'
-    assert wait_until(lambda: bridge._dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: bridge._dock_state == 'DOCKED_CONFIRMED'
+                      and not bridge._estop_pressed)
     client = client_node.create_client(MotorEnable, '/patrolbot/motor_enable')
     assert client.wait_for_service(timeout_sec=1.0)
     request = MotorEnable.Request()

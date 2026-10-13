@@ -23,7 +23,8 @@ ARG PATROLBOT_NAV2_PATCH_SHA256
 RUN test -n "${PATROLBOT_NAV2_PATCH_SHA256}" && \
     test "$(for patch_file in /opt/patrolbot-nav2-patches/*.patch; do \
       printf '%s\0' "${patch_file##*/}"; cat "$patch_file"; \
-    done | sha256sum | cut -d' ' -f1)" = "${PATROLBOT_NAV2_PATCH_SHA256}"
+    done | sha256sum | cut -d' ' -f1)" = "${PATROLBOT_NAV2_PATCH_SHA256}" && \
+    printf '%s\n' "${PATROLBOT_SOURCE_SHA256}" > /opt/patrolbot_ws/PATROLBOT_SOURCE_SHA256
 ARG PATROLBOT_REVISION=unknown
 LABEL io.patrolbot.nav2-patch-sha256=${PATROLBOT_NAV2_PATCH_SHA256} \
       io.patrolbot.source-tree-sha256=${PATROLBOT_SOURCE_SHA256} \

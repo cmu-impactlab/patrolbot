@@ -1064,6 +1064,8 @@ def test_invalid_scan_age_drops_only_scan_and_recovers(harness, metadata):
 
 
 def test_scan_age_includes_local_queue_wait(harness):
+    from unittest.mock import patch
+
     fake, bridge, _client, _executor = harness
     assert wait_until(lambda: bridge._pose_at > 0)
     fake.telemetry_paused = True
@@ -1074,11 +1076,23 @@ def test_scan_age_includes_local_queue_wait(harness):
     try:
         line = ('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' +
                 '|ODOM_EPOCH:' + fake.odom_epoch)
-        bridge._parse_telemetry(line, received_at=time.monotonic() - .1)
+        clock = bridge.get_clock()
+        receipt_clock = clock.now()
+        received_at = time.monotonic() - .1
+        earliest_queue_age = time.monotonic() - received_at
+        with patch.object(clock, 'now', return_value=receipt_clock):
+            bridge._parse_telemetry(line, received_at=received_at)
+        latest_queue_age = time.monotonic() - received_at
         odom, scan = [msg for _, msg in published]
         def ns(msg):
             return msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
-        assert 220000000 <= ns(odom) - ns(scan) < 240000000
+        # Queue delay ages both stamps; acquisition age separates them.
+        assert ns(odom) - ns(scan) == 120000000
+        odom_age = receipt_clock.nanoseconds - ns(odom)
+        assert int(earliest_queue_age * 1e9) <= odom_age <= int(latest_queue_age * 1e9)
+        assert receipt_clock.nanoseconds - ns(scan) == odom_age + 120000000
+        # The next delayed frame must still have a newer network receipt.
+        time.sleep(.31)
         published.clear()
         bridge._parse_telemetry(line, received_at=time.monotonic() - .4)
         assert [topic for topic, _ in published] == ['/odom']

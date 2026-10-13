@@ -130,3 +130,68 @@ def test_bounded_stall_cancel_requires_real_recovery_and_unchanged_plant():
                       ('case_elapsed_s',121.), ('terminal_commands',[(1.,'DRIVE:.1:0')])]:
         with pytest.raises(AssertionError):
             check(dict(capture, **{key:value}))
+
+
+def test_actual_recovery_requires_both_cycles_motion_and_safe_terminal_state():
+    check = load_contract().validate_outcome
+    capture = dict(scenario='blocked-goal', status=6, case_elapsed_s=90., stopped=True,
+        terminal_latched_drive='DRIVE:0:0', terminal_commands=[],
+        terminal_observation_s=.6, terminal_feedback_fresh=True, drive_nonzero=True,
+        actual_recovery_stages=['backup', 'spin', 'wait'] * 2,
+        outer_recovery_stages=['clear', 'backup', 'spin', 'wait'] * 2 + ['clear'],
+        planner_failure_observed=True, full_outer_clears=3, navigate_error_code=204,
+        actual_backup_motion=True, actual_spin_motion=True)
+    check(capture)
+    for key, value in [('status', 4), ('actual_recovery_stages', ['backup']),
+        ('planner_failure_observed', False), ('full_outer_clears', 1),
+        ('drive_nonzero', False), ('actual_backup_motion', False),
+        ('actual_spin_motion', False), ('navigate_error_code', 0),
+        ('case_elapsed_s', 121.), ('stopped', False),
+        ('terminal_latched_drive', 'DRIVE:.1:0'), ('terminal_latched_drive', None),
+        ('terminal_commands', [(1., 'DRIVE:0:.2')]), ('terminal_observation_s', .2),
+        ('terminal_feedback_fresh', False), ('outer_recovery_stages', ['clear', 'backup'])]:
+        with pytest.raises(AssertionError):
+            check(dict(capture, **{key: value}))
+
+
+def test_outer_recovery_pairs_both_costmaps_and_excludes_contextual_global_clears():
+    parse = load_contract().outer_recovery_stages
+    local = '[local_costmap.local_costmap]: Received request to clear entirely the local_costmap'
+    global_ = '[global_costmap.global_costmap]: Received request to clear entirely the global_costmap'
+    backup = '[behavior_server]: Running backup'
+    spin = '[behavior_server]: Running spin'
+    wait = '[behavior_server]: Running wait'
+    assert parse('\n'.join([local, global_, global_, backup, spin, wait,
+        local, global_, backup, spin, wait, local, global_, global_])) == [
+            'clear', 'backup', 'spin', 'wait'] * 2 + ['clear']
+    assert parse('\n'.join([global_, backup])) == ['backup']
+
+
+def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path):
+    import ast
+    import json
+    import time
+    from types import SimpleNamespace
+
+    source = ast.parse((ROOT / 'docker/tests/integration_navigation_closed_loop.py').read_text())
+    final = next(node.finalbody for node in source.body if isinstance(node, ast.Try))
+    local = '[local_costmap.local_costmap]: Received request to clear entirely the local_costmap'
+    global_ = '[global_costmap.global_costmap]: Received request to clear entirely the global_costmap'
+    cycle = [local, global_] + ['[behavior_server]: Running ' + name for name in ('backup', 'spin', 'wait')]
+    log_path = tmp_path / 'raw.log'
+    log_path.write_text('\n'.join(cycle * 2))
+    def flush_last_clear():
+        with log_path.open('a') as stream:
+            stream.write('\n' + local + '\n' + global_)
+    capture = {'scenario': 'blocked-goal'}
+    def validate(value):
+        assert value['outer_recovery_stages'] == ['clear', 'backup', 'spin', 'wait'] * 2 + ['clear']
+    namespace = dict(sys=SimpleNamespace(exc_info=lambda: (None, None, None)),
+        capture=capture, bridge=None, fake=None, node=None, executor=None,
+        launch=None, base_launch=None, log=SimpleNamespace(close=flush_last_clear),
+        log_path=log_path, navigation_log_offset=0,
+        rclpy=SimpleNamespace(ok=lambda: False), json=json, time=time,
+        deadline=time.monotonic()+120, outer_recovery_stages=load_contract().outer_recovery_stages,
+        validate_outcome=validate, args=SimpleNamespace(output=tmp_path / 'capture.json'))
+    exec(compile(ast.Module(body=final, type_ignores=[]), '<runner teardown>', 'exec'), namespace)
+    assert capture.get('passed') is True

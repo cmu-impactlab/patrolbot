@@ -8,6 +8,7 @@ import threading
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 fake_module=types.ModuleType('test_fake_sbc_integration')
 class FakeSbc:
@@ -41,13 +42,31 @@ class PlantTests(unittest.TestCase):
             self.assertEqual(plant.world_pose,before)
             plant.motion_frozen=False;plant.last_command=time.monotonic()-1
             self.assertIn(b',0.0,0.0|LASER:',plant._telemetry())
+            clock=[100.]
+            original=plant.raster.raycast
+            def slow_raycast(*args):
+                clock[0]+=.02
+                return original(*args)
+            plant.last_step=100.;plant.last_command=100.;plant.velocity=(0.,.5)
+            plant.history=[]
+            acquisition_yaw=plant.world_pose[2]
+            with patch.object(fixture.time,'monotonic',side_effect=lambda:clock[0]), patch.object(plant.raster,'raycast',side_effect=slow_raycast):
+                wire=plant._telemetry()
+            self.assertEqual(plant.lidar_scan_age_ms,180)
+            self.assertIn(b'LASER_AGE_MS:180',wire)
+            self.assertAlmostEqual(plant.world_pose[2]-acquisition_yaw,.09,places=6)
+            self.assertAlmostEqual(plant.samples[-1]['time'],100.18,places=6)
+            scan=plant.snapshot()['scan_samples'][-1]
+            self.assertEqual(scan['acquired_at'],100.)
+            self.assertAlmostEqual(scan['delivered_at'],100.18,places=6)
+            self.assertAlmostEqual(scan['world_pose'][2],acquisition_yaw,places=6)
             plant.scan_delay=2.
             wire=plant._telemetry()
-            self.assertIn(b'LASER_AGE_MS:2000',wire)
-            self.assertEqual(plant.lidar_scan_age_ms,2000,
+            self.assertIn(f'LASER_AGE_MS:{plant.lidar_scan_age_ms}'.encode(),wire)
+            self.assertGreaterEqual(plant.lidar_scan_age_ms,2000,
                 'AUX LIDAR age must agree with LASER acquisition age')
             plant.scan_delay=0.
             plant._telemetry()
-            self.assertEqual(plant.lidar_scan_age_ms,0)
+            self.assertLess(plant.lidar_scan_age_ms,100)
 
 if __name__=='__main__':unittest.main()

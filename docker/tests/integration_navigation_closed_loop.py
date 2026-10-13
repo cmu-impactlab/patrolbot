@@ -19,12 +19,16 @@ assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}
 sys.path.insert(0, '/validation/docker/tests')
 sys.path.insert(0, '/validation/ros2_ws/src/patrolbot_bridge/test')
 from closed_loop_fixture import ClosedLoopFakeSbc
-from navigation_capture import validate_outcome, stall_recovery_evidence
+from navigation_capture import validate_outcome, stall_recovery_evidence, outer_recovery_stages
 from test_fake_sbc_integration import wait_until as fixture_wait_until
 import rclpy
-from action_msgs.msg import GoalStatus
+from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
+from tf2_msgs.msg import TFMessage
+from rosidl_runtime_py.convert import message_to_ordereddict
 from nav2_msgs.action import ComputePathToPose, NavigateToPose, NavigateThroughPoses
 from nav2_msgs.srv import ManageLifecycleNodes
 from patrolbot_interfaces.action import LocalizeOnMap
@@ -37,7 +41,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--scenario', choices=('reach', 'cancel', 'progress-failure', 'bounded-stall-cancel', 'stale-scan', 'lidar-off', 'origin-change', 'false-amcl-jump'), default='reach')
+parser.add_argument('--scenario', choices=('reach', 'cancel', 'progress-failure', 'bounded-stall-cancel', 'blocked-goal', 'stale-scan', 'lidar-off', 'origin-change', 'false-amcl-jump'), default='reach')
 parser.add_argument('--tree', choices=('to-pose', 'through-poses'), default='to-pose')
 parser.add_argument('--map', default='cmuq-floor1')
 parser.add_argument('--output', type=Path, default=Path('/tmp/navigation-capture.json'))
@@ -121,7 +125,8 @@ try:
         if start:
             break
     assert start, 'canonical map lacks required known-free scenario clearance'
-    fake = ClosedLoopFakeSbc(entry['path'], args.map, entry['revision'], start)
+    fake = ClosedLoopFakeSbc(entry['path'], args.map, entry['revision'], start, beams=181)
+    capture['laser_beams'] = fake.beams
     bridge = PatrolBotBridge(parameter_overrides=[
         Parameter('server_ip', value='127.0.0.1'),
         Parameter('server_port', value=fake.port), Parameter('reconnect_delay', value=.1)])
@@ -138,7 +143,8 @@ try:
             return
         now_ns = node.get_clock().now().nanoseconds
         captured_at = time.monotonic() - (now_ns-stamp_ns)/1e9
-        samples = fake.snapshot()['samples']
+        plant = fake.snapshot()
+        samples = plant['samples']
         if not samples:
             return
         nearest = min(samples, key=lambda sample: abs(sample['time']-captured_at))
@@ -146,14 +152,25 @@ try:
         yaw = math.atan2(2*(p.orientation.w*p.orientation.z+p.orientation.x*p.orientation.y),
                          1-2*(p.orientation.y**2+p.orientation.z**2))
         truth = nearest['world_pose']
+        scan = min(plant['scan_samples'], key=lambda sample: abs(sample['acquired_at']-captured_at))
         localization_pairs.append({'stamp_ns': stamp_ns, 'sample_time': nearest['time'],
             'time_error_s': abs(nearest['time']-captured_at),
             'amcl': [p.position.x,p.position.y,yaw], 'truth': truth,
             'position_error_m': math.hypot(p.position.x-truth[0],p.position.y-truth[1]),
-            'yaw_error_rad': abs(math.remainder(yaw-truth[2],2*math.pi))})
+            'yaw_error_rad': abs(math.remainder(yaw-truth[2],2*math.pi)),
+            'scan_truth': scan['world_pose'], 'scan_time_error_s': abs(scan['acquired_at']-captured_at),
+            'scan_yaw_error_rad': abs(math.remainder(yaw-scan['world_pose'][2],2*math.pi))})
     amcl_sub = node.create_subscription(PoseWithCovarianceStamped, '/amcl_pose',
                                         observe_amcl, qos_profile_sensor_data)
     capture['localization_pairs'] = localization_pairs
+    capture['timed_sensors'] = []
+    def observe_sensor(topic, message):
+        if navigation_started_ns is not None:
+            capture['timed_sensors'].append({'topic': topic, 'received_monotonic': time.monotonic(),
+                'message': message_to_ordereddict(message)})
+    sensor_subscriptions = [node.create_subscription(kind, topic,
+        lambda message, topic=topic: observe_sensor(topic, message), qos_profile_sensor_data)
+        for topic, kind in [('/scan', LaserScan), ('/odom', Odometry), ('/tf', TFMessage)]]
     log = log_path.open('w')
     # Production arbiter and its managed smoother complete input/navi -> /cmd_vel.
     base_launch = subprocess.Popen(
@@ -206,6 +223,27 @@ try:
     planned = wait(send(planner, request).get_result_async(), 30)
     assert planned.status == GoalStatus.STATUS_SUCCEEDED and len(planned.result.path.poses) > 2
     capture['planned_path_points'] = len(planned.result.path.poses)
+    if args.scenario == 'blocked-goal':
+        # Exercise real planner/behavior errors directly; dashboard bounds admission is separate.
+        x, y = (raster.width + 1) * raster.resolution, (raster.height + 1) * raster.resolution
+        yaw = raster.origin[2]
+        target = (raster.origin[0] + math.cos(yaw)*x - math.sin(yaw)*y,
+                  raster.origin[1] + math.sin(yaw)*x + math.cos(yaw)*y, yaw)
+        assert raster.cell(*target[:2]) == 'out_of_map'
+        capture['acceptance_mode'] = 'actual-nav2-outside-map-full-recovery'
+        capture['natural_frozen_exhaustion_passed'] = False
+        capture['actual_recovery_stages'] = []
+        recovery_seen = set()
+        recovery_subscriptions = []
+        for behavior in ('backup', 'spin', 'wait'):
+            def observe_recovery(message, behavior=behavior):
+                for status in message.status_list:
+                    key = (behavior, bytes(status.goal_info.goal_id.uuid))
+                    if status.status == GoalStatus.STATUS_SUCCEEDED and key not in recovery_seen:
+                        recovery_seen.add(key)
+                        capture['actual_recovery_stages'].append(behavior)
+            recovery_subscriptions.append(node.create_subscription(GoalStatusArray,
+                '/'+behavior+'/_action/status', observe_recovery, 10))
     if args.scenario in ('progress-failure', 'bounded-stall-cancel'):
         fake.motion_frozen = True
         capture['frozen_start_pose'] = fake.snapshot()['world_pose']
@@ -285,9 +323,18 @@ try:
             assert cancel_response.goals_canceling or result.done(), 'goal cancellation rejected'
     completed = wait(result, 120)
     capture['status'] = completed.status
-    terminal_index = len(fake.snapshot()['commands'])
+    capture['navigate_error_code'] = completed.result.error_code
+    capture['navigate_error_message'] = getattr(completed.result, 'error_msg', '')
+    terminal_snapshot = fake.snapshot()['commands']
+    terminal_index = len(terminal_snapshot)
+    if args.scenario == 'blocked-goal':
+        # Wait stops before its result; idle output can retain zero without publishing again.
+        capture['terminal_latched_drive'] = next((line for _, line in reversed(terminal_snapshot)
+            if line.startswith('DRIVE:')), None)
     assert deadline - time.monotonic() >= .6, 'case budget cannot cover terminal output observation'
+    terminal_observation_start = time.monotonic()
     time.sleep(.6)
+    capture['terminal_observation_s'] = time.monotonic() - terminal_observation_start
     capture['terminal_commands'] = fake.snapshot()['commands'][terminal_index:]
     assert wait_until(stopped, timeout=5), 'navigation left feedback plant moving'
     snapshot = fake.snapshot()
@@ -306,8 +353,14 @@ try:
     if args.scenario == 'bounded-stall-cancel':
         capture['acceptance_mode'] = 'bounded-stall-cancel'
         capture['autonomous_recovery_exhaustion_passed'] = False
-    validate_outcome(capture)
-    capture['passed'] = True
+    if args.scenario == 'blocked-goal':
+        capture['terminal_feedback_fresh'] = bool(snapshot['samples'] and
+            snapshot['samples'][-1]['time'] >= terminal_observation_start)
+        capture['actual_backup_motion'] = any(sample['velocity'][0] < -.001 for sample in snapshot['samples'])
+        capture['actual_spin_motion'] = any(abs(sample['velocity'][1]) > .001 for sample in snapshot['samples'])
+    else:
+        validate_outcome(capture)
+        capture['passed'] = True
 except Exception as error:
     capture['passed'] = False
     capture['failure'] = str(error)
@@ -363,6 +416,32 @@ finally:
             cleanup('launch shutdown', stop_launch)
     if log:
         cleanup('log close', log.close)
+    if capture.get('scenario') == 'blocked-goal' and log_path.exists():
+        teardown_log = log_path.read_text()
+        exits = [line for line in teardown_log.splitlines() if 'process has died' in line]
+        capture['teardown_errors'] = exits
+        capture['complete_teardown_passed'] = not exits
+        for line in exits:
+            # Report the existing base double-shutdown separately; all other child failures fail.
+            if not ('[lifecycle_mgr.py-' in line and 'exit code 1,' in line and
+                    'rcl_shutdown already called on the given context' in teardown_log):
+                cleanup_errors.append('unexpected launched process failure: ' + line)
+        capture['total_elapsed_s'] = 120 - (deadline - time.monotonic())
+        if capture['total_elapsed_s'] > 120:
+            cleanup_errors.append('120-second case budget exceeded including teardown')
+        if not original_error:
+            # ROS launch can flush the final recovery event only when its producers exit.
+            with log_path.open() as stream:
+                stream.seek(navigation_log_offset)
+                recovery_log = stream.read()
+            capture['planner_failure_observed'] = ('outside' in recovery_log.lower() and
+                '[compute_path' in recovery_log and 'Aborting handle' in recovery_log)
+            capture['outer_recovery_stages'] = outer_recovery_stages(recovery_log)
+            capture['full_outer_clears'] = capture['outer_recovery_stages'].count('clear')
+            capture['contextual_global_clears'] = recovery_log.count(
+                'Received request to clear entirely the global_costmap') - capture['full_outer_clears']
+            cleanup('recovery evidence', lambda: validate_outcome(capture))
+            capture['passed'] = not cleanup_errors
     if cleanup_errors:
         capture['cleanup_errors'] = cleanup_errors
         capture['passed'] = False

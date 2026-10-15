@@ -528,7 +528,7 @@ class DockManager(Node):
             traveled = self._hardware_distance
             if not hardware_ok:
                 code = self._undock_result_code(
-                    goal_handle, hardware_result)
+                    goal_handle, hardware_result, hardware_reason)
                 return self._abort(
                     goal_handle, code, hardware_reason, initial_charge,
                     manual_recovery=True, distance=traveled)
@@ -601,11 +601,15 @@ class DockManager(Node):
                 self._state_name = 'IDLE'
 
     @staticmethod
-    def _undock_result_code(goal_handle, hardware_result):
+    def _undock_result_code(goal_handle, hardware_result, hardware_reason=''):
         """Map an SBC failure onto the manager-facing result code."""
         if goal_handle.is_cancel_requested:
             return Undock.Result.CANCELED
         if hardware_result is None:
+            # Only an explicit refusal proves this request never started.
+            # Missing acceptance or terminal results remain unknown outcomes.
+            if hardware_reason == 'hardware undock goal rejected':
+                return Undock.Result.REJECTED
             return Undock.Result.MOTION_FAILED
         code = hardware_result.code
         mapping = {
@@ -653,7 +657,9 @@ class DockManager(Node):
         if not self._wait_future(send_future, goal_handle, 5.0, correlation_id):
             return False, 'hardware undock goal acceptance timeout', None
         hardware_goal = send_future.result()
-        if hardware_goal is None or not hardware_goal.accepted:
+        if hardware_goal is None:
+            return False, 'hardware undock goal acceptance unknown', None
+        if not hardware_goal.accepted:
             return False, 'hardware undock goal rejected', None
 
         result_future = hardware_goal.get_result_async()

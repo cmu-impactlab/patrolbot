@@ -105,6 +105,27 @@ Private logs/build context/image inputs:
   from installed source). Corrected check accepts -SIGTERM only with complete
   application-shutdown and finished-process logs. No product behavior changed.
 
+## Deployment — October 15, dashboard main `6b3b785`
+
+Built from reviewed main (312 frontend tests pass, including eight new
+disable-guard refusals) and recreated on the dashboard host per operator
+direction; no pre-deploy backup archive was made at the operator's explicit
+instruction. Server image `sha256:d2a78dc3…`, started 20:42:47Z, healthy;
+public `/api/health` healthy/robot online/zero write losses; served entry
+`/assets/index-UJo_ha2_.js` SHA256
+`8299aab51de57519e19ac86b94e1c3b878052216f95ced92a0d6cf27e20b029e`
+byte-identical to the previously accepted bundle, with uncertainty text
+present. SQLite volume, `.env`/TLS and nginx untouched; no Pi/SBC restart and
+no motor/pose/goal/undock command sent. Previous image `04a464df` is no longer
+on the host; rollback is rebuild from `review/dashboard-device-checkout-20261015`
+(`cf301e6`) or the retained 63MB base archive
+(`backups/20261015T145435Z-ui-restoration/production-base-04a464df.tar`).
+Release manifest: dashboard `deployed/dashboard-20261015`,
+`infrastructure/releases/deployed-20261015-main-6b3b785.json`. SBC reported
+down, so `robot_connected` reflects the Pi bridge link only. The isolated
+UI-only candidate image was superseded (main already carried the fix) and never
+activated. No issue closed; #47 usability follow-up remains separate.
+
 ## Before deployment
 
 1. Finish selected responsive/layout checks and review the final narrow diff/image.

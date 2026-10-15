@@ -11,7 +11,7 @@ Current artifacts: core `2d3df1c3`, navigation `607d3524`, web `0da4b7b6`,
 dashboard `04a464df`, SBC `1767110d`. Source preservation is not motion acceptance.
 
 Next three:
-1. Finish UI-only restoration release review/rollback/approval; 305 frontend, 12 focused and 28/28 layout-rerun cases pass, installed image verified.
+1. UI restoration deployed (server d2a78dc3, accepted bundle 8299aab5); live AMCL/motor-response acceptance waits for SBC return.
 2. Keep map/joystick/undock/override/planning repairs separate on review branches.
 3. SBC is reported down; defer fresh physical/telemetry acceptance until available and separately authorized.
 

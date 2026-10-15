@@ -5,16 +5,13 @@ snapshots; GitHub issue state is recorded separately and is not hardware proof.
 See [open work](OPEN.md), [accepted scope](COMPLETED.md), and the
 [cleanup/review inventory](2026-10-clean-state/REPORT.md).
 
-**UI restoration candidate, not deployed:** missing uncertainty display and
-independent motor-disable control restored over the exact deployed baseline;
-305 frontend, 12 focused Chromium/WebKit cases and isolated installed-image/HTTP
-checks pass. A 60-case responsive-layout probe under a constrained local
-container finished 44 passed / 16 failed on timeouts/slow loads only; the
-single-worker rerun of all 16 failing titles passed 28/28, confirming
-contention rather than regression. Candidate `9a9235d3`
-changes static assets only; 49 backend/map files unchanged. Layout/release
-review and fresh rollback/admission/approval remain. Operator reports SBC down;
-no SBC access or robot command. Counts unchanged.
+**UI restoration deployed October 15:** main `6b3b785` rebuilt and recreated as
+server image `d2a78dc3`; health healthy/robot online, served entry bundle
+byte-identical to accepted `8299aab5`, uncertainty text present. No database
+migration, no nginx/Pi/SBC restart, no robot command sent. Previous image
+superseded not archived per operator instruction; rollback via committed prior
+source or retained base archive. SBC reported down; `robot_connected` reflects
+the Pi bridge link. Counts unchanged.
 See [readiness evidence](2026-10-clean-state/UI-RESTORATION-20261015.md).
 
 The running robot and dashboard have dedicated `deployed/*` source branches and

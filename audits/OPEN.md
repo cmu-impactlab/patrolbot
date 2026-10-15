@@ -1,30 +1,33 @@
 # PatrolBot — open work
 
-## First deployment problem — dashboard UI restoration candidate
+## First deployment problem — dashboard UI restoration DEPLOYED October 15
 
-**Problem:** currently served UI lacks previously merged uncertainty display and
-the independent motor-disable fallback. This is separate from map/joystick/
-undock/override/planning defects, none of which is included automatically.
+**Problem:** served UI lacked previously merged uncertainty display and
+the independent motor-disable fallback.
 
-**Progress:** `review/dashboard-ui-restoration-20261015` restores four runtime/type
-files exactly from reviewed main, based on actual deployment749cb18. Eleven
-original widget contracts fail before restoration and the same72 pass after.
-Final suite305 passes; all12 focused Chromium/WebKit cases pass in pinned isolated
-browser image. Production-derived candidate9a9235d3 retains all49 backend/map
-files and environment/command/user/layers, serves all15 expected assets via HTTP
-and completes application cleanup. Existing main CI/WebKit acceptance is retained
-as historical, not substituted for these fresh checks. No deployed source changed.
+**Progress:** deployed from reviewed main `6b3b785` (312 frontend tests pass
+including eight new disable-guard refusals; build emits the accepted entry
+bundle). Server image `d2a78dc3` recreated and healthy; public asset
+byte-identical to accepted `8299aab5`; uncertainty text present; health
+healthy/robot online with zero write losses. Isolated UI-only candidate
+`9a9235d3` and its 28/28 layout rerun remain preserved history. No database
+migration and no nginx/Pi/SBC restart; no motor/pose/goal/undock command sent.
 
-**Remaining:** finish selected responsive/layout verification and release review;
-verify current-image drift and off-device rollback/config/database preservation;
-obtain explicit approval for dashboard-only server recreation, then verify public
-assets/authentication/health and read-only display. Refresh deployment manifest
-only after actual activation; no Pi/SBC restart or database migration is needed.
+**Remaining:** fresh live AMCL display and actual motor-response acceptance when
+the SBC returns under separate authorization; operator usability follow-up for
+#47. Dashboard release manifest recorded on `deployed/dashboard-20261015`.
 
-**Blocked on:** those final software/release gates and approval, not SBC access
-for offline preparation. SBC is operator-reported down: fresh live AMCL display
-and actual motor response acceptance wait for later separate authorization.
-See [evidence](2026-10-clean-state/UI-RESTORATION-20261015.md). No issue/count closure.
+**Blocked on:** SBC availability and separately authorized physical
+acceptance — not software. Other map/joystick/undock/override/planning defects
+remain open below. No issue/count closure by this deployment.
+
+Superseded candidate history (preserved, not deleted): the isolated UI-only
+branch restored four runtime/type files exactly from reviewed main against the
+old deployment; eleven widget contracts failed before and 72 passed after, and
+the 28/28 layout rerun confirmed the probe timeouts were contention. The
+production-derived candidate `9a9235d3` was never activated; main already
+carried the fix, so deployment went from main instead. See
+[evidence](2026-10-clean-state/UI-RESTORATION-20261015.md).
 
 ## 1. Reproducible source and release provenance — PB020
 

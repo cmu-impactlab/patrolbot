@@ -1,0 +1,63 @@
+{
+  "verified_utc": "2026-10-15T14:44:24.318825+00:00",
+  "source_verification": {
+    "robot_files": 136,
+    "dashboard_web_files": 62,
+    "public_assets": 15,
+    "frontend_rebuild_identical": true,
+    "physical_acceptance": false
+  },
+  "offline_checks": {
+    "passed": 5,
+    "scope": "read-only release verifier and retired legacy apply boundary"
+  },
+  "repositories": {
+    "robot": {
+      "clean_before_closeout": true,
+      "published_refs": {
+        "deployed/robot-20261015": "7bc58c80650052f444e1c830e8c729c63006fc35",
+        "main": "fc2bca2ff36df8ee116f6f6148b0c5b1d61f0664",
+        "review/joystick-handshake-incomplete-20261015": "72e3d8c45e31a55c8e4b8ec4aa49d34e468661ee",
+        "review/navigation-goal-dirty-snapshot-20261015": "bba5f61f9283599ef7b41b93a46a168aa7c64868",
+        "review/production-backport-incomplete-20261015": "a18fb89a13b80a622fccaf022866f9ed2aa34ba5",
+        "review/undock-rejection-20261015": "4d0c30f1c2b9762f051ad0c2cd4fe0054f89d875"
+      }
+    },
+    "dashboard": {
+      "clean_before_closeout": true,
+      "published_refs": {
+        "deployed/dashboard-20261015": "749cb1850c78f4381229936a078dc5b49da1a81e",
+        "main": "d5e04f398ea602547023656261a91b716f00ed0c",
+        "review/20261015-canonical-override-admission-incomplete": "699d84afb85d6414a37b1035087ad7d4243cb2cc",
+        "review/20261015-canonical-undock-rejection-test": "9a4ee1b0e98a72b08fe101057803ba3efc531dbf",
+        "review/20261015-dashboard-work-navigation-recovery-incomplete": "a9575aa4b89ab95ca037bee1d3bdecd417c7e65a",
+        "review/dashboard-device-checkout-20261015": "cf301e64e574c60cf0cbe86351267308e1da6258",
+        "review/dashboard-host-source-20261015": "6ad18a4353b4c283db584fd612a037eb7c3fa62e"
+      }
+    }
+  },
+  "backup_migration": {
+    "snapshot_directories_retired": 36,
+    "stray_files_retired": 6,
+    "archive_files": 37,
+    "archive_bytes": 1326008320,
+    "archive_location": "backups/20261015T082506Z-clean-state-review/device-archives",
+    "device_backup_directories_remaining": 0,
+    "independent_offdevice_copies": 1
+  },
+  "services_restarted_by_cleanup": false,
+  "robot_commands_sent": false,
+  "github_issues_modified": false,
+  "dashboard_health": {
+    "status": "healthy",
+    "robot_connected": true,
+    "connection": "online",
+    "browsers": 0,
+    "writes": {
+      "recording_dropped": 0,
+      "recording_failed": 0,
+      "battery_dropped": 0,
+      "battery_failed": 0
+    }
+  }
+}

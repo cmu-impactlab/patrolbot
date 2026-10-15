@@ -19,6 +19,9 @@ dashboard16) and six stray Pi backup files were streamed, SHA256 checked,
 content/path/mode/owner/mtime verified, rechecked and removed by exact path.
 Private archives and manifests are under workstation
 `backups/20261015T082506Z-clean-state-review/device-archives/` (not in Git).
+All11 deployed/review branches are published and remote SHAs verified. Main
+branches are unchanged; primary checkouts and active preservation worktrees are
+clean. Three missing /tmp worktree registrations were pruned, not source deleted.
 
 **Residue/rollback:** restore historical snapshot paths from their verified tar
 archives before using an old rollback script. Runtime release trees, credentials,

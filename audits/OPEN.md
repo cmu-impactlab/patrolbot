@@ -12,12 +12,14 @@ and 62 dashboard/web files, running images and SBC executable. The dashboard
 rebuild matches all 15 shipped static files. Review candidates are separate.
 Private device snapshots are verified and archived off-device.
 
-**Remaining:** publish/verify branch refs; independently rebuild ARM/native/SBC
+**Remaining:** independently rebuild ARM/native/SBC
 artifacts from pinned inputs; restore missing merged frontend work and reconcile
 map identity in separately reviewed releases. Adapt per-role rollout/rollback to
 off-device policy before activation. Do not use the legacy shared-image apply.
 
 **Blocked on:** review/build/acceptance of those releases, not SSH access.
+All11 preservation/deployment branches have been published and their exact
+remote refs verified; both canonical checkouts are clean.
 
 ## 2. Unmerged software — deliberately not activated
 

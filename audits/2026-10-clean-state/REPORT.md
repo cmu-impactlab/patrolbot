@@ -32,6 +32,13 @@ branches. Every preexisting dashboard branch was already an ancestor of main.
 Branch preservation is not test acceptance or approval to merge. Do not replay
 all branches in order: several deliberately overlap or conflict.
 
+**Publication verified:** all11 deployed/review refs are on GitHub; both original
+main refs remain unchanged. Source baseline commits are robot `7bc58c8` and
+dashboard `749cb18`; the robot closeout commit adds this final verification only.
+Both primary checkouts and preserved active worktrees are clean. Three stale
+registrations for missing /tmp dashboard worktrees were pruned after their
+branch ancestry was checked. See [exact refs/checks](verification.json).
+
 ## Verified deployed state
 
 | Component | Immutable identity |
@@ -126,7 +133,7 @@ Workstation archives still contain older nested repositories, private credential
 and unique evidence. They are not a safe bulk-delete target. Useful active
 candidates are now branches; additional historical deduplication is separate.
 Never blanket-add backups or full device homes to Git. Three missing /tmp Git
-worktree registrations can be pruned after branch preservation. No live bind
+worktree registrations were pruned after branch preservation. No live bind
 directory should be removed merely because its name looks temporary.
 
 Warnings: do not widen `max_position_variance` — it also gates general navigation;

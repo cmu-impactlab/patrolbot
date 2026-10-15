@@ -23,6 +23,7 @@ and polarity still require live confirmation before feature acceptance. If
 forward/back or left/right is reversed, flip the matching *_SIGN constant below and restart.
 """
 import math
+from functools import partial
 from uuid import uuid4
 
 import rclpy
@@ -35,6 +36,11 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Bool
+from std_srvs.srv import Trigger
+from patrolbot_bridge.manual_active import (
+    MANUAL_HANDOFF_TIMEOUT, MANUAL_OWNED, MANUAL_READY,
+    ManualDrain, source_stamp, trusted_message, zero_twist)
 
 from joystick_policy import (
     ANG_SIGN,
@@ -108,11 +114,16 @@ class JoyTeleop(Node):
         # previous autonomous goal resume underneath the operator.
         self._takeover_pending = False
         self._cancel_in_flight = False
+        self._cancel_accepted = False
         self._next_cancel_retry = 0.0
         self._cancel_unavailable_logged = False
         self._nav_status_received = False
         self._nav_goal_active = False
         self._takeover_generation = 0
+        self._manual_drain = ManualDrain()
+        self._bridge_ready_future = None
+        self._bridge_ready_context = None
+        self._bridge_ready_received = None
         self._lidar_chord = LidarChord()
         self._lidar_toggle_pending = False
         self._lidar_in_flight = False
@@ -128,8 +139,15 @@ class JoyTeleop(Node):
             self._navigation_status, qos_profile_action_status_default)
         # Remapped to /input/joy in the launch (twist_mux arbitrates above nav).
         self.pub = self.create_publisher(Twist, '/cmd_vel_joy', 10)
+        # Deadman evidence for the bridge: lets a human drive during
+        # localization recovery while autonomy stays blocked. Stale flag
+        # fails closed at the bridge within MANUAL_ACTIVE_TIMEOUT.
+        self.manual_pub = self.create_publisher(Bool, "/patrolbot/manual_active", 10)
+        for topic, stage in (('/cmd_vel_out', 'mux'), ('/cmd_vel', 'final')):
+            self.create_subscription(Twist, topic, partial(self._drain_output_cb, topic, stage), 10)
         self.nav_cancel = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal')
+        self.bridge_ready = self.create_client(Trigger, '/patrolbot/manual_ready')
         self.lidar_power = self.create_client(
             SetLidarPower, '/patrolbot/set_lidar_power')
         self.create_timer(self.dt, self.tick)
@@ -221,12 +239,22 @@ class JoyTeleop(Node):
                 GoalStatus.STATUS_CANCELING,
             )
             for status in message.status_list)
+        # Cancel acceptance is not terminal: retain the priority-8 zero hold
+        # through CANCELING, including after RB release. Never resume old goals.
+        if self._takeover_pending and self._cancel_accepted and not self._nav_goal_active:
+            self._takeover_pending = False
+            self._cancel_accepted = False
+            self._cancel_unavailable_logged = False
+            self._try_lidar_toggle()
 
     def _begin_manual_takeover(self):
         # Always send cancel-all, even when the last status was empty, so a goal
         # accepted concurrently with the RB edge cannot slip through the race.
         self._takeover_pending = True
         self._takeover_generation += 1
+        self._cancel_accepted = False
+        self._manual_drain.revoke()
+        self.lin_cmd = self.ang_cmd = 0.0
         self._next_cancel_retry = 0.0
         self._cancel_unavailable_logged = False
         self.get_logger().info(
@@ -234,7 +262,7 @@ class JoyTeleop(Node):
         self._request_navigation_cancel()
 
     def _request_navigation_cancel(self):
-        if not self._takeover_pending or self._cancel_in_flight:
+        if not self._takeover_pending or self._cancel_in_flight or self._cancel_accepted:
             return
         now = self.get_clock().now().nanoseconds / 1e9
         if now < self._next_cancel_retry:
@@ -276,11 +304,9 @@ class JoyTeleop(Node):
             # no matching goals. A fresh empty action status proves that case is
             # benign; other rejections retain the fail-closed manual zero hold.
             if self._nav_status_received and not self._nav_goal_active:
-                self._takeover_pending = False
-                self._cancel_unavailable_logged = False
+                self._cancel_accepted = True
                 self.get_logger().info(
-                    'Nav2 reported no active goal during manual takeover.')
-                self._try_lidar_toggle()
+                    'Nav2 reported no matching goal; retaining zero until a new idle status.')
                 return
             self.get_logger().error(
                 f'Nav2 rejected manual takeover cancellation '
@@ -289,12 +315,9 @@ class JoyTeleop(Node):
                 self.get_clock().now().nanoseconds / 1e9 + NAV_CANCEL_RETRY)
             return
 
-        self._takeover_pending = False
-        self._cancel_unavailable_logged = False
+        self._cancel_accepted = True
         self.get_logger().info(
-            'Nav2 manual takeover cancellation accepted; autonomous motion '
-            'will not resume after RB release.')
-        self._try_lidar_toggle()
+            'Nav2 cancellation accepted; retaining zero until terminal status.')
 
     def joy_cb(self, m):
         b = m.buttons
@@ -356,6 +379,72 @@ class JoyTeleop(Node):
         self.lin_tgt = max(-1.0, min(1.0, lin)) * self.max_lin
         self.ang_tgt = max(-1.0, min(1.0, ang)) * self.max_ang
 
+    def _drain_output_cb(self, topic, stage, message, info):
+        name = 'cmd_vel_mux' if stage == 'mux' else 'teleop_velocity_smoother'
+        if not trusted_message(self, topic, name, 'geometry_msgs/msg/Twist', info):
+            self._manual_drain.revoke()
+            return
+        self._manual_drain.observe(stage, zero_twist(message),
+                                   self.get_clock().now().nanoseconds / 1e9,
+                                   source_stamp(info))
+
+    def _bridge_reply_done(self, future, issued):
+        # A future callback records timing only, never publishes or grants a
+        # lease. A removed/substituted future cannot renew a newer request.
+        now = self.get_clock().now().nanoseconds / 1e9
+        if (future is self._bridge_ready_future and issued == self._bridge_ready_context
+                and 0. <= now-issued[1] <= min(self.dt, MANUAL_HANDOFF_TIMEOUT)):
+            self._bridge_ready_received = (future, now)
+
+    def _bridge_readiness(self, now, drained):
+        """Consume only this takeover's timely reply; never block the executor.
+
+        READY permits Bool with ZERO only. OWNED proves the bridge consumed that
+        Bool before any ramp. Independent readers need not deliver Bool/Joy in
+        the same order. Poll while driving too: a lost reply holds zero/False.
+        """
+        context = (self._takeover_generation, self._manual_drain.generation,
+                   self._lidar_generation)
+        future, issued = self._bridge_ready_future, self._bridge_ready_context
+        received = self._bridge_ready_received
+        status = ''
+        self._bridge_ready_future = self._bridge_ready_context = None
+        self._bridge_ready_received = None
+        eligible = bool(self.active and drained and self._nav_status_received
+                        and not self._nav_goal_active and not self._lidar_chord.block_drive)
+        if eligible and future is not None and issued is not None:
+            try:
+                if (future.done() and issued[0] == context and received is not None
+                        and received[0] is future
+                        and 0. <= now-received[1] <= min(self.dt, MANUAL_HANDOFF_TIMEOUT)):
+                    response = future.result()
+                    state, stamp = response.message.split(':')
+                    age = now-int(stamp)/1e9
+                    if (response.success is True and state in (MANUAL_READY, MANUAL_OWNED)
+                            and 0. <= age <= min(self.dt, MANUAL_HANDOFF_TIMEOUT)):
+                        status = state
+            except Exception:  # unavailable, canceled, malformed: keep zero/False
+                pass
+        if future is not None and not future.done():
+            # Ignore a later completion; it can never overwrite a newer request.
+            try:
+                self.bridge_ready.remove_pending_request(future)
+            except Exception:
+                pass
+        if eligible:
+            try:
+                if self.bridge_ready.service_is_ready():
+                    self._bridge_ready_future = self.bridge_ready.call_async(Trigger.Request())
+                    self._bridge_ready_context = (context, now)
+                    self._bridge_ready_future.add_done_callback(
+                        lambda reply, issued=self._bridge_ready_context: self._bridge_reply_done(reply, issued))
+                else:
+                    status = ''
+            except Exception:
+                self._bridge_ready_future = self._bridge_ready_context = None
+                status = ''
+        return status
+
     def tick(self):
         # Joy-loss safety: if /joy stopped arriving (controller unplugged or
         # joy_node died) while RB was held, drop the deadman and zero the target
@@ -373,13 +462,27 @@ class JoyTeleop(Node):
 
         self._request_navigation_cancel()
 
-        # Acceleration-limited ramp toward the target == smooth motion.
-        self.lin_cmd = ramp_toward(
-            self.lin_cmd, self.lin_tgt, self.accel_lin * self.dt)
-        self.ang_cmd = ramp_toward(
-            self.ang_cmd, self.ang_tgt, self.accel_ang * self.dt)
+        # Keep the EXISTING priority-8 source at zero until cancellation and
+        # both downstream command buffers have observed zero for their existing
+        # 0.5s timeout. Permission is False throughout this drain; old autonomous
+        # open-loop smoother output cannot ride the Bool ahead of the first joy
+        # command. No new velocity publisher, physics or joystick mapping.
+        drained = self._manual_drain.ready(now) and not self._takeover_pending
+        readiness = self._bridge_readiness(now, drained)
+        if not self.active or readiness != MANUAL_OWNED:
+            self.lin_cmd = self.ang_cmd = 0.0
+        else:
+            self.lin_cmd = ramp_toward(
+                self.lin_cmd, self.lin_tgt, self.accel_lin * self.dt)
+            self.ang_cmd = ramp_toward(
+                self.ang_cmd, self.ang_tgt, self.accel_ang * self.dt)
         moving = abs(self.lin_cmd) > 1e-3 or abs(self.ang_cmd) > 1e-3
 
+        # Deadman evidence first so the last message of a drive tick stays Twist.
+        asserted = bool(self.active and drained and readiness)
+        if asserted:
+            self._manual_drain.owned = True
+        self.manual_pub.publish(Bool(data=asserted))
         if self.active or moving or self._takeover_pending:
             # While RB held (manual control) OR still coasting to a stop, keep
             # publishing at a steady rate. A pending takeover adds a fail-closed
@@ -388,6 +491,8 @@ class JoyTeleop(Node):
             t.linear.x = float(self.lin_cmd)
             t.angular.z = float(self.ang_cmd)
             self.pub.publish(t)
+            self._manual_drain.observe('joy', zero_twist(t), now,
+                                       self.get_clock().now().nanoseconds)
             self.was_pub = True
         elif self.was_pub:
             # Fully stopped, RB released, and Nav2 canceled: one explicit zero,

@@ -1,0 +1,7 @@
+# GATED RECIPE ONLY: base absent locally; actual role imports/ABI NOT validated.
+# The shared helper MUST match core; exact Joy alone imports an incompatible API
+# if navigation retains its previous helper. No XML/native/interface COPY/RUN.
+FROM patrolbot@sha256:607d352411ed16c59ab16fb39323534f69d0b42068dad09b503e72f8bea845c8
+COPY ros2_ws/src/patrolbot_navigation/scripts/patrolbot_joy_teleop.py /opt/patrolbot_ws/install/patrolbot_navigation/lib/patrolbot_navigation/patrolbot_joy_teleop.py
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/manual_active.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/manual_active.py
+LABEL patrolbot.role="navigation-TEST-ONLY-NOT-ACTIVATION" patrolbot.physical_acceptance="false"

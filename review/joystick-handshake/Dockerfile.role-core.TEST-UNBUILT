@@ -1,0 +1,11 @@
+# GATED RECIPE ONLY: base absent locally; actual role imports/ABI NOT validated.
+# Do not activate. Must be built under all required resource/isolation limits.
+FROM patrolbot@sha256:2d3df1c3c6bfe857f256be1a947892e78e942802c633f727b194331ffe73355f
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/bridge_node.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/bridge_node.py
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/manual_active.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/manual_active.py
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/epoch_runtime.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/epoch_runtime.py
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/map_runtime.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/map_runtime.py
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/map_transaction.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/map_transaction.py
+COPY ros2_ws/src/patrolbot_bridge/patrolbot_bridge/undock_turn.py /opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/undock_turn.py
+COPY ros2_ws/src/patrolbot_dock_manager/patrolbot_dock_manager/dock_manager.py /opt/patrolbot_ws/install/patrolbot_dock_manager/lib/python3.12/site-packages/patrolbot_dock_manager/dock_manager.py
+LABEL patrolbot.role="core-TEST-ONLY-NOT-ACTIVATION" patrolbot.physical_acceptance="false"

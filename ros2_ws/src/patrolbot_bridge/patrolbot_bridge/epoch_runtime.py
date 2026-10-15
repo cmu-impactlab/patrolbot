@@ -45,9 +45,17 @@ class EpochRuntime(MapRuntimeMixin):
             Trigger, '/lifecycle_manager_localization/is_active')
         self._phase = 'wait-localization-manager'
         self._future = None
+        self._future_kind = None
+        self._future_context = None
         self._deadline = None
         self._failed = False
+        # Unknown write outcomes cannot be settled by unrelated readbacks.
+        # Keep these held for explicit stack recovery, not automatic retry.
+        self._lifecycle_mutation_unknown = False
+        self._map_mutation_unknown = False
+        self._unknown_write_owners = []
         self._navigation_ready = False
+        self.undock_hold = False
         self._lidar_reseed = False
         self._lidar_cancel = [node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
                               for name in ('navigate_to_pose', 'navigate_through_poses')]
@@ -82,6 +90,9 @@ class EpochRuntime(MapRuntimeMixin):
                 self.withdraw()
 
     def withdraw(self, reset_odometry=True):
+        turn = getattr(self.node, '_undock_turn', None)
+        if turn is not None:
+            turn.revoke('odometry transport withdrawn')
         self.first_tf_ns = None
         self._tf_generation += 1
         self._tf_ready_at = None
@@ -90,6 +101,7 @@ class EpochRuntime(MapRuntimeMixin):
             with self.node._pose_lock:
                 self.node._pose_received = False
                 self.node._pose_at = 0.0
+                self.node._undock_scan_at = 0.0
 
     def announce(self, session, epoch):
         with self.lock:
@@ -120,13 +132,17 @@ class EpochRuntime(MapRuntimeMixin):
 
     @property
     def streams_allowed(self):
-        return self.guard.ready and self.recovery.stage in (
+        return self.guard.ready and (self.undock_hold or self.recovery.stage in (
             EpochRecovery.WAIT_SEED, EpochRecovery.WAIT_POSE,
-            EpochRecovery.READY)
+            EpochRecovery.READY))
 
     @property
     def commands_allowed(self):
         with self.lock:
+            if (self.undock_hold or self._lifecycle_mutation_unknown
+                    or self._map_mutation_unknown or self._unknown_write_owners
+                    or self._map_owner_request_id is not None):
+                return False
             if not self.node._lidar_ready():
                 return False
             if self.map_hold:
@@ -148,6 +164,135 @@ class EpochRuntime(MapRuntimeMixin):
             return False
         age = time.monotonic() - self._tf_ready_at
         return 0.0 <= age <= self.node._odom_tf_timeout
+
+    @property
+    def local_motion_mutations_settled(self):
+        """Read-only hardware-motion gate; no AMCL-success prerequisite."""
+        with self.lock:
+            maps = self.maps
+            return bool(
+                not self._lifecycle_mutation_unknown
+                and not self._map_mutation_unknown
+                and not self._unknown_write_owners
+                and not (self._future is not None
+                         and self._future_kind != 'read-only')
+                and self._map_future is None and self._map_goal is None
+                and self._map_owner_request_id is None
+                 and (maps is None or maps.stage in ('idle', 'ready', 'failed')))
+
+    def invalidate_manual_readiness(self):
+        """Remember intervening ownership even if it settles before a reply.
+
+        Called under the shared epoch lock at write/action admission, not when
+        merely querying readiness. No permission or motion is granted here.
+        """
+        self._manual_mutation_generation = getattr(self, '_manual_mutation_generation', 0) + 1
+
+    def mutation_hold_reason(self):
+        if self._lifecycle_mutation_unknown or self._map_mutation_unknown:
+            return 'unknown lifecycle/map write outcome; explicit stack recovery required'
+        return 'a map or localization update is still running'
+
+    def _remember_unknown_write(self, kind, future, phase, token):
+        """Retain original future, phase and generation as an owned tombstone."""
+        self.invalidate_manual_readiness()
+        session = self.guard.session
+        context = getattr(self, '_future_context', None)
+        if kind == 'epoch' and context is not None and context[0] is future:
+            phase, token, session = context[1:4]
+        if not any(owner['kind'] == kind and owner['future'] is future
+                   for owner in self._unknown_write_owners):
+            self._unknown_write_owners.append(dict(
+                kind=kind, future=future, phase=phase, token=token,
+                session=session, observation='unknown'))
+        if kind == 'epoch':
+            self._lifecycle_mutation_unknown = True
+        else:
+            self._map_mutation_unknown = True
+
+    def _observe_unknown_writes(self):
+        """Observe SAME write only; never advance the current recovery FSM.
+
+        A correlated readable terminal reply settles that original write.
+        Exceptions, malformed replies and missing future identities remain
+        held, even across new origin/token/generation or unrelated replies.
+        """
+        settled_kinds = set()
+        for owner in tuple(self._unknown_write_owners):
+            future = owner['future']
+            if future is None:
+                continue
+            try:
+                if not future.done():
+                    continue
+                reply = future.result()
+                valid = (self._epoch_response_valid(owner['phase'], reply)
+                         if owner['kind'] == 'epoch' else
+                         self._map_write_response_valid(reply, owner['phase']))
+                if not valid:
+                    owner['observation'] = 'malformed'
+                    continue
+            except Exception:
+                owner['observation'] = 'exception'
+                continue
+            owner['observation'] = 'settled'
+            settled_kinds.add(owner['kind'])
+            if owner['kind'] == 'epoch' and self._future is future:
+                self._future = self._future_kind = None
+                self._future_context = None
+            elif owner['kind'] == 'map' and self._map_future is future:
+                self._map_future = None
+            self._unknown_write_owners.remove(owner)
+        # A flag lacking a correlated tombstone remains fail-closed.
+        # Clear only kinds that had a SAME-write settlement in this poll.
+        for kind in ('epoch', 'map'):
+            if kind in settled_kinds and not any(owner['kind'] == kind
+                                   for owner in self._unknown_write_owners):
+                if kind == 'epoch':
+                    self._lifecycle_mutation_unknown = False
+                else:
+                    self._map_mutation_unknown = False
+
+    @staticmethod
+    def _epoch_response_valid(phase, result):
+        if phase == 'inspect':
+            state = getattr(getattr(result, 'current_state', None), 'id', None)
+            return type(state) is int and state in (1, 2, 3)
+        if phase == 'reset-parameters':
+            return type(getattr(getattr(result, 'result', None),
+                                'successful', None)) is bool
+        if phase in ('wait-localization-manager', 'pause-navigation',
+                     'resume-navigation', 'deactivate', 'cleanup',
+                     'configure', 'activate'):
+            return type(getattr(result, 'success', None)) is bool
+        return False
+
+    def _consume_epoch_future(self):
+        """Consume only a positively readable answer; retain unknown writes."""
+        context = getattr(self, '_future_context', None)
+        phase = context[1] if context is not None and context[0] is self._future else self._phase
+        try:
+            result = self._future.result()
+            if not self._epoch_response_valid(phase, result):
+                raise RuntimeError('missing or malformed lifecycle response')
+        except Exception:
+            if self._future_kind != 'read-only':
+                self._remember_unknown_write('epoch', self._future, self._phase, self._token)
+            else:
+                self._future = None
+                self._future_kind = None
+            raise
+        self._future = None
+        self._future_kind = None
+        self._future_context = None
+        return result
+
+    def _epoch_request_identity(self):
+        """Immutable issuance snapshot, independent of the mutable FSM token."""
+        return (self.recovery.token, self.guard.session,
+                getattr(self.guard, 'epoch', None),
+                getattr(self.guard, 'generation', None),
+                getattr(self, '_tf_generation', None), self.recovery.stage)
 
     def _poll_tf_readiness(self):
         # Read-only requests may be discarded on timeout. Unlike lifecycle
@@ -230,6 +375,9 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed(self, message):
         with self.lock:
+            if self.undock_hold:
+                self.node._undock_turn.revoke('initial pose requested during undock')
+                return
             if not self.node._lidar_ready():
                 return
             if self._lidar_reseed and (self._navigation_status or
@@ -285,6 +433,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     def pose(self, message):
         with self.lock:
+            if self.undock_hold:
+                return
             if (not self.node._lidar_ready() or not self.streams_allowed or
                     message.header.frame_id != 'map'):
                 return
@@ -339,7 +489,7 @@ class EpochRuntime(MapRuntimeMixin):
         self.cancel_lidar_navigation()
         self.node.cmd_vel_callback(Twist())
         if self.maps and self.maps.hold:
-            self.maps.fail(self._localization_fault)
+            self._fail_map_transaction(self._localization_fault)
         self.node.get_logger().error(self._localization_fault)
 
     @staticmethod
@@ -351,6 +501,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed_accepted(self, message):
         with self.lock:
+            if self.undock_hold:
+                return
             if not self.node._lidar_ready():
                 return
             stamp = self.stamp_ns(message)
@@ -371,6 +523,25 @@ class EpochRuntime(MapRuntimeMixin):
 
 
     def _request(self, phase):
+        if self._lifecycle_mutation_unknown or self._map_mutation_unknown:
+            return
+        try:
+            self._request_unchecked(phase)
+        except Exception:
+            if self._future_kind != 'read-only':
+                self._remember_unknown_write('epoch', self._future, phase, self._token)
+            self._failed = True
+            self.node.get_logger().error('Epoch request outcome unknown; recovery held.')
+
+    def _request_unchecked(self, phase):
+        if self._future is not None:
+            raise RuntimeError('epoch request still owns its future')
+        identity = self._epoch_request_identity()
+        self._future_context = None
+        self._future_kind = ('read-only' if phase in (
+            'wait-localization-manager', 'inspect') else 'mutation')
+        if self._future_kind != 'read-only':
+            self.invalidate_manual_readiness()
         if phase == 'wait-localization-manager':
             if not self._localization_active.service_is_ready():
                 return
@@ -402,18 +573,40 @@ class EpochRuntime(MapRuntimeMixin):
                 'deactivate': 4, 'cleanup': 2,
                 'configure': 1, 'activate': 3}[phase]
             self._future = self._change.call_async(request)
+        if self._future is None:
+            raise RuntimeError('epoch service returned no future')
         self._deadline = time.monotonic() + (2.0 if phase == 'wait-localization-manager' else 10.0)
+        self._future_context = (self._future, phase, *identity, self._deadline)
 
     def tick(self):
         with self.lock:
             self.recovery.observe_clock(self.node.get_clock().now().nanoseconds)
             token = self.recovery.token
+            if self._unknown_write_owners:
+                self._observe_unknown_writes()
+            if (self.undock_hold or self._lifecycle_mutation_unknown
+                    or self._map_mutation_unknown):
+                return
             self._poll_tf_readiness()
             self.poll_navigation_idle()
             if self.tick_map():
                 return
             self.tick_startup_map()
             if self._future is not None:
+                context = getattr(self, '_future_context', None)
+                if context is None and self._future_kind != 'read-only':
+                    # Without issuance identity there is no proof that this is
+                    # the original write. A valid-looking unrelated reply must
+                    # not settle an unbound owner. Require explicit recovery.
+                    self._remember_unknown_write('epoch', None, self._phase, None)
+                    self._failed = True
+                    return
+                if context is not None and context[0] is not self._future:
+                    # An unrelated future can never replace an unobserved write.
+                    # Keep its original identity owned, even under corruption or
+                    # delayed callback reassignment; do not read the substitute.
+                    self._remember_unknown_write('epoch', context[0], context[1], context[2])
+                    return
                 if not self._future.done():
                     if (self._phase == 'wait-localization-manager' and
                             self._deadline is not None and time.monotonic() > self._deadline):
@@ -421,6 +614,8 @@ class EpochRuntime(MapRuntimeMixin):
                         self._localization_active.remove_pending_request(self._future)
                         self._future.cancel()
                         self._future = None
+                        self._future_kind = None
+                        self._future_context = None
                         return
                     if (self._deadline is not None and
                             time.monotonic() > self._deadline and not self._failed):
@@ -430,13 +625,25 @@ class EpochRuntime(MapRuntimeMixin):
                     # A timeout is not proof the server stopped executing. Do
                     # not start overlapping transitions or cancel-and-retry.
                     return
-                future, self._future = self._future, None
-                if token != self._token:
+                try:
+                    result = self._consume_epoch_future()
+                except Exception as exc:
+                    self._failed = True
+                    self.node.get_logger().error(
+                        f'AMCL epoch reset failed; recovery held: {exc}')
+                    return
+                if (context is None or context[1] != self._phase
+                        or context[2:-1] != self._epoch_request_identity()
+                        or time.monotonic() > context[-1]):
+                    # A positive old ACK settles ONLY its original write. In
+                    # particular require_seed() updates _token while a previous
+                    # RESUME can still be in flight. Never anchor/clear a fault
+                    # or advance a new recovery using that answer.
                     self._phase = 'wait-localization-manager'
-                    self._failed = False
+                    self._navigation_ready = False
+                    return
                 else:
                     try:
-                        result = future.result()
                         if self._phase == 'wait-localization-manager':
                             if result.success:
                                 self._phase = 'inspect'

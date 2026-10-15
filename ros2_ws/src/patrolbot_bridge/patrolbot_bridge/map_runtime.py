@@ -3,6 +3,7 @@ import math
 import os
 import time
 from pathlib import Path
+from uuid import UUID
 
 from action_msgs.msg import GoalStatusArray
 from ament_index_python.packages import get_package_share_directory
@@ -26,6 +27,13 @@ def map_identity(grid):
     return f'{stamp.sec}:{stamp.nanosec}:{grid.info.width}:{grid.info.height}'
 
 
+MAP_WRITE_STEPS = frozenset((
+    'pause', 'resume', 'deactivate', 'cleanup', 'configure', 'activate',
+    'load', 'parameters', 'refresh-localization', 'clear-global', 'clear-local'))
+MAP_READ_STEPS = frozenset((
+    'startup-readback', 'startup-amcl', 'inspect', 'readback', 'amcl-map', 'costmap-map'))
+
+
 class MapRuntimeMixin:
     # Bounded observation of the single requested stationary scan update.
     MAP_REFRESH_TIMEOUT = 5.0
@@ -34,6 +42,8 @@ class MapRuntimeMixin:
         self._map_error = ''
         self.maps = None
         self._map_goal = None
+        self._map_owner_request_id = None
+        self._map_precheck_results = {}
         self._map_future = None
         self._map_step = None
         self._map_identity = None
@@ -76,10 +86,12 @@ class MapRuntimeMixin:
         with self.lock:
             self._navigation_states[name] = any(s.status in (1, 2, 3) for s in msg.status_list)
             self._navigation_status = any(self._navigation_states.values())
+            if self._navigation_status:
+                self.invalidate_manual_readiness()
             if self._lidar_reseed and self._navigation_status:
                 self.cancel_lidar_navigation()
             if self._navigation_status and self.maps and self.maps.hold:
-                self.maps.fail('navigation requested during map recovery')
+                self._fail_map_transaction('navigation requested during map recovery')
 
     def poll_navigation_idle(self):
         now = time.monotonic()
@@ -116,24 +128,46 @@ class MapRuntimeMixin:
 
     def _map_accept(self, request):
         with self.lock:
-            if (not self.node._lidar_ready() or self._map_error or self.maps is None or self._map_goal is not None
-                    or self._future is not None or self._map_future is not None or not self.guard.ready
-                    or self.recovery.stage not in (EpochRecovery.READY, EpochRecovery.WAIT_SEED)
-                    or self._navigation_status or self._navigation_idle_at is None
-                    or not 0 <= time.monotonic() - self._navigation_idle_at <= .5):
+            # Validate before withdrawing anything or granting a real owner.
+            if self.maps is None or self._map_error:
+                self.node.get_logger().warning('Map localization refused: map state unavailable: ' + self._map_error)
                 return GoalResponse.REJECT
-            pose = request.pose.pose
-            q = pose.orientation
-            values = (pose.position.x, pose.position.y, pose.position.z, q.x, q.y, q.z, q.w,
-                      *request.pose.covariance)
-            if (not all(math.isfinite(v) for v in values)
-                    or abs(sum(v*v for v in (q.x,q.y,q.z,q.w)) - 1) > 1e-3
-                    or not valid_planar_covariance(request.pose.covariance)):
+            try:
+                if (not request.operator_authorized or str(UUID(request.request_id)) != request.request_id
+                        or request.request_id in self.maps._seen):
+                    raise ValueError('unauthorized, invalid or consumed request_id')
+                target = self.maps.catalog.require(request.map_id, request.map_revision)
+                pose = request.pose.pose
+                q = pose.orientation
+                values = (pose.position.x, pose.position.y, pose.position.z, q.x, q.y, q.z, q.w,
+                          *request.pose.covariance)
+                if (not all(math.isfinite(v) for v in values)
+                        or abs(sum(v*v for v in (q.x,q.y,q.z,q.w)) - 1) > 1e-3
+                        or not valid_planar_covariance(request.pose.covariance)
+                        or not self.maps.catalog.contains(target, pose.position.x, pose.position.y)):
+                    raise ValueError('invalid pose, covariance or target-map position')
+            except (ValueError, TypeError, AttributeError) as exc:
+                self.node.get_logger().warning(f'Map localization refused request={request.request_id}: {exc}')
                 return GoalResponse.REJECT
+            if self.undock_hold:
+                self.node._undock_turn.revoke('map localization requested during undock')
+                return self._map_precheck_refused(request, 'an undock operation owns the robot')
+            problem = self._map_owner_problem()
+            if problem:
+                return self._map_precheck_refused(request, problem)
             now = time.monotonic()
             with self.node._state_lock, self.node._pose_lock, self.node._control_lock, self.node._undock_goal_lock:
+                if not self.node._link_connected or not self.node._pose_received:
+                    return self._map_precheck_refused(request, 'fresh raw odometry/base transport unavailable')
+                if self.node._fault_flags:
+                    return self._map_precheck_refused(request, f'base hardware fault {self.node._fault_flags}')
                 age = max(now-self.node._pose_at, now-self.node._flags_at,
                           now-self.node._charge_state_at)
+                previous_stage = self.maps.stage
+                if previous_stage == 'failed':
+                    # A new operator request may replace a settled failure;
+                    # outstanding mutations were refused above.
+                    self.maps.stage = 'ready'
                 try:
                     self.maps.begin(request.request_id, request.map_id, request.map_revision,
                         (pose.position.x, pose.position.y, 2*math.atan2(q.z,q.w)),
@@ -141,41 +175,107 @@ class MapRuntimeMixin:
                         age, self.node._vx, self.node._vth, self._navigation_status,
                         self.node._undock_active or self.node._undock_goal_reserved,
                         bool(self.node._pending_controls))
-                except ValueError:
-                    return GoalResponse.REJECT
+                except ValueError as exc:
+                    self.maps.stage = previous_stage
+                    return self._map_precheck_refused(request, str(exc))
+            if self._map_future is not None:
+                client = self._map_read_client()
+                client.remove_pending_request(self._map_future)
+                self._map_future.cancel()
+                self._map_future = None
+            if self._future is not None:
+                client = (self._localization_active if self._phase == 'wait-localization-manager'
+                          else self._get)
+                client.remove_pending_request(self._future)
+                self._future.cancel()
+                self._future = None
+                self._future_kind = None
             # The shared cmd_vel guard reads this hold under this same lock.
             self._navigation_ready = False
             self._accepted_seed_stamp = None
             self._pending_pose = None
             self._map_request = request
+            self._map_owner_request_id = request.request_id
+            self.invalidate_manual_readiness()
             self._pose_anchor = None
             self._map_deadline = now + 110.
             self._map_refresh_requested = False
             self._map_refresh_started = None
             self._map_refresh_deadline = None
             self._map_refresh_baseline_stamp = None
-            self._map_step = 'pause'
+            self._map_step = ('wait-navigation-idle' if self.navigation_idle_problem() else 'pause')
             self.node.cmd_vel_callback(Twist())
             self.maps.advance(self.maps.token, 'hold')
             return GoalResponse.ACCEPT
 
+    def _map_read_client(self):
+        return {'startup-readback': self._get_map, 'startup-amcl': self._amcl_map,
+                'inspect': self._get, 'readback': self._get_map,
+                'amcl-map': self._amcl_map, 'costmap-map': self._global_map}.get(self._map_step)
+
+    def _map_owner_problem(self):
+        if not self.node._lidar_ready():
+            return 'fresh ready LiDAR unavailable or malfunctioning'
+        if not self.guard.ready or self.recovery.token is None:
+            return 'valid raw odometry origin unavailable'
+        if (self._map_goal is not None or self._map_owner_request_id is not None
+                or self.maps.stage not in ('idle', 'ready', 'failed')):
+            return 'another map localization request still owns recovery'
+        if (getattr(self, '_lifecycle_mutation_unknown', False)
+                or getattr(self, '_map_mutation_unknown', False)
+                or getattr(self, '_unknown_write_owners', ())):
+            return 'lifecycle/map write outcome unknown; supervised stack recovery required'
+        if self._future is not None and self._future_kind != 'read-only':
+            return f'epoch mutation pending: {self._phase}; outcome not settled'
+        if self._map_future is not None and self._map_read_client() is None:
+            return f'map mutation pending: {self._map_step}; outcome not settled'
+        if self._navigation_status:
+            return 'active navigation owns the robot'
+        return ''
+
+    def _map_precheck_refused(self, request, problem):
+        self.node.get_logger().warning(f'Map localization refused request={request.request_id}: {problem}')
+        if len(self._map_precheck_results) >= 16:
+            return GoalResponse.REJECT
+        result = LocalizeOnMap.Result()
+        result.request_id = request.request_id
+        result.code = result.REJECTED
+        result.message = 'Map localization precheck: ' + problem
+        result.map_activated = False
+        result.localized = False
+        result.active_map_id = self.maps.active['map_id'] if self.maps.active else ''
+        result.active_map_revision = self.maps.active['revision'] if self.maps.active else ''
+        self.maps._seen.add(request.request_id)
+        self._map_precheck_results[request.request_id] = result
+        return GoalResponse.ACCEPT
+
     def _map_cancel(self, goal):
         with self.lock:
             if self.maps and self.maps.token and self.maps.token.request_id == goal.request.request_id:
-                self.maps.fail('operator canceled map localization')
+                self._fail_map_transaction('operator canceled map localization')
         return CancelResponse.ACCEPT
 
     def _map_execute(self, goal):
         with self.lock:
+            refused = self._map_precheck_results.pop(goal.request.request_id, None)
+            if refused is not None:
+                if goal.is_cancel_requested:
+                    refused.code = refused.CANCELED
+                    goal.canceled()
+                else:
+                    goal.abort()
+                return refused
             self._map_goal = goal
         while self.node.context.ok() and not self.node._stop_event.is_set():
             with self.lock:
                 tx = self.maps
                 if tx.stage not in ('ready', 'failed') and time.monotonic() > self._map_deadline:
-                    tx.fail('map localization timed out')
+                    self._fail_map_transaction('map localization timed out')
                 feedback = LocalizeOnMap.Feedback()
                 feedback.request_id = goal.request.request_id
-                feedback.stage = tx.stage
+                feedback.stage = (self.navigation_idle_problem() or 'wait-navigation-idle'
+                                  if self._map_step == 'wait-navigation-idle' and tx.stage != 'failed'
+                                  else tx.stage)
                 feedback.map_activated = tx.activated
                 feedback.active_map_id = tx.active['map_id'] if tx.active else ''
                 feedback.active_map_revision = tx.active['revision'] if tx.active else ''
@@ -197,10 +297,11 @@ class MapRuntimeMixin:
                     elif tx.stage == 'ready': goal.succeed()
                     else: goal.abort()
                     self._map_goal = None
+                    self._map_owner_request_id = None
                     return result
             time.sleep(.1)
         with self.lock:
-            self.maps.fail('bridge shutdown')
+            self._fail_map_transaction('bridge shutdown')
         goal.abort()
         result = LocalizeOnMap.Result(); result.code = result.FAILED
         result.request_id = goal.request.request_id
@@ -210,15 +311,66 @@ class MapRuntimeMixin:
         result.message = 'bridge shutdown; motion hold retained'
         return result
 
+    def _fail_map_transaction(self, reason):
+        # Keep pending writes owned, including after cancel/timeout. Drop
+        # read-only probes only; a late read cannot change server state.
+        if self._map_future is not None:
+            if self._map_step not in MAP_READ_STEPS:
+                self._remember_unknown_write(
+                    'map', self._map_future, self._map_step, self.maps.token)
+            else:
+                self._map_future = None
+        self.maps.fail(reason)
+
+    def _map_write_response_valid(self, result, step=None):
+        step = self._map_step if step is None else step
+        if step in ('pause', 'resume', 'deactivate', 'cleanup', 'configure', 'activate'):
+            return type(getattr(result, 'success', None)) is bool
+        if step == 'parameters':
+            return type(getattr(getattr(result, 'result', None), 'successful', None)) is bool
+        if step == 'load':
+            code = getattr(result, 'result', None)
+            return type(code) is int and code in (0, 1, 2, 3, 255)
+        if step == 'refresh-localization':
+            return isinstance(result, Empty.Response)
+        if step in ('clear-global', 'clear-local'):
+            return isinstance(result, ClearEntireCostmap.Response)
+        return False
+
     def _map_call(self, client, request, next_step, check):
+        mutation = self._map_step not in MAP_READ_STEPS
+        if self._map_mutation_unknown or self._lifecycle_mutation_unknown:
+            raise RuntimeError('unknown write outcome; explicit stack recovery required')
         if self._map_future is None:
             if not client.service_is_ready(): return False
-            self._map_future = client.call_async(request)
+            try:
+                self._map_future = client.call_async(request)
+                if self._map_future is None:
+                    raise RuntimeError('map service returned no future')
+            except Exception:
+                if mutation:
+                    self._remember_unknown_write(
+                        'map', self._map_future, self._map_step, self.maps.token)
+                raise
             return False
         if not self._map_future.done(): return False
-        future, self._map_future = self._map_future, None
-        result = future.result()
-        if not check(result): raise RuntimeError('map stage readback failed: ' + self._map_step)
+        try:
+            result = self._map_future.result()
+            if mutation and not self._map_write_response_valid(result):
+                raise RuntimeError('missing or malformed map mutation response')
+            verified = check(result)
+            if type(verified) is not bool:
+                raise RuntimeError('malformed map readback verdict')
+        except Exception:
+            if mutation:
+                self._remember_unknown_write(
+                    'map', self._map_future, self._map_step, self.maps.token)
+            else:
+                self._map_future = None
+            raise
+        self._map_future = None
+        if not verified:
+            raise RuntimeError('map stage readback failed: ' + self._map_step)
         self._map_step = next_step
         return True
 
@@ -228,16 +380,19 @@ class MapRuntimeMixin:
         A pending timed-out mutation is never canceled/retried. Failure keeps
         this owner and its hold until an explicit operator stack recovery.
         """
+        if (self.undock_hold or self._map_mutation_unknown
+                or self._lifecycle_mutation_unknown):
+            return True
         tx = self.maps
         if tx is None or tx.stage in ('idle', 'ready'): return False
         if tx.stage == 'failed': return True
         if not self.node._lidar_ready():
-            tx.fail('fresh ready LiDAR lost during map recovery'); return True
+            self._fail_map_transaction('fresh ready LiDAR lost during map recovery'); return True
         if (not self.guard.ready or self.guard.session != tx.token.session
                 or self.recovery.token != tx.token.origin):
-            tx.fail('origin/transport changed during map recovery'); return True
+            self._fail_map_transaction('origin/transport changed during map recovery'); return True
         if time.monotonic() > self._map_deadline:
-            tx.fail('map localization timed out'); return True
+            self._fail_map_transaction('map localization timed out'); return True
         now = time.monotonic()
         with self.node._state_lock, self.node._pose_lock:
             if (not self.node._link_connected or self.node._fault_flags or
@@ -246,23 +401,26 @@ class MapRuntimeMixin:
                         self.node._pose_at, self.node._flags_at, self.node._charge_state_at)) or
                     not math.isfinite(self.node._vx) or not math.isfinite(self.node._vth) or
                     abs(self.node._vx) > .005 or abs(self.node._vth) > .01):
-                tx.fail('fresh stationary base telemetry lost during map recovery')
+                self._fail_map_transaction('fresh stationary base telemetry lost during map recovery')
                 return True
         if (self._map_refresh_deadline is not None and
                 time.monotonic() > self._map_refresh_deadline):
-            tx.fail('LOCALIZATION_UPDATE_TIMEOUT: ' + (self._map_refresh_problem() or
+            self._fail_map_transaction('LOCALIZATION_UPDATE_TIMEOUT: ' + (self._map_refresh_problem() or
                     'costmap association not confirmed before refresh deadline; motion hold retained'))
             return True
         try:
             self._tick_map_stage()
         except Exception as exc:
-            tx.fail(str(exc))
+            self._fail_map_transaction(str(exc))
         return True
 
     def _tick_map_stage(self):
         tx = self.maps; token = tx.token; step = self._map_step
         ok = lambda r: r.success is True
-        if step in ('pause', 'resume'):
+        if step == 'wait-navigation-idle':
+            if not self.navigation_idle_problem():
+                self._map_step = 'pause'
+        elif step in ('pause', 'resume'):
             request = ManageLifecycleNodes.Request()
             request.command = request.PAUSE if step == 'pause' else request.RESUME
             if self._map_call(self._navigation, request, 'inspect' if step == 'pause' else 'clear-global', ok):
@@ -280,6 +438,7 @@ class MapRuntimeMixin:
                 # Keep the same origin generation; only localization evidence is reset.
                 self.recovery.stage = EpochRecovery.WAIT_RESET
                 self.recovery.reset_complete(self.recovery.token, self.node.get_clock().now().nanoseconds)
+                self._failed = False
                 self.withdraw(reset_odometry=False)
         elif step == 'load':
             if tx.stage == 'reset-amcl': tx.advance(token, 'reset-amcl')
@@ -389,7 +548,7 @@ class MapRuntimeMixin:
             except ValueError as exc:
                 problem = str(exc)
             if problem:
-                self.maps.fail('SEED_INNOVATION_REJECTED: ' + problem + '; motion hold retained')
+                self._fail_map_transaction('SEED_INNOVATION_REJECTED: ' + problem + '; motion hold retained')
                 self._navigation_ready = False
                 return self.maps.error
         return ''
@@ -425,7 +584,7 @@ class MapRuntimeMixin:
             self._map_refresh_deadline = None
         elif ' variance ' in problem:
             pose = self._pending_pose
-            self.maps.fail('LOCALIZATION_QUALITY_REJECTED: ' + problem +
+            self._fail_map_transaction('LOCALIZATION_QUALITY_REJECTED: ' + problem +
                            '; stationary update exhausted; motion hold retained')
             self.node.get_logger().warning(
                 f'Map localization request={self.maps.token.request_id} '

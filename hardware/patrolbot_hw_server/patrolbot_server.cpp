@@ -628,9 +628,7 @@ void handleLidarPower(const patrolbot::ParsedCommand& command, ArRobot* robot,
 
 // CHARGE_RELEASE and MOTOR_ENABLE are decoupled, zero-motion maintenance
 // commands. CHARGE_RELEASE never enables motors and never authorizes motion.
-// MOTOR_ENABLE never releases charging and is refused whenever the robot may
-// still be connected to the dock. Neither of them can move the robot; that is
-// exclusively the UNDOCK operation's job.
+// MOTOR_ENABLE never releases charging or authorizes movement.
 void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
                   PendingOperation* pending,
                   std::deque<std::string>* responses,
@@ -675,8 +673,7 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
     tracker->begin(command.type, command.request_id);
     return;
   }
-  if (!lidar_ready && (command.type == patrolbot::COMMAND_MOTOR_ENABLE ||
-                       command.type == patrolbot::COMMAND_CHARGE_RELEASE)) {
+  if (!lidar_ready && command.type == patrolbot::COMMAND_CHARGE_RELEASE) {
     rejectControl(command, kPreconditionFailed, "lidar_not_ready", state,
                   responses, tracker);
     return;
@@ -686,12 +683,13 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
                   responses, tracker);
     return;
   }
-  if (!isStationary(state)) {
+  if (command.type != patrolbot::COMMAND_MOTOR_ENABLE && !isStationary(state)) {
     rejectControl(command, kPreconditionFailed, "robot_not_stationary", state,
                   responses, tracker);
     return;
   }
-  if ((state.fault_flags & profile.precheck_blocking_fault_mask) != 0) {
+  if (command.type != patrolbot::COMMAND_MOTOR_ENABLE &&
+      (state.fault_flags & profile.precheck_blocking_fault_mask) != 0) {
     rejectControl(command, kPreconditionFailed, "hardware_fault", state,
                   responses, tracker);
     return;
@@ -752,13 +750,8 @@ void startControl(const patrolbot::ParsedCommand& command, ArRobot* robot,
       pending->phase = RELEASE_WAIT_CHARGE_STATE;
     }
   } else if (command.type == patrolbot::COMMAND_MOTOR_ENABLE) {
-    // Permitted only where the robot cannot still be connected to the dock.
-    // There is no post-release window and no charge-state exception: enabling
-    // motors in order to leave the dock is the UNDOCK operation's job.
     if (!patrolbot::motorEnableAllowed(observer->state(), state.estop_pressed, lidar_ready)) {
-      const char* reason =
-          state.estop_pressed ? "estop_asserted" : "dock_contact_possible";
-      rejectControl(command, kPreconditionFailed, reason, state, responses,
+      rejectControl(command, kPreconditionFailed, "estop_asserted", state, responses,
                     tracker);
       return;
     }
@@ -806,7 +799,8 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
                    bool lidar_ready) {
   if (!pending->active) return;
   HardwareSnapshot state = readSnapshot(robot);
-  if (!lidar_ready && pending->type != patrolbot::COMMAND_MOTOR_DISABLE) {
+  if (!lidar_ready && pending->type != patrolbot::COMMAND_MOTOR_DISABLE &&
+      pending->type != patrolbot::COMMAND_MOTOR_ENABLE) {
     robot->lock();
     robot->setVel(0);
     robot->setRotVel(0);
@@ -859,9 +853,7 @@ void updateControl(ArRobot* robot, PendingOperation* pending,
       confirmed = state.charge_state == 0;
     }
   } else if (pending->type == patrolbot::COMMAND_MOTOR_ENABLE) {
-    if (!patrolbot::motorEnableAllowed(observer.state(), state.estop_pressed, lidar_ready) ||
-        (state.fault_flags & profile.precheck_blocking_fault_mask) != 0 ||
-        !isStationary(state)) {
+    if (!patrolbot::motorEnableAllowed(observer.state(), state.estop_pressed, lidar_ready)) {
       robot->lock();
       robot->setVel(0);
       robot->setRotVel(0);

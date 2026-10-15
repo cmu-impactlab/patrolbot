@@ -276,13 +276,10 @@ DriveDisposition classifyDrive(double linear, double angular,
   return DRIVE_ALLOWED_NORMAL;
 }
 
-bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed,
-                        bool lidar_ready) {
-  if (estop_pressed || !lidar_ready) return false;
-  // Refused while the robot may still be physically connected to the dock.
-  // Releasing the charger in order to move is the UNDOCK operation's job, and
-  // this command never touches charging.
-  return dock_state == DOCK_CLEAR_CONFIRMED || dock_state == DOCK_UNKNOWN;
+bool motorEnableAllowed(DockPhysicalState /*dock_state*/, bool estop_pressed,
+                        bool /*lidar_ready*/) {
+  // Power alone never releases charging or authorizes DRIVE.
+  return !estop_pressed;
 }
 
 std::string commandName(CommandType command) {

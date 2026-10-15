@@ -901,6 +901,16 @@ void test_stale_overcharge_after_clearance_does_not_redock_without_voltage() {
   CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
 }
 
+void test_manual_departure_clears_a_stale_float_state() {
+  FakeBase base;
+  settleDocked(&base);
+  base.dock_holds_front_bumper = false;
+  base.battery_voltage_override_v = 25.5;
+  base.inputs.charge_state = 3;
+  base.settle(20);
+  CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+}
+
 void test_charger_voltage_repairs_a_missed_redock_edge() {
   FakeBase base;
   base.charge_reassert_after_ms = 200;
@@ -1431,6 +1441,7 @@ int main() {
   RUN(test_persistent_front_contact_extends_then_fails);
   RUN(test_stale_charge_after_clearance_keeps_clear_confirmed);
   RUN(test_stale_overcharge_after_clearance_does_not_redock_without_voltage);
+  RUN(test_manual_departure_clears_a_stale_float_state);
   RUN(test_charger_voltage_repairs_a_missed_redock_edge);
   RUN(test_transient_charger_voltage_does_not_redock);
   RUN(test_redock_requires_a_rising_edge_not_a_stale_level);

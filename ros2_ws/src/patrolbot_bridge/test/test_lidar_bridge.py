@@ -41,11 +41,13 @@ def bridge():
     b.sent = []
     def send(payload):
         b.sent.append(payload)
-        if payload.startswith(b'LIDAR_'):
-            assert b._lidar_hold and b._lidar_pending
+        if payload.startswith((b'LIDAR_', b'MOTOR_ENABLE:')):
+            if payload.startswith(b'LIDAR_'):
+                assert b._lidar_hold and b._lidar_pending
             verb, request_id = payload.decode().strip().split(':')
             b._handle_control_reply(f'ACK:{verb}:{request_id}:ACCEPTED')
-            b._handle_control_reply(f'RESULT:{verb}:{request_id}:OK:0:commanded:0:0:0')
+            motors = int(verb == 'MOTOR_ENABLE')
+            b._handle_control_reply(f'RESULT:{verb}:{request_id}:OK:0:commanded:0:{motors}:0')
     b.sock.sendall.side_effect = send
     return b
 
@@ -109,10 +111,12 @@ def test_one_hardware_operation_and_pending_barrier(bridge):
 
 
 @pytest.mark.parametrize('state', ['OFF,1,-1', 'STARTING,1,-1', 'UNKNOWN,0,-1'])
-def test_motor_enable_and_nonzero_drive_fail_closed_stop_survives(bridge, state):
+def test_motor_power_is_available_but_nonzero_drive_requires_lidar(bridge, state):
     bridge._lidar.update(state, time.monotonic())
     response = bridge._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response())
-    assert not response.success and not bridge.sent
+    assert response.success and response.motors_enabled
+    assert bridge.sent == [f'MOTOR_ENABLE:{ID}\n'.encode()]
+    bridge.sent.clear()
     twist = Twist(); twist.linear.x = .1
     bridge.cmd_vel_callback(twist)
     assert not bridge.sent

@@ -61,18 +61,8 @@ def format_request(command: str, request_id: str) -> bytes:
 
 
 def motor_enable_allowed(dock_state: str, estop_pressed: bool) -> bool:
-    """
-    Permit a motor enable only where dock contact is impossible.
-
-    MOTOR_ENABLE is a decoupled maintenance command: it never releases charging
-    and never authorizes motion. There is no post-release window and no
-    charge-state exception, because enabling the motors in order to leave the
-    dock is the UNDOCK operation's job. The SBC independently enforces the same
-    rule against its own dock observer.
-    """
-    if estop_pressed:
-        return False
-    return dock_state in ('CLEAR_CONFIRMED', 'UNKNOWN')
+    """Power alone neither releases charging nor authorizes movement."""
+    return not estop_pressed
 
 
 def parse_reply(line: str) -> Optional[ControlReply]:

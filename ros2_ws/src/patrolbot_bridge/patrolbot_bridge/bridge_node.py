@@ -1255,9 +1255,6 @@ class PatrolBotBridge(Node):
             estop = self._estop_pressed
             fault_flags = self._fault_flags
             dock_state = self._dock_state
-            dock_age = (
-                started - self._dock_state_at
-                if self._dock_state_at else math.inf)
             undock_active = self._undock_active
         with self._pose_lock:
             linear = self._vx
@@ -1267,7 +1264,10 @@ class PatrolBotBridge(Node):
         if not connected:
             return self._fill_control_response(
                 response, None, 2, 'hardware link unavailable', started)
-        if command != COMMAND_MOTOR_DISABLE:
+        if command == COMMAND_MOTOR_ENABLE and not motor_enable_allowed(dock_state, estop):
+            return self._fill_control_response(
+                response, None, 3, 'motor enable refused while E-stop asserted', started)
+        if command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE):
             if not all(0 <= age <= .5 for age in (charge_age, flags_age)):
                 return self._fill_control_response(
                     response, None, 3, 'hardware telemetry is stale', started)
@@ -1304,25 +1304,6 @@ class PatrolBotBridge(Node):
             if not power and not self._lidar_ready():
                 return self._fill_control_response(
                     response, None, 3, 'fresh ready LiDAR is required', started)
-            if command == COMMAND_MOTOR_ENABLE:
-                if estop:
-                    return self._fill_control_response(
-                        response, None, 3, 'motor enable refused while E-stop asserted',
-                        started)
-                # No post-release window and no charge-state exception. Enabling the
-                # motors in order to leave the dock is the UNDOCK operation's job,
-                # and the SBC independently enforces the same rule against its own
-                # dock observer. A stale or absent dock state fails closed.
-                if dock_age > 1.0 or not dock_state:
-                    return self._fill_control_response(
-                        response, None, 3, 'dock state is stale or unavailable',
-                        started)
-                if not motor_enable_allowed(dock_state, estop):
-                    return self._fill_control_response(
-                        response, None, 3,
-                        f'motor enable refused in dock state {dock_state}',
-                        started)
-
         key = (command, request_id)
         pending = PendingControl(command, request_id, generation)
         with self._control_lock:
@@ -1367,9 +1348,9 @@ class PatrolBotBridge(Node):
                     self._epoch.require_lidar_seed()
                     if self.sock is not None:
                         self.sock.sendall(b'DRIVE:0.0:0.0\n')
-                elif command != COMMAND_MOTOR_DISABLE and (
+                elif command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE) and (
                         not self._lidar_ready() or
-                        (command != COMMAND_MOTOR_ENABLE and not self._epoch.commands_allowed)):
+                        not self._epoch.commands_allowed):
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
                         response, None, 3, 'odometry origin recovery required', started)

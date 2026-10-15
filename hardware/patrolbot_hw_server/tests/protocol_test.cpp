@@ -193,17 +193,17 @@ void test_lidar_gates_motion_but_never_stop() {
                       kCritical, false, false) == DRIVE_REJECTED);
   CHECK(classifyDrive(0, 0, true, DOCK_UNKNOWN, false, true, 0xffff,
                       kCritical, false, false) == DRIVE_ALLOWED_ZERO);
-  CHECK(!motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, false));
-  CHECK(!motorEnableAllowed(DOCK_UNKNOWN, false, false));
+  CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, false));
+  CHECK(motorEnableAllowed(DOCK_UNKNOWN, false, false));
 }
 
 void test_motor_enable_is_decoupled_from_charging() {
-  // Permitted only where the robot cannot still be connected to the dock.
+  // Motor power does not release charging or authorize movement.
   CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, true));
   CHECK(motorEnableAllowed(DOCK_UNKNOWN, false, true));
-  CHECK(!motorEnableAllowed(DOCK_DOCKED_CONFIRMED, false, true));
-  CHECK(!motorEnableAllowed(DOCK_DEPARTING, false, true));
-  CHECK(!motorEnableAllowed(DOCK_FAULT_STOPPED, false, true));
+  CHECK(motorEnableAllowed(DOCK_DOCKED_CONFIRMED, false, true));
+  CHECK(motorEnableAllowed(DOCK_DEPARTING, false, true));
+  CHECK(motorEnableAllowed(DOCK_FAULT_STOPPED, false, true));
   // E-stop always refuses, and there is no "recent release" back door.
   CHECK(!motorEnableAllowed(DOCK_CLEAR_CONFIRMED, true, true));
   CHECK(!motorEnableAllowed(DOCK_UNKNOWN, true, true));

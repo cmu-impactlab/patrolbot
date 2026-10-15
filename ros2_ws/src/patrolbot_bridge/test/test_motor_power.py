@@ -1,4 +1,4 @@
-"""Motor requests use base velocity and preserve a disable during recovery."""
+"""Motor power is independent of movement admission and preserves disable priority."""
 import threading
 import time
 from types import SimpleNamespace as NS
@@ -21,12 +21,14 @@ def bridge():
     b._charge_state_at = b._flags_at = b._dock_state_at = b._pose_at = 0.
     b._vx = .2; b._vth = .1; b.CONTROL_TIMEOUT = .01
     b._epoch = NS(lock=threading.RLock(), commands_allowed=False, maps=NS(hold=True))
+    b._lidar_ready = Mock(return_value=False)
     b.get_logger = Mock(return_value=Mock()); b.sock = Mock(); b.sent = []
     def send(payload):
         b.sent.append(payload)
         verb, request_id = payload.decode().strip().split(":")
         b._handle_control_reply(f"ACK:{verb}:{request_id}:ACCEPTED")
-        b._handle_control_reply(f"RESULT:{verb}:{request_id}:OK:0:confirmed:0:0:1")
+        motors, estop = (1, 0) if verb == "MOTOR_ENABLE" else (0, 1)
+        b._handle_control_reply(f"RESULT:{verb}:{request_id}:OK:0:confirmed:0:{motors}:{estop}")
     b.sock.sendall.side_effect = send
     return b
 
@@ -45,11 +47,31 @@ def test_disable_still_requires_valid_identity_and_hardware_link(connected, requ
     assert not result.success and not b.sent
 
 
-def test_enable_refuses_real_motion_even_with_motors_disabled():
-    b = bridge(); now = time.monotonic()
-    b._charge_state_at = b._flags_at = b._dock_state_at = b._pose_at = now
-    b._epoch.maps.hold = False
-    b._motors_enabled = False; b._estop_pressed = False; b._fault_flags = 0; b._undock_active = False
-    b._dock_state = "CLEAR_CONFIRMED"
+@pytest.mark.parametrize("dock_state", ["DOCKED_CONFIRMED", "UNKNOWN", "DEPARTING", "FAULT_STOPPED"])
+def test_enable_ignores_motion_dock_staleness_faults_lidar_and_recovery(dock_state):
+    b = bridge()
+    b._estop_pressed = False; b._motors_enabled = False; b._dock_state = dock_state
     result = b._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response())
-    assert not result.success and "stationary" in result.message and not b.sent
+    assert result.success and result.motors_enabled
+    assert b.sent == [f"MOTOR_ENABLE:{ID}\n".encode()]
+
+
+def test_enable_preserves_estop():
+    b = bridge()
+    result = b._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response())
+    assert not result.success and "E-stop" in result.message and not b.sent
+
+
+def test_disable_supersedes_an_enable_before_it_reaches_the_wire(monkeypatch):
+    from patrolbot_bridge import bridge_node
+    b = bridge(); b._estop_pressed = False
+    original = bridge_node.format_request
+    def format_request(command, request_id):
+        if command == "MOTOR_ENABLE":
+            disabled = b._motor_disable_callback(MotorDisable.Request(request_id=ID), MotorDisable.Response())
+            assert disabled.success
+        return original(command, request_id)
+    monkeypatch.setattr(bridge_node, "format_request", format_request)
+    result = b._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response())
+    assert not result.success and result.message == "canceled by motor disable"
+    assert b.sent == [f"MOTOR_DISABLE:{ID}\n".encode()]

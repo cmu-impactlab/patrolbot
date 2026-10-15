@@ -1,5 +1,31 @@
 # PatrolBot — open work
 
+## First deployment problem — dashboard UI restoration candidate
+
+**Problem:** currently served UI lacks previously merged uncertainty display and
+the independent motor-disable fallback. This is separate from map/joystick/
+undock/override/planning defects, none of which is included automatically.
+
+**Progress:** `review/dashboard-ui-restoration-20261015` restores four runtime/type
+files exactly from reviewed main, based on actual deployment749cb18. Eleven
+original widget contracts fail before restoration and the same72 pass after.
+Final suite305 passes; all12 focused Chromium/WebKit cases pass in pinned isolated
+browser image. Production-derived candidate9a9235d3 retains all49 backend/map
+files and environment/command/user/layers, serves all15 expected assets via HTTP
+and completes application cleanup. Existing main CI/WebKit acceptance is retained
+as historical, not substituted for these fresh checks. No deployed source changed.
+
+**Remaining:** finish selected responsive/layout verification and release review;
+verify current-image drift and off-device rollback/config/database preservation;
+obtain explicit approval for dashboard-only server recreation, then verify public
+assets/authentication/health and read-only display. Refresh deployment manifest
+only after actual activation; no Pi/SBC restart or database migration is needed.
+
+**Blocked on:** those final software/release gates and approval, not SBC access
+for offline preparation. SBC is operator-reported down: fresh live AMCL display
+and actual motor response acceptance wait for later separate authorization.
+See [evidence](2026-10-clean-state/UI-RESTORATION-20261015.md). No issue/count closure.
+
 ## 1. Reproducible source and release provenance — PB020
 
 **Problem:** live code came from dirty forks/device copies and inherited image

@@ -1,0 +1,12 @@
+# Reuse the exact existing web dependencies with the rebuilt core interfaces.
+ARG PATROLBOT_CORE_IMAGE
+ARG PATROLBOT_WEB_BASE_IMAGE
+FROM ${PATROLBOT_WEB_BASE_IMAGE} AS web_dependencies
+FROM ${PATROLBOT_CORE_IMAGE}
+COPY --from=web_dependencies /usr/lib/python3/dist-packages/websockets /usr/lib/python3/dist-packages/websockets
+COPY --from=web_dependencies /usr/lib/python3/dist-packages/psutil /usr/lib/python3/dist-packages/psutil
+COPY dashboard/ros2_ws/src/patrolbot_web_bridge /opt/web_bridge
+ARG PATROLBOT_WEB_SOURCE_SHA256
+ARG PATROLBOT_CORE_IMAGE
+LABEL io.patrolbot.web-bridge-base-image=$PATROLBOT_CORE_IMAGE \
+      io.patrolbot.web-path-source-sha256=$PATROLBOT_WEB_SOURCE_SHA256

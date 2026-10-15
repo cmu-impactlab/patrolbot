@@ -68,11 +68,16 @@ class Client:
         return future
 
 
+
+class Bool:
+    def __init__(self, data=False):
+        self.data = bool(data)
 @pytest.fixture
 def teleop(monkeypatch):
     class Node:
         def __init__(self, name):
             self.now, self.parameters, self.clients, self.messages = 1.0, {}, {}, []
+            self.flag_messages = []
 
         def declare_parameter(self, name, value):
             self.parameters[name] = value
@@ -91,6 +96,8 @@ def teleop(monkeypatch):
             pass
 
         def create_publisher(self, *args):
+            if len(args) > 1 and args[1] == "/patrolbot/manual_active":
+                return SimpleNamespace(publish=self.flag_messages.append)
             return SimpleNamespace(publish=self.messages.append)
 
         def create_client(self, service, name):
@@ -117,6 +124,7 @@ def teleop(monkeypatch):
         'action_msgs.srv': {'CancelGoal': SimpleNamespace(Request=SimpleNamespace)},
         'geometry_msgs': {}, 'geometry_msgs.msg': {'Twist': Twist},
         'sensor_msgs': {}, 'sensor_msgs.msg': {'Joy': object},
+        "std_msgs": {}, "std_msgs.msg": {"Bool": Bool},
         'patrolbot_interfaces': {}, 'patrolbot_interfaces.msg': {'BaseState': object},
         'patrolbot_interfaces.srv': {'SetLidarPower': SimpleNamespace(Request=SimpleNamespace)},
     }
@@ -402,3 +410,16 @@ def test_queued_base_state_age_is_added_to_measured_age_before_toggle(teleop, fi
     chord(teleop)
     cancel_done(teleop)
     assert not power_client(teleop).calls
+
+
+def test_manual_active_flag_tracks_drive_publication(teleop):
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.tick()
+    assert teleop.flag_messages and teleop.flag_messages[-1].data is True
+    assert teleop.messages[-1].linear.x > 0.0
+    teleop.joy_cb(joy(teleop.now))
+    teleop.nav_cancel.futures[-1].finish(SimpleNamespace(return_code=0))
+    for _ in range(200):
+        teleop.tick()
+    assert teleop.flag_messages[-1].data is False
+    assert teleop.messages[-1].linear.x == 0.0

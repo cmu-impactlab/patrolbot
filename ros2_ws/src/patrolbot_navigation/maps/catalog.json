@@ -17,8 +17,8 @@
       "free_thresh": 0.05,
       "width": 4235,
       "height": 3289,
-      "revision": "sha256:f5e10f78b82ddb99d18159996d5f2a7007acaeeaebb8bfa8f1cd5d87a9cff843",
-      "image_sha256": "aee11890f547486d989fbdc7af124fd1fd6ef010d4999d365aa59d66893965d6"
+      "revision": "sha256:22872ec191b62a9562a2a74b63cbd62da5f5f6ba0e6fb567be2c3926f5b9ae0d",
+      "image_sha256": "411c5647a0761326a27a60743b8a8d6068c8a136db22e36a702c6d5294e66f15"
     },
     {
       "map_id": "cmuq-floor2",

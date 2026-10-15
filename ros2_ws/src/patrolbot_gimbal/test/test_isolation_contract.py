@@ -57,6 +57,7 @@ FORBIDDEN = [
     'input/safety_controller',
     'input/switch',
     'input/docking',
+    'input/undock_turn',
     'Twist',
 ]
 

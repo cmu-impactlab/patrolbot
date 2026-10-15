@@ -21,6 +21,7 @@ from patrolbot_bridge.control_protocol import (
     valid_request_id,
 )
 from patrolbot_bridge.epoch_runtime import EpochRuntime
+from patrolbot_bridge.manual_active import manual_drive_bypass
 from patrolbot_bridge.lidar_state import LidarState
 from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
@@ -45,6 +46,7 @@ from patrolbot_bridge.undock_protocol import (
     TIMEOUT,
     UndockResult,
 )
+from patrolbot_bridge.undock_turn import UndockTurnRuntime, pure_angular
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.msg import BaseState
 from patrolbot_interfaces.srv import ChargeRelease, DockReset, MotorEnable, MotorDisable, SetLidarPower
@@ -55,6 +57,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import BatteryState, LaserScan, PointCloud2, PointField
+from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 
 
@@ -100,6 +103,10 @@ class PatrolBotBridge(Node):
                 LaserScan, self.unfiltered_scan_topic,
                 qos_profile_sensor_data)
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+        # Deadman evidence from the joystick teleop (see manual_active).
+        self._manual_active_at = 0.0
+        self.manual_sub = self.create_subscription(
+            Bool, "/patrolbot/manual_active", self._manual_active_cb, 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Auxiliary telemetry (sonar / battery / diagnostics). Parsed from a separate
@@ -278,6 +285,7 @@ class PatrolBotBridge(Node):
         self._vx, self._vth = 0.0, 0.0
         self._pose_received = False
         self._pose_at = 0.0
+        self._undock_scan_at = 0.0
         self._odom_tf_timeout = float(
             self.get_parameter('odom_tf_timeout').value)
         self._odom_covariance = OdomCovariance(
@@ -308,6 +316,7 @@ class PatrolBotBridge(Node):
         self._tf_send_lock = threading.Lock()
 
         self._epoch = EpochRuntime(self)
+        self._undock_turn = UndockTurnRuntime(self)
 
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
@@ -661,11 +670,15 @@ class PatrolBotBridge(Node):
         with self._epoch.lock:
             if session is None:
                 session = self._epoch.guard.session
-            if not self._epoch.frame_allowed(session, line):
+            decision = self._epoch.guard.check_frame(session, line)
+            if not decision.accepted:
+                if decision.reason == 'frame-epoch-mismatch':
+                    self._epoch.invalidate_transport(decision.reason)
                 return
-            self._parse_telemetry_guarded(line, received_at)
+            self._parse_telemetry_guarded(
+                line, received_at, publish=self._epoch.streams_allowed)
 
-    def _parse_telemetry_guarded(self, line, received_at=None):
+    def _parse_telemetry_guarded(self, line, received_at=None, *, publish=True):
         try:
             receipt_clock = self.get_clock().now()
             queue_age = 0. if received_at is None else time.monotonic() - received_at
@@ -707,7 +720,10 @@ class PatrolBotBridge(Node):
                 pose_covariance = self._odom_covariance.pose_covariance()
                 twist_covariance = self._odom_covariance.twist_covariance()
 
-            if tf_was_absent:
+            if self._undock_turn.phase in ('turn', 'stopping', 'restoring'):
+                self._undock_turn.observe_turn_odom()
+
+            if publish and tf_was_absent:
                 # Publish the transform here rather than waiting up to 20 ms
                 # for the next timer tick. /scan below is stamped from the same
                 # instant as /odom, so leaving it to the timer would let the
@@ -741,7 +757,8 @@ class PatrolBotBridge(Node):
             odom_msg.twist.twist.angular.z = vth
             odom_msg.pose.covariance = pose_covariance
             odom_msg.twist.covariance = twist_covariance
-            self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
+            if publish:
+                self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
 
             # /scan — preserve reported acquisition age plus local queue age.
             # After startup/reconnect, older scans may precede TF history and
@@ -795,8 +812,13 @@ class PatrolBotBridge(Node):
                     receipt_clock.nanoseconds, measured_age_ns)).to_msg()
                 scan_msg = self._laser_scan_message(
                     scan_stamp, ranges, self.SCAN_RANGE_MIN)
-                self._publish_with_timing(self.scan_pub, scan_msg, '/scan')
-                if self.unfiltered_scan_pub is not None:
+                if not age.legacy:
+                    with self._pose_lock:
+                        self._undock_scan_at = (received_at if received_at is not None
+                                                else now) - (age.age_ms or 0) / 1000.
+                if publish:
+                    self._publish_with_timing(self.scan_pub, scan_msg, '/scan')
+                if publish and self.unfiltered_scan_pub is not None:
                     candidate = self._laser_scan_message(
                         scan_stamp, raw_ranges, 0.0)
                     self._publish_with_timing(
@@ -1131,6 +1153,7 @@ class PatrolBotBridge(Node):
             seed_stamp = self._epoch.recovery._seed_ns or 0
         msg = BaseState()
         msg.localization_seed_stamp_ns = seed_stamp
+        msg.localization_pose_stamp_ns = self._epoch.accepted_pose_stamp_ns
         with self._epoch.lock:
             active_map = self._epoch.maps.active if self._epoch.maps else None
             msg.map_id = active_map['map_id'] if active_map else ''
@@ -1175,6 +1198,10 @@ class PatrolBotBridge(Node):
         msg.dock_phase = dock_phase if dock_valid else 0
         msg.dock_phase_name = dock_phase_name if dock_valid else 'IDLE'
         msg.undock_active = undock_active if dock_valid else False
+        with self._epoch.lock:
+            msg.undock_turn_active = self._undock_turn.drive_allowed
+            msg.undock_turn_goal_id = (
+                self._undock_turn.spin_id.hex() if msg.undock_turn_active else '')
         msg.undock_release_attempts = int(release_attempts)
         msg.minimum_rear_range = float(minimum_rear_range)
         msg.rear_sonar_usable = bool(rear_sonar_usable and dock_valid)
@@ -1196,21 +1223,30 @@ class PatrolBotBridge(Node):
             COMMAND_CHARGE_RELEASE, request.request_id, response)
 
     def _motor_enable_callback(self, request, response):
+        if self._undock_turn.busy:
+            response.request_id = request.request_id
+            return self._fill_control_response(
+                response, None, 3, 'undock owns motor state', time.monotonic())
         return self._control_service(
             COMMAND_MOTOR_ENABLE, request.request_id, response)
 
     def _motor_disable_callback(self, request, response):
         if valid_request_id(request.request_id):
+            self._undock_turn.revoke('motors disabled by operator')
             with self._epoch.lock, self.sock_lock:
                 self._motor_disable_generation = getattr(self, '_motor_disable_generation', 0) + 1
         return self._control_service_guarded(
             COMMAND_MOTOR_DISABLE, request.request_id, response)
 
     def _dock_reset_callback(self, request, response):
+        if valid_request_id(request.request_id):
+            self._undock_turn.revoke('dock reset requested')
         return self._control_service(
             COMMAND_DOCK_RESET, request.request_id, response)
 
     def _set_lidar_power_callback(self, request, response):
+        if valid_request_id(request.request_id):
+            self._undock_turn.revoke('LiDAR power change requested')
         return self._control_service(
             COMMAND_LIDAR_ON if request.enabled else COMMAND_LIDAR_OFF,
             request.request_id, response)
@@ -1503,9 +1539,6 @@ class PatrolBotBridge(Node):
 
     def _undock_goal_callback(self, request):
         """Admit one undock goal at a time, against an SBC that supports it."""
-        with self._epoch.lock:
-            if not self._epoch.commands_allowed:
-                return GoalResponse.REJECT
         for name, value in (
                 ('clearance_distance', request.clearance_distance),
                 ('reverse_speed', request.reverse_speed),
@@ -1530,11 +1563,11 @@ class PatrolBotBridge(Node):
                 'FEATURES=UNDOCK.')
             return GoalResponse.REJECT
         with self._epoch.lock, self._undock_goal_lock:
-            if not self._lidar_ready():
-                return GoalResponse.REJECT
             if self._undock_goal_reserved:
                 self.get_logger().error(
                     'Hardware undock rejected: another goal is active.')
+                return GoalResponse.REJECT
+            if not self._undock_turn.reserve_reverse(bool(request.validation_mode)):
                 return GoalResponse.REJECT
             self._undock_goal_reserved = True
         return GoalResponse.ACCEPT
@@ -1556,6 +1589,10 @@ class PatrolBotBridge(Node):
             self._undock_session = session
         self._undock_event.clear()
         try:
+            problem = self._undock_turn.prepare_reverse(goal_handle)
+            if problem:
+                return self._undock_abort(
+                    goal_handle, LINK_UNAVAILABLE, problem, started, session)
             payload = format_undock_request(
                 request_id, float(goal_handle.request.clearance_distance),
                 float(goal_handle.request.reverse_speed),
@@ -1566,7 +1603,8 @@ class PatrolBotBridge(Node):
                     return self._undock_abort(
                         goal_handle, SESSION_CHANGED,
                         'hardware session changed', started, session)
-                if not self._epoch.commands_allowed or not self._lidar_ready():
+                if (self._undock_turn.reason or
+                        self._undock_turn.hardware_problem(charging=True, stationary=True)):
                     return self._undock_abort(
                         goal_handle, LINK_UNAVAILABLE,
                         'odometry origin recovery required', started, session)
@@ -1598,9 +1636,12 @@ class PatrolBotBridge(Node):
             with self._undock_lock:
                 result = self._undock_result
             if result is None:
+                self._send_undock_cancel(request_id)
+                self._undock_turn.reverse_unknown(goal_handle, 'no terminal result from the SBC')
                 return self._undock_abort(
                     goal_handle, TIMEOUT,
                     'no terminal result from the SBC', started, session)
+            self._undock_turn.reverse_result(goal_handle, result)
             return self._undock_finish(goal_handle, result, started, session)
         finally:
             with self._undock_lock:
@@ -1670,6 +1711,12 @@ class PatrolBotBridge(Node):
         return result
 
     def _undock_abort(self, goal_handle, code, message, started, session):
+        self._undock_turn.revoke(message)
+        self._undock_turn.finish()
+        if goal_handle.is_cancel_requested:
+            code = CANCELED
+        elif self._session_generation != session or not self._epoch.guard.ready:
+            code = SESSION_CHANGED
         result = HardwareUndock.Result()
         result.success = False
         result.code = int(code)
@@ -1677,13 +1724,31 @@ class PatrolBotBridge(Node):
         result.final_dock_state = 'UNKNOWN'
         result.elapsed_seconds = float(time.monotonic() - started)
         result.session_generation = session
-        goal_handle.abort()
+        if code == CANCELED:
+            goal_handle.canceled()
+        else:
+            goal_handle.abort()
         self.get_logger().error(f'Hardware undock aborted: {message}')
         return result
 
     # ------------------------------------------------------------------
     # Velocity forwarding
     # ------------------------------------------------------------------
+
+    def _manual_active_cb(self, msg):
+        if bool(getattr(msg, "data", False)):
+            self._manual_active_at = time.monotonic()
+
+    def _manual_drive_allowed(self):
+        # Scoped bypass: fresh deadman AND recovery is the blocker.
+        # Autonomy never asserts manual_active, so it stays blocked.
+        return manual_drive_bypass(
+            time.monotonic() - self._manual_active_at,
+            undock_hold=self._epoch.undock_hold,
+            lidar_ready=self._lidar_ready(),
+            map_hold=self._epoch.map_hold,
+            guard_ready=self._epoch.guard.ready,
+            recovery_required=self._epoch.recovery.required)
 
     def cmd_vel_callback(self, msg):
         # Defence in depth. The SBC refuses every nonzero DRIVE while its undock
@@ -1696,9 +1761,17 @@ class PatrolBotBridge(Node):
             # Serialize all writes so DRIVE bytes can never interleave with an
             # idempotent hardware-control request on the TCP stream.
             with self._epoch.lock, self.sock_lock:
-                if ((not self._epoch.commands_allowed or not self._lidar_ready()) and
-                        (msg.linear.x != 0.0 or msg.angular.z != 0.0)):
-                    return
+                if msg.linear.x != 0.0 or msg.angular.z != 0.0:
+                    if self._undock_turn.busy:
+                        if not (self._undock_turn.drive_allowed and pure_angular(msg)):
+                            return
+                    elif not self._epoch.commands_allowed or not self._lidar_ready():
+                        # 20261014: deadman-held manual DRIVE stays available
+                        # during localization recovery; autonomy (no manual
+                        # evidence) remains blocked by commands_allowed.
+                        if not self._manual_drive_allowed():
+                            return
+                        return
                 if self.sock is None:
                     return
                 self.sock.sendall(
@@ -1713,6 +1786,7 @@ class PatrolBotBridge(Node):
     def destroy_node(self):
         if self._workers_stopped:
             return
+        self._undock_turn.destroy()
         try:
             self._undock_server.destroy()
         except Exception:

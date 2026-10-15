@@ -40,31 +40,30 @@ amcl:
     odom_frame_id: "odom"
     pf_err: 0.05
     pf_z: 0.99
-    # Keep AMCL's standard slow/fast recovery signal available as a diversity
-    # backstop. Forced no-motion requests are now event/phase bounded, so this
-    # no longer combines with a permanent 5 Hz resampling loop while docked.
-    recovery_alpha_fast: 0.10
-    recovery_alpha_slow: 0.001
+    # 20261014 jump-limit: recovery injection DISABLED (Nav2 defaults 0.0).
+    # Random-particle injection teleports the filter (0.52 m snap seen
+    # 20261014 across re-seed). Re-seed is explicit-only via dock initializer
+    # / operator; bridge innovation gate (0.10/0.20 m, 3/5 deg) stays the guard.
+    recovery_alpha_fast: 0.0
+    recovery_alpha_slow: 0.0
     resample_interval: 1
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
     save_pose_rate: 0.5
-    # 0.2 -> 0.30: looser expected laser noise. No PB-AUDIT note ties the old
-    # 0.2 to a specific measured behavior, so this reads as a generic
-    # likelihood_field_prob retune rather than something the new value breaks —
-    # but confirm that assumption, since nothing here documents why 0.30 specifically.
-    sigma_hit: 0.30
+    # 20261014 AMCL retune (office/university, good odom): sigma_hit 0.30 -> 0.20.
+    # Consensus default 0.20; tighter laser noise suits clean indoor SICK LMS-200.
+    sigma_hit: 0.20
     tf_broadcast: true
     transform_tolerance: 1.0
     update_min_d: 0.10
     update_min_a: 0.10
-    z_hit: 0.70
+    z_hit: 0.50
     # z_max/z_short are unused by likelihood_field_prob (it only consumes
     # z_hit + z_rand, which correctly sum to 1.0) — zeroed to reflect that.
     # Note lambda_short (above) is ALSO unused by likelihood_field_prob but was
     # left at 0.10 rather than zeroed in the source values you gave me: that's
     # an inconsistency in the new config itself, not something I introduced.
     z_max: 0.00
-    z_rand: 0.30
+    z_rand: 0.50
     z_short: 0.00
     scan_topic: "scan"
     first_map_only: true
@@ -139,7 +138,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.25
-      movement_time_allowance: 30.0
+      movement_time_allowance: 10.0
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.25
@@ -180,7 +179,7 @@ controller_server:
       # hard-stop) is now the sole automatic collision guard in the nav path.
       use_collision_detection: false
       max_allowed_time_to_collision_up_to_carrot: 1.0
-      max_robot_pose_search_dist: 10.0
+      max_robot_pose_search_dist: 2.0
 
 docking_server:
   ros__parameters:
@@ -260,7 +259,9 @@ local_costmap:
           data_type: "LaserScan"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
+        # 20261014 consensus (Zheng/Nav2 guides): gentler decay centers paths in
+        # halls; radius kept 0.40 so 0.85 m doors stay passable for the 0.43 m base.
+        cost_scaling_factor: 3.0
         inflation_radius: 0.40
 
 global_costmap:
@@ -307,7 +308,9 @@ global_costmap:
           data_type: "LaserScan"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0
+        # 20261014 consensus (Zheng/Nav2 guides): gentler decay centers paths in
+        # halls; radius kept 0.40 so 0.85 m doors stay passable for the 0.43 m base.
+        cost_scaling_factor: 3.0
         inflation_radius: 0.40
 
 map_server:
@@ -317,6 +320,7 @@ map_server:
 planner_server:
   ros__parameters:
     use_sim_time: False
+    costmap_update_timeout: 3.0
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner::NavfnPlanner"
@@ -559,7 +563,8 @@ collision_monitor:
       holonomic: false
       velocity_polygons: ["rotation_or_stopped", "forward", "reverse"]
       rotation_or_stopped:
-        points: "[[0.3, 0.3], [0.3, -0.3], [-0.55, -0.3], [-0.55, 0.3]]"
+        # Match the front rotation zone; the longer reverse zone keeps braking room.
+        points: "[[0.3, 0.3], [0.3, -0.3], [-0.3, -0.3], [-0.3, 0.3]]"
         linear_min: -0.01
         linear_max: 0.01
         theta_min: -1.0

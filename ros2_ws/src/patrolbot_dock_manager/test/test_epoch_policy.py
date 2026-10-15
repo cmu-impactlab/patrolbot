@@ -39,6 +39,15 @@ class EpochPolicyTests(unittest.TestCase):
                 origin_valid=True, recovery_required=False,
                 recovery_stage='ready', for_pose_initialization=initializer))
 
+    def test_undock_hardware_snapshot_does_not_require_amcl_or_a_map(self):
+        for stage in ('wait-amcl-reset', 'wait-operator-seed', 'failed:map-state'):
+            self.assertTrue(epoch_hardware_ready(
+                origin_valid=True, recovery_stage=stage, for_undock=True))
+            self.assertFalse(epoch_hardware_ready(
+                origin_valid=True, recovery_stage=stage))
+        self.assertFalse(epoch_hardware_ready(
+            origin_valid=False, recovery_stage='ready', for_undock=True))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,6 +4,7 @@ Synthetic poses/scans test protocol ordering; they are not physical alignment
 measurements or commissioning values. Never run against a real robot graph.
 """
 import json
+import copy
 import math
 import os
 from pathlib import Path
@@ -19,7 +20,10 @@ assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}
 sys.path.insert(0, '/validation/ros2_ws/src/patrolbot_bridge/test')
 from test_fake_sbc_integration import FakeSbc, wait_until
 import rclpy
-from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
+from action_msgs.msg import GoalStatusArray
+from lifecycle_msgs.srv import GetState
+from nav2_msgs.action import NavigateToPose, NavigateThroughPoses
 from patrolbot_interfaces.action import LocalizeOnMap
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from patrolbot_bridge.map_catalog import MapCatalog, ActiveMapStore
@@ -123,7 +127,7 @@ try:
     if '--startup-only' in sys.argv:
         print(json.dumps({'passed':['restart_map_readback','fresh_localization_required'], 'map':expected}),flush=True)
         sequence = ()
-    elif '--cancel' in sys.argv or '--quality-reject' in sys.argv:
+    elif any(flag in sys.argv for flag in ('--cancel', '--quality-reject', '--measured-reject')):
         sequence = ('cmuq-floor2',)
     else:
         sequence = ('cmuq-floor2','cmuq-floor1','cmuq-floor2','cmuq-floor1')
@@ -147,6 +151,29 @@ try:
                 pose.pose.covariance[7] = .25718849416411727
             return original_finish()
         bridge._epoch._map_finish_refresh = reject_final_covariance
+    if '--measured-reject' in sys.argv:
+        # Fault at the coordinator evidence boundary after real seed/ACK/scan;
+        # this tests admission, not AMCL's ability to select a wall hypothesis.
+        original_fresh = bridge._epoch._map_localization_fresh
+        injected = []
+        motion_actions = []
+        def reject_displaced_measured_estimate():
+            epoch = bridge._epoch
+            estimate = epoch._pending_pose
+            if (not injected and epoch._map_step == 'localization' and estimate is not None
+                    and epoch._accepted_seed_stamp == epoch.maps.seed_stamp
+                    and epoch.stamp_ns(estimate) > epoch.maps.seed_stamp):
+                estimate = copy.deepcopy(estimate)
+                estimate.pose.pose.position.y += 1.04
+                epoch._pending_pose = estimate
+                injected.append(epoch.stamp_ns(estimate))
+            return original_fresh()
+        bridge._epoch._map_localization_fresh = reject_displaced_measured_estimate
+        def observe_motion(name, message):
+            motion_actions.extend(name for status in message.status_list if status.status in (1, 2, 3))
+        motion_subs = [node.create_subscription(GoalStatusArray, '/' + name + '/_action/status',
+            lambda message, name=name: observe_motion(name, message), 10)
+            for name in ('follow_path', 'backup', 'spin', 'wait')]
     for map_id in sequence:
         entry=catalog.maps[map_id];x,y,scan=synthetic_scene(entry)
         fake.laser_field=scan+"|LASER_AGE_MS:0"
@@ -160,6 +187,10 @@ try:
             'recovery_epoch':str(getattr(bridge._epoch,'epoch','unavailable'))})+'\n')
         goal.pose.pose.position.x=x;goal.pose.pose.position.y=y;goal.pose.pose.orientation.w=1.
         for index in (0,7,35): goal.pose.covariance[index]=.01
+        if '--measured-reject' in sys.argv:
+            goal.measured_pose = True
+            goal.pose.covariance[0] = goal.pose.covariance[7] = .0009
+            goal.pose.covariance[35] = .00030461742
         seed_count=len(seed_events)
         seen=[]
         def feedback(message):
@@ -194,6 +225,39 @@ try:
         capture_file.write(json.dumps({'event':'result','request_id':goal.request_id,
             'response':message_to_ordereddict(response),'seed_stamp':bridge._epoch.maps.seed_stamp,
             'accepted_seed_stamp':bridge._epoch._accepted_seed_stamp})+'\n');capture_file.flush()
+        if '--measured-reject' in sys.argv:
+            assert response.code == response.SEED_INNOVATION_REJECTED and not response.localized, response
+            assert injected and bridge._epoch.maps.hold and not bridge._epoch.commands_allowed
+            assert seed_events[seed_count:] == [(bridge._epoch.maps.seed_stamp, map_id)]
+            state = node.create_client(GetState, '/bt_navigator/get_state')
+            assert state.wait_for_service(timeout_sec=5)
+            future = state.call_async(GetState.Request())
+            assert wait_until(future.done, timeout=5)
+            assert future.result().current_state.id == 2, 'rejected measured seed activated navigation'
+            destination = PoseStamped(); destination.header.frame_id = 'map'
+            destination.pose.position.x = x + .2; destination.pose.position.y = y
+            destination.pose.orientation.w = 1.
+            for action, name in ((NavigateToPose, 'navigate_to_pose'),
+                                 (NavigateThroughPoses, 'navigate_through_poses')):
+                navigator = ActionClient(node, action, name)
+                assert navigator.wait_for_server(timeout_sec=5)
+                request = action.Goal()
+                if name == 'navigate_to_pose': request.pose = destination
+                elif hasattr(request.poses, 'goals'): request.poses.goals = [destination]
+                else: request.poses = [destination]
+                future = navigator.send_goal_async(request)
+                assert wait_until(future.done, timeout=5)
+                assert not future.result().accepted, name + ' accepted rejected localization'
+                navigator.destroy()
+            before = len(fake.received)
+            bridge.cmd_vel_callback(velocity)
+            time.sleep(.2)
+            assert not any(line.startswith('DRIVE:0.1:') for _, line in fake.received[before:])
+            assert not motion_actions, motion_actions
+            print(json.dumps({'passed': ['measured_seed_rejected', 'single_seed',
+                'both_navigators_refused', 'no_follow_or_motion_recovery', 'failed_velocity_blocked'],
+                'detail': response.message, 'physical_acceptance': False}), flush=True)
+            break
         if '--quality-reject' in sys.argv:
             assert response.code == response.FAILED and not response.localized
             assert response.message.startswith('LOCALIZATION_QUALITY_REJECTED:')
@@ -214,7 +278,7 @@ try:
         assert bridge._epoch._accepted_seed_stamp==bridge._epoch.maps.seed_stamp
         assert ActiveMapStore(os.environ.get('PATROLBOT_STATE_DIR','/var/lib/patrolbot'),catalog).load()['map_id']==map_id
         print(json.dumps({'event':'verified','map':map_id,'stages':seen}),flush=True)
-    if '--startup-only' not in sys.argv and '--cancel' not in sys.argv and '--quality-reject' not in sys.argv:
+    if not any(flag in sys.argv for flag in ('--startup-only', '--cancel', '--quality-reject', '--measured-reject')):
         print(json.dumps({'passed':['floor2-floor1-floor2','real_amcl_consumption','single_seed',
         'real_costmap_refresh','enabled_motor_hold','durable_selection']}),flush=True)
 finally:

@@ -338,9 +338,8 @@ def generate_launch_description():
     ld.add_action(declare_log_level_cmd)
     # PB-AUDIT-001 containment: explicitly arbitrate every autonomous
     # navigation producer before smoothing and collision monitoring. The
-    # docking input intentionally has no publisher while the generic dock node is
-    # disabled; retaining the input makes any future reintroduction follow the
-    # same fail-closed path instead of publishing directly to /cmd_vel.
+    # docking input is reserved for the bridge's owned undock Spin. It passes
+    # through the same smoother and collision monitor as navigation motion.
     ld.add_action(Node(
         package='twist_mux',
         executable='twist_mux',

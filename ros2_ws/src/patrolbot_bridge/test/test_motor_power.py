@@ -21,6 +21,7 @@ def bridge():
     b._charge_state_at = b._flags_at = b._dock_state_at = b._pose_at = 0.
     b._vx = .2; b._vth = .1; b.CONTROL_TIMEOUT = .01
     b._epoch = NS(lock=threading.RLock(), commands_allowed=False, maps=NS(hold=True))
+    b._undock_turn = NS(busy=False, revoke=Mock())
     b._lidar_ready = Mock(return_value=False)
     b.get_logger = Mock(return_value=Mock()); b.sock = Mock(); b.sent = []
     def send(payload):
@@ -60,6 +61,22 @@ def test_enable_preserves_estop():
     b = bridge()
     result = b._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response())
     assert not result.success and "E-stop" in result.message and not b.sent
+
+
+def test_motor_disable_revokes_undock_before_the_hardware_command():
+    b = bridge()
+    b._undock_turn.busy = True
+    result = b._motor_disable_callback(MotorDisable.Request(request_id=ID), MotorDisable.Response())
+    assert result.success
+    b._undock_turn.revoke.assert_called_once_with('motors disabled by operator')
+
+
+def test_motor_enable_cannot_take_an_owned_undock():
+    b = bridge()
+    b._undock_turn.busy = True
+    b._estop_pressed = False
+    result = b._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response())
+    assert not result.success and not b.sent
 
 
 def test_disable_supersedes_an_enable_before_it_reaches_the_wire(monkeypatch):

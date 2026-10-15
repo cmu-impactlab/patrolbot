@@ -19,18 +19,19 @@ assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}
 sys.path.insert(0, '/validation/docker/tests')
 sys.path.insert(0, '/validation/ros2_ws/src/patrolbot_bridge/test')
 from closed_loop_fixture import ClosedLoopFakeSbc
-from navigation_capture import validate_outcome, stall_recovery_evidence, outer_recovery_stages
+from navigation_capture import validate_outcome, stall_recovery_evidence, outer_recovery_stages, world_pose_at
 from test_fake_sbc_integration import wait_until as fixture_wait_until
 import rclpy
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import GetState
+from map_msgs.msg import OccupancyGridUpdate
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from tf2_msgs.msg import TFMessage
 from rosidl_runtime_py.convert import message_to_ordereddict
 from nav2_msgs.action import ComputePathToPose, NavigateToPose, NavigateThroughPoses
-from nav2_msgs.srv import ManageLifecycleNodes
+from nav2_msgs.srv import ClearEntireCostmap, ManageLifecycleNodes
 from patrolbot_interfaces.action import LocalizeOnMap
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from patrolbot_bridge.map_catalog import MapCatalog
@@ -45,7 +46,11 @@ parser.add_argument('--scenario', choices=('reach', 'cancel', 'progress-failure'
 parser.add_argument('--tree', choices=('to-pose', 'through-poses'), default='to-pose')
 parser.add_argument('--map', default='cmuq-floor1')
 parser.add_argument('--output', type=Path, default=Path('/tmp/navigation-capture.json'))
+parser.add_argument('--post-clear', action='store_true', help='Probe five real global clears before the reach scenario')
+parser.add_argument('--turn-around', action='store_true', help='Reach a goal behind the robot after a 180-degree turn')
 args = parser.parse_args()
+assert not args.post_clear or args.scenario == 'reach', 'post-clear probes require the valid free-space reach case'
+assert not args.turn_around or args.scenario == 'reach', 'turn-around requires the valid free-space reach case'
 launch = base_launch = bridge = fake = executor = node = log = None
 shutdown = {}
 log_path = args.output.with_suffix('.log')
@@ -151,9 +156,16 @@ try:
         p = message.pose.pose
         yaw = math.atan2(2*(p.orientation.w*p.orientation.z+p.orientation.x*p.orientation.y),
                          1-2*(p.orientation.y**2+p.orientation.z**2))
-        truth = nearest['world_pose']
+        try:
+            # Nearest odometry samples can add almost a degree during rotation.
+            truth = world_pose_at(samples, captured_at)
+        except ValueError as error:
+            localization_pairs.append({'stamp_ns': stamp_ns, 'acquired_monotonic': captured_at,
+                                       'pairing_error': str(error)})
+            return
         scan = min(plant['scan_samples'], key=lambda sample: abs(sample['acquired_at']-captured_at))
-        localization_pairs.append({'stamp_ns': stamp_ns, 'sample_time': nearest['time'],
+        localization_pairs.append({'stamp_ns': stamp_ns, 'acquired_monotonic': captured_at,
+            'sample_time': nearest['time'],
             'time_error_s': abs(nearest['time']-captured_at),
             'amcl': [p.position.x,p.position.y,yaw], 'truth': truth,
             'position_error_m': math.hypot(p.position.x-truth[0],p.position.y-truth[1]),
@@ -164,6 +176,16 @@ try:
                                         observe_amcl, qos_profile_sensor_data)
     capture['localization_pairs'] = localization_pairs
     capture['timed_sensors'] = []
+    capture['costmap_update_publications'] = []
+    if args.post_clear:
+        def observe_costmap_update(message):
+            # These are publication times; successful planning additionally requires isCurrent().
+            capture['costmap_update_publications'].append({
+                'received_monotonic': time.monotonic(),
+                'stamp_ns': message.header.stamp.sec * 1000000000 + message.header.stamp.nanosec,
+                'x': message.x, 'y': message.y, 'width': message.width, 'height': message.height})
+        costmap_subscription = node.create_subscription(OccupancyGridUpdate,
+            '/global_costmap/costmap_updates', observe_costmap_update, 10)
     def observe_sensor(topic, message):
         if navigation_started_ns is not None:
             capture['timed_sensors'].append({'topic': topic, 'received_monotonic': time.monotonic(),
@@ -215,11 +237,34 @@ try:
     response = wait(handle.get_result_async(), 120).result
     assert response.localized and bridge._epoch.commands_allowed, (response, readiness())
     capture['localization_stages'] = stages
-    target = (start[0] + .6*math.cos(start[2]), start[1] + .6*math.sin(start[2]), start[2])
+    target_heading = start[2] + (math.pi if args.turn_around else 0.)
+    target = (start[0] + .6*math.cos(target_heading), start[1] + .6*math.sin(target_heading), target_heading)
+    capture['target_pose'] = target
+    capture['turn_around'] = args.turn_around
     planner = ActionClient(node, ComputePathToPose, '/compute_path_to_pose')
     request = ComputePathToPose.Goal()
     request.goal = pose(*target)
     request.planner_id = 'GridBased'
+    if args.post_clear:
+        navigation_started_ns = node.get_clock().now().nanoseconds
+        clear = node.create_client(ClearEntireCostmap, '/global_costmap/clear_entirely_global_costmap')
+        assert clear.wait_for_service(timeout_sec=5), 'global clear service unavailable'
+        capture['post_clear_probes'] = []
+        for _ in range(5):
+            probe = {'clear_requested_ros_ns': node.get_clock().now().nanoseconds,
+                     'clear_requested_monotonic': time.monotonic()}
+            wait(clear.call_async(ClearEntireCostmap.Request()))
+            probe['clear_completed_monotonic'] = time.monotonic()
+            result = wait(send(planner, request).get_result_async(), 10)
+            probe.update(plan_completed_monotonic=time.monotonic(), status=result.status,
+                         error_code=result.result.error_code, path_points=len(result.result.path.poses))
+            capture['post_clear_probes'].append(probe)
+            print(json.dumps({'event': 'post_clear_probe', **probe}), flush=True)
+            assert result.status == GoalStatus.STATUS_SUCCEEDED and probe['path_points'] > 2, probe
+        assert any(update['received_monotonic'] >= capture['post_clear_probes'][0]['clear_requested_monotonic']
+                   for update in capture['costmap_update_publications']), 'no post-clear costmap update publications'
+        assert {'/scan', '/odom', '/tf'} <= {sample['topic'] for sample in capture['timed_sensors']}, \
+            'post-clear probe lacks timestamped scan/odom/TF evidence'
     planned = wait(send(planner, request).get_result_async(), 30)
     assert planned.status == GoalStatus.STATUS_SUCCEEDED and len(planned.result.path.poses) > 2
     capture['planned_path_points'] = len(planned.result.path.poses)
@@ -230,7 +275,7 @@ try:
         target = (raster.origin[0] + math.cos(yaw)*x - math.sin(yaw)*y,
                   raster.origin[1] + math.sin(yaw)*x + math.cos(yaw)*y, yaw)
         assert raster.cell(*target[:2]) == 'out_of_map'
-        capture['acceptance_mode'] = 'actual-nav2-outside-map-full-recovery'
+        capture['acceptance_mode'] = 'actual-nav2-planning-failure-zero-motion'
         capture['natural_frozen_exhaustion_passed'] = False
         capture['actual_recovery_stages'] = []
         recovery_seen = set()
@@ -328,7 +373,7 @@ try:
     terminal_snapshot = fake.snapshot()['commands']
     terminal_index = len(terminal_snapshot)
     if args.scenario == 'blocked-goal':
-        # Wait stops before its result; idle output can retain zero without publishing again.
+        # Failed planning leaves the stopped drive latched without recovery motion.
         capture['terminal_latched_drive'] = next((line for _, line in reversed(terminal_snapshot)
             if line.startswith('DRIVE:')), None)
     assert deadline - time.monotonic() >= .6, 'case budget cannot cover terminal output observation'
@@ -346,6 +391,7 @@ try:
     capture['yaw_error_rad'] = abs(math.remainder(snapshot['world_pose'][2]-target[2], 2*math.pi))
     if args.scenario == 'reach':
         assert len(localization_pairs) >= 2, 'insufficient moving AMCL truth observations'
+        assert all('pairing_error' not in pair for pair in localization_pairs), 'AMCL truth history unmatched'
         assert all(pair['time_error_s'] <= .10 for pair in localization_pairs), 'AMCL truth timing unmatched'
         assert all(pair['position_error_m'] <= .10 and pair['yaw_error_rad'] <= math.radians(3)
                    for pair in localization_pairs), 'moving AMCL alignment exceeds .10m/3deg'
@@ -416,7 +462,7 @@ finally:
             cleanup('launch shutdown', stop_launch)
     if log:
         cleanup('log close', log.close)
-    if capture.get('scenario') == 'blocked-goal' and log_path.exists():
+    if log_path.exists():
         teardown_log = log_path.read_text()
         exits = [line for line in teardown_log.splitlines() if 'process has died' in line]
         capture['teardown_errors'] = exits
@@ -426,7 +472,7 @@ finally:
         capture['total_elapsed_s'] = 120 - (deadline - time.monotonic())
         if capture['total_elapsed_s'] > 120:
             cleanup_errors.append('120-second case budget exceeded including teardown')
-        if not original_error:
+        if capture.get('scenario') == 'blocked-goal' and not original_error:
             # ROS launch can flush the final recovery event only when its producers exit.
             with log_path.open() as stream:
                 stream.seek(navigation_log_offset)

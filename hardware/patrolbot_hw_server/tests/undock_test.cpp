@@ -523,19 +523,27 @@ void test_no_encoder_movement_recovers_then_fails() {
   CHECK(base.controller.releaseAttempts() >= 1);
 }
 
-void test_lateral_drift_beyond_limit_stops() {
+void test_lateral_deviation_is_feedback_not_an_abort() {
   FakeBase base;
   settleDocked(&base);
   CHECK(base.startDefault());
+  bool injected = false;
   for (int i = 0; i < 2000; ++i) {
     const UndockOutputs out = base.tick();
-    if (out.phase == UNDOCK_PHASE_BACKING_OUT && out.reverse_progress_m > 0.30) {
-      base.inputs.enc_y_mm += 200.0;  // 0.2 m sideways, well past the limit
+    if (!injected && out.phase == UNDOCK_PHASE_BACKING_OUT && out.reverse_progress_m > 0.30) {
+      base.inputs.enc_y_mm += 200.0;
+      injected = true;
     }
     if (out.finished) {
-      CHECK(!out.success);
-      CHECK_EQ_INT(out.code, UNDOCK_MOTION_FAILED);
-      CHECK(!base.inputs.motors_enabled);
+      CHECK(injected);
+      CHECK(out.success);
+      CHECK_EQ_INT(out.code, UNDOCK_OK);
+      CHECK(out.lateral_error_m > base.profile.max_lateral_drift_m);
+      CHECK(std::fabs(out.reverse_progress_m + base.inputs.enc_x_mm / 1000.) < 1e-6);
+      CHECK(out.reverse_progress_m >= .53 && out.reverse_progress_m < .54);
+      CHECK(out.commanded_linear == 0. && base.inputs.linear == 0.);
+      CHECK(base.inputs.motors_enabled);
+      CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
       return;
     }
   }
@@ -564,6 +572,30 @@ void test_forward_motion_is_never_counted_as_progress() {
       CHECK(!out.success);
       CHECK_EQ_INT(out.code, UNDOCK_MOTION_FAILED);
       CHECK(!base.inputs.motors_enabled);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
+void test_reverse_hard_distance_cap_still_stops() {
+  FakeBase base;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+  bool injected = false;
+  for (int i = 0; i < 2000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!injected && out.phase == UNDOCK_PHASE_BACKING_OUT && out.reverse_progress_m > .05) {
+      base.inputs.enc_x_mm = -2000.;
+      injected = true;
+    }
+    if (out.finished) {
+      CHECK(injected);
+      CHECK(!out.success);
+      CHECK_EQ_INT(out.code, UNDOCK_MOTION_FAILED);
+      CHECK(out.message == "distance_cap_exceeded");
+      CHECK(!base.inputs.motors_enabled);
+      CHECK(out.commanded_linear == 0.);
       return;
     }
   }
@@ -729,8 +761,7 @@ void test_moderate_yaw_after_the_robot_is_free_is_allowed() {
   CHECK(false);
 }
 
-void test_yaw_after_the_robot_is_free_still_aborts() {
-  // The guard must still do its job once the robot is actually driving itself.
+void test_yaw_deviation_is_feedback_not_an_abort() {
   FakeBase base;
   base.contact_break_m = 0.10;
   base.charge_reassert_after_ms = 200;
@@ -747,9 +778,43 @@ void test_yaw_after_the_robot_is_free_still_aborts() {
     }
     if (out.finished) {
       CHECK(twisted);
-      CHECK(!out.success);
-      CHECK_EQ_INT(out.code, UNDOCK_MOTION_FAILED);
-      CHECK(!base.inputs.motors_enabled);
+      CHECK(out.success);
+      CHECK_EQ_INT(out.code, UNDOCK_OK);
+      CHECK(out.heading_error_rad > base.profile.max_departure_yaw_rad);
+      CHECK(std::fabs(out.reverse_progress_m + base.inputs.enc_x_mm / 1000.) < 1e-6);
+      CHECK(out.reverse_progress_m >= .53 && out.reverse_progress_m < .54);
+      CHECK(out.commanded_linear == 0. && base.inputs.linear == 0.);
+      CHECK(base.inputs.motors_enabled);
+      CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
+void test_verification_deviation_still_requires_clear_stationary_handoff() {
+  FakeBase base;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+  bool injected = false;
+  for (int i = 0; i < 2000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!injected && out.phase == UNDOCK_PHASE_VERIFYING_CLEARANCE) {
+      base.inputs.enc_y_mm += 200.;
+      base.inputs.enc_yaw_deg += 30.;
+      injected = true;
+    }
+    if (out.finished) {
+      CHECK(injected);
+      CHECK(out.success);
+      CHECK_EQ_INT(out.code, UNDOCK_OK);
+      CHECK(out.lateral_error_m > base.profile.max_lateral_drift_m);
+      CHECK(out.heading_error_rad > base.profile.max_departure_yaw_rad);
+      CHECK(out.reverse_progress_m >= .53 && out.reverse_progress_m < .54);
+      CHECK(out.commanded_linear == 0. && base.inputs.linear == 0.);
+      CHECK(!frontContactPressed(base.inputs, base.profile));
+      CHECK(base.inputs.motors_enabled);
+      CHECK_EQ_INT(base.observer.state(), DOCK_CLEAR_CONFIRMED);
       return;
     }
   }
@@ -1413,9 +1478,29 @@ void test_rear_sonar_status_usability() {
   CHECK(!rear.usable());
 }
 
+void test_undock_requires_current_charging_before_hardware_effects() {
+  const int not_charging[] = {0, -1};
+  for (unsigned int i = 0; i < 2; ++i) {
+    FakeBase base;
+    settleDocked(&base);
+    base.inputs.charge_state = not_charging[i];
+    CHECK_EQ_INT(base.observer.state(), DOCK_DOCKED_CONFIRMED);
+    int code = -1;
+    std::string message;
+    CHECK(!base.start(0.53, 0.10, 30.0, false, &code, &message));
+    CHECK_EQ_INT(code, UNDOCK_PRECONDITION_FAILED);
+    CHECK(message == "robot_not_confirmed_charging");
+    CHECK(!base.controller.active());
+    CHECK_EQ_INT(base.charge_release_count, 0);
+    CHECK_EQ_INT(base.motor_enable_count, 0);
+    CHECK_EQ_INT(base.motor_disable_count, 0);
+  }
+}
+
 }  // namespace
 
 int main() {
+  RUN(test_undock_requires_current_charging_before_hardware_effects);
   RUN(test_normal_undock_succeeds_with_motors_left_enabled);
   RUN(test_charge_reassert_with_healthy_motion_does_not_stop);
   RUN(test_repeated_charge_reassert_respects_resend_rate_limit);
@@ -1426,14 +1511,16 @@ int main() {
   RUN(test_measured_release_latency_completes_with_a_matching_window);
   RUN(test_release_window_shorter_than_the_hardware_latency_fails);
   RUN(test_no_encoder_movement_recovers_then_fails);
-  RUN(test_lateral_drift_beyond_limit_stops);
+  RUN(test_lateral_deviation_is_feedback_not_an_abort);
   RUN(test_forward_motion_is_never_counted_as_progress);
+  RUN(test_reverse_hard_distance_cap_still_stops);
   RUN(test_progress_is_projected_not_euclidean);
   RUN(test_dock_imposed_yaw_during_capture_does_not_abort);
   RUN(test_early_charge_zero_and_front_release_do_not_arm_pose_guard);
   RUN(test_stale_charge_does_not_change_pose_guard_start);
   RUN(test_moderate_yaw_after_the_robot_is_free_is_allowed);
-  RUN(test_yaw_after_the_robot_is_free_still_aborts);
+  RUN(test_yaw_deviation_is_feedback_not_an_abort);
+  RUN(test_verification_deviation_still_requires_clear_stationary_handoff);
   RUN(test_rear_obstacle_during_reverse_stops_immediately);
   RUN(test_insufficient_rear_room_is_refused_before_any_motion);
   RUN(test_stale_rear_sensor_is_never_clear);

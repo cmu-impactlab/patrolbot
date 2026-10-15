@@ -93,6 +93,30 @@ class SafetyContractTest(unittest.TestCase):
         self.assertEqual(mux['topics']['docking'], {
             'topic': 'input/docking', 'timeout': 0.25, 'priority': 9})
 
+    def test_owned_undock_turn_stays_below_safety_and_before_final_smoothing(self):
+        topics = yaml.safe_load((
+            LAUNCH_PACKAGE_ROOT / 'param' / 'defaults' /
+            'mux.yaml').read_text(encoding='utf-8'))[
+                'cmd_vel_mux']['ros__parameters']['topics']
+        turn = topics['undock_turn']
+        self.assertEqual(turn, {
+            'topic': 'input/undock_turn', 'timeout': 0.25, 'priority': 9})
+        self.assertEqual(topics['safety_controller'], {
+            'topic': 'input/safety_controller', 'timeout': 0.2, 'priority': 10})
+        self.assertEqual(sum(
+            entry['topic'] == turn['topic'] for entry in topics.values()), 1)
+        self.assertTrue(all(
+            entry['priority'] < topics['safety_controller']['priority']
+            for name, entry in topics.items() if name != 'safety_controller'))
+        smoother = ET.parse(
+            LAUNCH_PACKAGE_ROOT / 'launch' / 'smoother.xml').getroot()
+        final = next(node for node in smoother.findall('node')
+                     if node.get('name') == 'teleop_velocity_smoother')
+        self.assertEqual(
+            {(entry.get('from'), entry.get('to'))
+             for entry in final.findall('remap')},
+            {('/cmd_vel', '/cmd_vel_out'), ('cmd_vel_smoothed', 'cmd_vel')})
+
     def test_reconnect_safe_collision_monitor_setting_is_pinned(self):
         collision = self.params['collision_monitor']['ros__parameters']
         self.assertIs(collision['base_shift_correction'], False)
@@ -111,7 +135,8 @@ class SafetyContractTest(unittest.TestCase):
         for config in (local, global_):
             value = config['inflation_layer']['cost_scaling_factor']
             self.assertIsInstance(value, float)
-            self.assertEqual(value, 4.0)
+            self.assertEqual(value, 3.0)
+        # 20261014: gentler decay; radius stays 0.40 for doors.
 
     def test_close_range_scan_filter_remains_pinned(self):
         bridge_text = BRIDGE_FILE.read_text(encoding='utf-8')
@@ -140,8 +165,9 @@ class SafetyContractTest(unittest.TestCase):
 
     def test_amcl_recovery_and_bounded_update_policy_are_pinned(self):
         amcl = self.params['amcl']['ros__parameters']
-        self.assertEqual(amcl['recovery_alpha_slow'], 0.001)
-        self.assertEqual(amcl['recovery_alpha_fast'], 0.1)
+        # 20261014 jump-limit: random-particle injection disabled.
+        self.assertEqual(amcl['recovery_alpha_slow'], 0.0)
+        self.assertEqual(amcl['recovery_alpha_fast'], 0.0)
         self.assertEqual(amcl['resample_interval'], 1)
         self.assertEqual(amcl['robot_model_type'], (
             'nav2_amcl::DifferentialMotionModel'))
@@ -171,10 +197,10 @@ class SafetyContractTest(unittest.TestCase):
                 'laser_max_range': -1.0,
                 'laser_min_range': -1.0,
                 'laser_model_type': 'likelihood_field_prob',
-                'sigma_hit': 0.3,
-                'z_hit': 0.7,
+                'sigma_hit': 0.2,
+                'z_hit': 0.5,
                 'z_max': 0.0,
-                'z_rand': 0.3,
+                'z_rand': 0.5,
                 'z_short': 0.0,
             })
         self.assertEqual(amcl['max_beams'], 60)
@@ -513,14 +539,18 @@ class SafetyContractTest(unittest.TestCase):
         for topic in (
                 '/input/nav_controller', '/input/nav_behavior',
                 '/input/docking', '/cmd_vel_nav', '/cmd_vel_smoothed',
-                '/input/navi', '/cmd_vel_out', '/cmd_vel'):
+                '/input/navi', '/input/undock_turn', '/cmd_vel_out', '/cmd_vel'):
             self.assertIn(f"'{topic}'", manager_text)
 
-    def test_cancel_stops_backup_and_requires_zero_velocity_confirmation(self):
+    def test_cancel_stops_owned_turn_and_requires_zero_velocity_confirmation(self):
         manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')
-        self.assertIn('nav_goal.cancel_goal_async()', manager_text)
+        turn_text = BRIDGE_FILE.with_name('undock_turn.py').read_text(encoding='utf-8')
+        self.assertIn('child.cancel_goal_async()', manager_text)
+        self.assertIn('child=turn_goal', manager_text)
         self.assertIn('_wait_for_odom_zero(1.5)', manager_text)
         self.assertIn('goal_handle.is_cancel_requested', manager_text)
+        self.assertIn('self.spin_handle.cancel_goal_async()', turn_text)
+        self.assertIn('self.node.cmd_vel_callback(Twist())', turn_text)
 
     def test_disconnect_path_stops_base_and_cannot_replay_old_velocity(self):
         server_text = SERVER_FILE.read_text(encoding='utf-8')
@@ -672,8 +702,10 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('reverse_failures', manager_text)
         self.assertNotIn('allow_transient_dock_charge', manager_text)
         self.assertIn('HardwareUndock', manager_text)
-        # The turn is still Nav2's, so it keeps costmap awareness.
-        self.assertIn('Spin.Goal()', manager_text)
+        self.assertIn('UndockTurn.Goal()', manager_text)
+        turn_text = BRIDGE_FILE.with_name('undock_turn.py').read_text(encoding='utf-8')
+        self.assertIn('Spin.Goal()', turn_text)
+        self.assertIn("ActionClient(node, Spin, '/spin'", turn_text)
 
     def test_sbc_service_logging_is_compatible_with_systemd_229(self):
         unit_text = SERVER_UNIT_FILE.read_text(encoding='utf-8')

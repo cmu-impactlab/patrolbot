@@ -8,6 +8,7 @@ import threading
 import time
 
 from geometry_msgs.msg import Twist
+from ament_index_python.packages import get_package_prefix
 from lifecycle_msgs.msg import Transition
 from lifecycle_msgs.srv import ChangeState
 import pytest
@@ -59,7 +60,7 @@ class CollisionHarness(Node):
         message.ranges = [0.25 if obstacle else 1.0] * 21
         self.scan_pub.publish(message)
 
-    def sonar(self, obstacle=False):
+    def sonar(self, obstacle=False, x=-0.30):
         message = PointCloud2()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = 'base_link'
@@ -78,15 +79,17 @@ class CollisionHarness(Node):
         message.is_dense = True
         if obstacle:
             import struct
-            message.data = struct.pack('<fff', -0.30, 0.0, 0.0)
+            message.data = struct.pack('<fff', x, 0.0, 0.0)
         self.sonar_pub.publish(message)
 
     def command(self, linear, angular=0.0, scan_obstacle=False,
-                sonar_obstacle=False, publish_sonar=True):
+                sonar_obstacle=False, publish_sonar=True, sonar_x=-0.30,
+                publish_scan=True):
         for _unused in range(4):
-            self.scan(scan_obstacle)
+            if publish_scan:
+                self.scan(scan_obstacle)
             if publish_sonar:
-                self.sonar(sonar_obstacle)
+                self.sonar(sonar_obstacle, sonar_x)
             time.sleep(0.03)
         count = len(self.outputs)
         message = Twist()
@@ -101,7 +104,8 @@ class CollisionHarness(Node):
 def monitor():
     process = subprocess.Popen(
         [
-            '/opt/ros/jazzy/lib/nav2_collision_monitor/collision_monitor',
+            str(Path(get_package_prefix('nav2_collision_monitor')) /
+                'lib/nav2_collision_monitor/collision_monitor'),
             '--ros-args', '--params-file', str(PARAMS_FILE),
         ],
         stdout=subprocess.PIPE,
@@ -137,6 +141,7 @@ def monitor():
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=2.0)
+    assert process.returncode == 0, process.stdout.read()
 
 
 def assert_velocity(message, linear, angular=0.0):
@@ -162,6 +167,27 @@ def test_stale_rear_source_stops_reverse(monitor):
     time.sleep(0.6)
     output = monitor.command(-0.05, publish_sonar=False)
     assert_velocity(output, 0.0)
+
+
+@pytest.mark.parametrize('angular', [-0.4, 0.4])
+def test_rear_obstacle_outside_body_allows_rotation_but_blocks_reverse(
+        monitor, angular):
+    assert_velocity(monitor.command(
+        0.0, angular, sonar_obstacle=True, sonar_x=-0.40), 0.0, angular)
+    assert_velocity(monitor.command(
+        -0.05, angular, sonar_obstacle=True, sonar_x=-0.40), 0.0)
+    assert_velocity(monitor.command(
+        0.0, angular, sonar_obstacle=True, sonar_x=-0.28), 0.0)
+
+
+@pytest.mark.parametrize('source', ['scan', 'sonar'])
+@pytest.mark.parametrize(('linear', 'angular'), [(0.05, 0.0), (0.0, 0.4)])
+def test_stale_source_stops_forward_and_rotation(monitor, source, linear, angular):
+    assert_velocity(monitor.command(linear, angular), linear, angular)
+    time.sleep(0.6)
+    assert_velocity(monitor.command(
+        linear, angular, publish_scan=source != 'scan',
+        publish_sonar=source != 'sonar'), 0.0)
 
 
 @pytest.mark.parametrize(

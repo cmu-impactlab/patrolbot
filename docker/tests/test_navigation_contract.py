@@ -16,7 +16,7 @@ def test_both_trees_bound_recovery_and_recheck_goal_updates():
         fallback = recovery.find('./Sequence/ReactiveFallback')
         assert fallback[0].tag == 'GoalUpdated'
         actions = fallback.find('./RoundRobin')
-        assert [node.tag for node in actions] == ['Sequence', 'BackUp', 'Spin', 'Wait']
+        assert [node.tag for node in actions] == ['BackUp', 'Sequence', 'Spin', 'Wait']
         assert float(actions.find('./BackUp').attrib['backup_dist']) == .10
         assert float(actions.find('./BackUp').attrib['backup_speed']) == .05
 
@@ -26,6 +26,17 @@ def load_contract():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_truth_pairing_interpolates_the_acquisition_and_never_extrapolates(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / 'ros2_ws/src/patrolbot_bridge'))
+    pair = load_contract().world_pose_at
+    samples = [dict(time=10., world_pose=[1., 2., 1.]),
+               dict(time=10.05, world_pose=[1.01, 2., 1.035])]
+    assert pair(samples, 10.024) == pytest.approx([1.0048, 2., 1.0168])
+    for stamp in (9.99, 10.06):
+        with pytest.raises(ValueError, match='history unavailable'):
+            pair(samples, stamp)
 
 
 def test_success_requires_action_and_external_plant_arrival():
@@ -73,6 +84,7 @@ def test_partial_startup_cleanup_preserves_original_error_and_emits_evidence(cap
     namespace = dict(sys=SimpleNamespace(exc_info=lambda: (ValueError, None, None)),
         capture=capture, bridge=SimpleNamespace(destroy_node=lambda: None), readiness=unavailable, fake=None,
         node=None, executor=None, launch=None, base_launch=None, log=None,
+        log_path=SimpleNamespace(exists=lambda: False),
         rclpy=SimpleNamespace(ok=lambda: False), json=json,
         args=SimpleNamespace(output=SimpleNamespace(write_text=denied)))
     exec(compile(ast.Module(body=final, type_ignores=[]), '<runner teardown>', 'exec'), namespace)
@@ -132,20 +144,21 @@ def test_bounded_stall_cancel_requires_real_recovery_and_unchanged_plant():
             check(dict(capture, **{key:value}))
 
 
-def test_actual_recovery_requires_both_cycles_motion_and_safe_terminal_state():
+def test_actual_planning_failure_requires_zero_motion_and_owned_terminal_reason():
     check = load_contract().validate_outcome
     capture = dict(scenario='blocked-goal', status=6, case_elapsed_s=90., stopped=True,
         terminal_latched_drive='DRIVE:0:0', terminal_commands=[],
-        terminal_observation_s=.6, terminal_feedback_fresh=True, drive_nonzero=True,
-        actual_recovery_stages=['backup', 'spin', 'wait'] * 2,
-        outer_recovery_stages=['clear', 'backup', 'spin', 'wait'] * 2 + ['clear'],
-        planner_failure_observed=True, full_outer_clears=3, navigate_error_code=204,
-        actual_backup_motion=True, actual_spin_motion=True)
+        terminal_observation_s=.6, terminal_feedback_fresh=True, drive_nonzero=False,
+        actual_recovery_stages=[], outer_recovery_stages=[], distance_m=0.,
+        planner_failure_observed=True, full_outer_clears=0, navigate_error_code=204,
+        navigate_error_message='Goal is outside the map',
+        actual_backup_motion=False, actual_spin_motion=False)
     check(capture)
     for key, value in [('status', 4), ('actual_recovery_stages', ['backup']),
         ('planner_failure_observed', False), ('full_outer_clears', 1),
-        ('drive_nonzero', False), ('actual_backup_motion', False),
-        ('actual_spin_motion', False), ('navigate_error_code', 0),
+        ('drive_nonzero', True), ('actual_backup_motion', True),
+        ('actual_spin_motion', True), ('navigate_error_code', 0),
+        ('navigate_error_message', ''), ('distance_m', .001),
         ('case_elapsed_s', 121.), ('stopped', False),
         ('terminal_latched_drive', 'DRIVE:.1:0'), ('terminal_latched_drive', None),
         ('terminal_commands', [(1., 'DRIVE:0:.2')]), ('terminal_observation_s', .2),
@@ -161,14 +174,15 @@ def test_outer_recovery_pairs_both_costmaps_and_excludes_contextual_global_clear
     backup = '[behavior_server]: Running backup'
     spin = '[behavior_server]: Running spin'
     wait = '[behavior_server]: Running wait'
-    assert parse('\n'.join([local, global_, global_, backup, spin, wait,
-        local, global_, backup, spin, wait, local, global_, global_])) == [
-            'clear', 'backup', 'spin', 'wait'] * 2 + ['clear']
+    assert parse('\n'.join([global_, backup, local, global_, global_, spin, wait,
+        backup, local, global_, spin, wait, backup, global_])) == [
+            'backup', 'clear', 'spin', 'wait'] * 2 + ['backup']
     assert parse('\n'.join([global_, backup])) == ['backup']
 
 
 @pytest.mark.parametrize('child_failure', [False, True])
-def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path, child_failure):
+@pytest.mark.parametrize('scenario', ['blocked-goal', 'reach', 'cancel'])
+def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path, child_failure, scenario):
     import ast
     import json
     import time
@@ -178,22 +192,23 @@ def test_recovery_evidence_waits_for_log_producer_shutdown(tmp_path, child_failu
     final = next(node.finalbody for node in source.body if isinstance(node, ast.Try))
     local = '[local_costmap.local_costmap]: Received request to clear entirely the local_costmap'
     global_ = '[global_costmap.global_costmap]: Received request to clear entirely the global_costmap'
-    cycle = [local, global_] + ['[behavior_server]: Running ' + name for name in ('backup', 'spin', 'wait')]
+    cycle = ['[behavior_server]: Running backup', local, global_,
+             '[behavior_server]: Running spin', '[behavior_server]: Running wait']
     log_path = tmp_path / 'raw.log'
     log_path.write_text('\n'.join(cycle * 2))
     if child_failure:
         with log_path.open('a') as stream:
             stream.write('\n[lifecycle_mgr.py-1]: rcl_shutdown already called on the given context\n'
                 '[ERROR] [lifecycle_mgr.py-1]: process has died [pid 1, exit code 1, cmd lifecycle_mgr.py].')
-    def flush_last_clear():
+    def flush_last_backup():
         with log_path.open('a') as stream:
-            stream.write('\n' + local + '\n' + global_)
-    capture = {'scenario': 'blocked-goal'}
+            stream.write('\n[behavior_server]: Running backup')
+    capture = {'scenario': scenario, 'passed': True}
     def validate(value):
-        assert value['outer_recovery_stages'] == ['clear', 'backup', 'spin', 'wait'] * 2 + ['clear']
+        assert value['outer_recovery_stages'] == ['backup', 'clear', 'spin', 'wait'] * 2 + ['backup']
     namespace = dict(sys=SimpleNamespace(exc_info=lambda: (None, None, None)),
         capture=capture, bridge=None, fake=None, node=None, executor=None,
-        launch=None, base_launch=None, log=SimpleNamespace(close=flush_last_clear),
+        launch=None, base_launch=None, log=SimpleNamespace(close=flush_last_backup),
         log_path=log_path, navigation_log_offset=0,
         rclpy=SimpleNamespace(ok=lambda: False), json=json, time=time,
         deadline=time.monotonic()+120, outer_recovery_stages=load_contract().outer_recovery_stages,

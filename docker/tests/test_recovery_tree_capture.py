@@ -13,7 +13,7 @@ def contract():
 def test_complete_production_recovery_exhaustion():
     check = contract()
     capture = dict(mode='exhaust', status=6, follow_calls=20,
-        recovery_actions=['clear','backup','spin','wait']*2+['clear'], elapsed_s=30., contextual_clear_calls=10, navigator_exit_code=0)
+        recovery_actions=['backup','clear','spin','wait']*2+['backup'], elapsed_s=30., contextual_clear_calls=10, navigator_exit_code=0)
     check(capture)
     for key,value in [('status',4),('follow_calls',18),('recovery_actions',['clear']),('elapsed_s',121.),('contextual_clear_calls',0),('navigator_exit_code',-6)]:
         with pytest.raises(AssertionError): check(dict(capture,**{key:value}))
@@ -22,7 +22,18 @@ def test_complete_production_recovery_exhaustion():
 def test_fault_clear_requires_complete_cycle_then_success():
     check = contract()
     capture = dict(mode='fault-clears', status=4, follow_calls=9,
-        recovery_actions=['clear','backup','spin','wait'], elapsed_s=30., contextual_clear_calls=4, navigator_exit_code=0)
+        recovery_actions=['backup','clear','spin','wait'], elapsed_s=30., contextual_clear_calls=4, navigator_exit_code=0)
     check(capture)
     for key,value in [('status',6),('follow_calls',1),('recovery_actions',[])]:
+        with pytest.raises(AssertionError): check(dict(capture,**{key:value}))
+
+
+def test_planner_failure_clears_once_and_never_starts_motion_recovery():
+    check = contract()
+    capture = dict(mode='planner-exhaust', status=6, follow_calls=0, plan_calls=2,
+        recovery_actions=[], elapsed_s=30.,
+        planner_contextual_clear_calls=1, navigator_exit_code=0)
+    check(capture)
+    for key,value in [('status',4),('follow_calls',1),('plan_calls',20),
+                      ('recovery_actions',['backup']),('planner_contextual_clear_calls',0)]:
         with pytest.raises(AssertionError): check(dict(capture,**{key:value}))

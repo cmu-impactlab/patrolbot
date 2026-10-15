@@ -172,6 +172,28 @@ def test_ack_before_seed_callback_is_correlated_without_republishing_seed():
     assert runtime.commands_allowed
 
 
+def test_accepted_pose_stamp_requires_current_seed_and_motion_context():
+    node, runtime, session = setup_runtime()
+    reset(runtime)
+    node.now = 110
+    runtime.seed(pose(110))
+    node.now = 120
+    runtime.pose(pose(120))
+    assert runtime.accepted_pose_stamp_ns == 0
+    runtime.seed_accepted(pose(110))
+    for _ in range(3):
+        runtime.tick()
+    assert runtime.accepted_pose_stamp_ns == 120
+    runtime._accepted_seed_stamp = 109
+    assert runtime.accepted_pose_stamp_ns == 0
+    runtime._accepted_seed_stamp = 110
+    runtime.undock_hold = True
+    assert runtime.accepted_pose_stamp_ns == 0
+    runtime.undock_hold = False
+    runtime.disconnect(session)
+    assert runtime.accepted_pose_stamp_ns == 0
+
+
 def test_lidar_loss_blocks_seed_without_withdrawing_odometry():
     node, runtime, _ = setup_runtime()
     reset(runtime)

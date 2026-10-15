@@ -23,7 +23,7 @@ from ament_index_python.packages import get_package_prefix, get_package_share_di
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from lifecycle_msgs.msg import Transition
 from lifecycle_msgs.srv import ChangeState
-from nav_msgs.msg import Odometry, Path as NavPath
+from nav_msgs.msg import Path as NavPath
 from nav2_msgs.action import (NavigateToPose, NavigateThroughPoses, ComputePathToPose,
     ComputePathThroughPoses, FollowPath, BackUp, Spin, Wait)
 from nav2_msgs.srv import ClearEntireCostmap
@@ -32,10 +32,11 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from tf2_ros import StaticTransformBroadcaster
 from recovery_tree_capture import validate
+from navigation_localization_fixture import localization_fixture
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--tree', choices=('to-pose','through-poses'), required=True)
-parser.add_argument('--mode', choices=('exhaust','fault-clears'), required=True)
+parser.add_argument('--mode', choices=('exhaust','fault-clears','planner-exhaust'), required=True)
 parser.add_argument('--output', type=Path, required=True)
 args = parser.parse_args()
 started = time.monotonic()
@@ -59,7 +60,7 @@ selected = trees / ('navigate_recovery_always_try.xml' if args.tree == 'to-pose'
 capture = dict(mode=args.mode, tree=args.tree, physical_acceptance=False,
     acceptance_mode='production-tree-injected-actions', natural_frozen_exhaustion_passed=False,
     tree_sha256=hashlib.sha256(selected.read_bytes()).hexdigest(),
-    follow_calls=0, recovery_actions=[], events=[], passed=False)
+    follow_calls=0, plan_calls=0, recovery_actions=[], events=[], passed=False)
 binary = Path(get_package_prefix('nav2_bt_navigator')) / 'lib/nav2_bt_navigator/bt_navigator'
 assert str(binary).startswith('/opt/patrolbot_nav2/install/'), 'patched production navigator overlay unavailable'
 capture.update(navigator_binary=str(binary), navigator_binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest())
@@ -73,12 +74,7 @@ try:
     transform.header.stamp = node.get_clock().now().to_msg()
     transform.transform.rotation.w = 1.
     broadcaster = StaticTransformBroadcaster(node); broadcaster.sendTransform(transform)
-    odom_pub = node.create_publisher(Odometry, '/odom', 10)
-    def odom():
-        msg = Odometry(); msg.header.frame_id = 'map'; msg.child_frame_id = 'base_link'
-        msg.header.stamp = node.get_clock().now().to_msg(); msg.pose.pose.orientation.w = 1.
-        odom_pub.publish(msg)
-    timer = node.create_timer(.05, odom)
+    localization = localization_fixture(node)
     def execute(kind, action, handle):
         capture['events'].append(kind)
         result = action.Result()
@@ -88,6 +84,11 @@ try:
                 result.error_code = result.FAILED_TO_MAKE_PROGRESS
                 handle.abort(); return result
         elif kind == 'plan':
+            capture['plan_calls'] += 1
+            if args.mode == 'planner-exhaust':
+                # A route failure permits one contextual clear, then stops without motion.
+                result.error_code = result.NO_VALID_PATH
+                handle.abort(); return result
             pose = PoseStamped(); pose.header.frame_id = 'map'; pose.pose.orientation.w = 1.
             target = PoseStamped(); target.header.frame_id = 'map'; target.pose.position.x = 1.; target.pose.orientation.w = 1.
             result.path = NavPath(); result.path.header.frame_id = 'map'; result.path.poses = [pose,target]
@@ -101,8 +102,9 @@ try:
             (Spin,'spin','spin'), (Wait,'wait','wait')]]
     def clear(kind, request, response):
         capture['events'].append(kind)
-        # Outer clearing always clears local THEN global; contextual controller clearing is local-only.
-        if kind == 'clear-global': capture['recovery_actions'].append('clear')
+        # Outer clearing is local THEN global; contextual clearing affects only one costmap.
+        if capture['events'][-2:] == ['clear-local', 'clear-global']:
+            capture['recovery_actions'].append('clear')
         return response
     services = [node.create_service(ClearEntireCostmap, name, partial(clear,kind), callback_group=group)
         for name,kind in [('local_costmap/clear_entirely_local_costmap','clear-local'),
@@ -129,7 +131,9 @@ try:
     handle = wait(client.send_goal_async(goal)); assert handle.accepted
     capture['status'] = wait(handle.get_result_async()).status
     capture['elapsed_s'] = time.monotonic()-started
-    capture['contextual_clear_calls'] = capture['events'].count('clear-local') - capture['events'].count('clear-global')
+    outer_clears = capture['recovery_actions'].count('clear')
+    capture['contextual_clear_calls'] = capture['events'].count('clear-local') - outer_clears
+    capture['planner_contextual_clear_calls'] = capture['events'].count('clear-global') - outer_clears
 except Exception as error:
     capture['failure'] = str(error)
     raise

@@ -1,0 +1,8 @@
+# Query the navigator path for this exact NavigateToPose/ThroughPoses action.
+unique_identifier_msgs/UUID goal_id
+---
+bool active
+nav_msgs/Path path
+string planning_stage
+uint16 planning_error_code
+string planning_error_message

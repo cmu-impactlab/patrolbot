@@ -1,0 +1,952 @@
+--- a/nav2_behavior_tree/CMakeLists.txt
++++ b/nav2_behavior_tree/CMakeLists.txt
+@@ -17,6 +17,7 @@
+ find_package(std_msgs REQUIRED)
+ find_package(std_srvs REQUIRED)
+ find_package(nav2_util REQUIRED)
++find_package(patrolbot_interfaces REQUIRED)
+ 
+ nav2_package()
+ 
+@@ -43,6 +44,7 @@
+   std_msgs
+   std_srvs
+   nav2_util
++  patrolbot_interfaces
+ )
+ 
+ add_library(${library_name} SHARED
+@@ -163,6 +165,9 @@
+ 
+ add_library(nav2_distance_controller_bt_node SHARED plugins/decorator/distance_controller.cpp)
+ list(APPEND plugin_libs nav2_distance_controller_bt_node)
++
++add_library(nav2_patrolbot_localization_guard_bt_node SHARED plugins/decorator/patrolbot_localization_guard.cpp)
++list(APPEND plugin_libs nav2_patrolbot_localization_guard_bt_node)
+ 
+ add_library(nav2_speed_controller_bt_node SHARED plugins/decorator/speed_controller.cpp)
+ list(APPEND plugin_libs nav2_speed_controller_bt_node)
+--- a/nav2_behavior_tree/package.xml
++++ b/nav2_behavior_tree/package.xml
+@@ -10,6 +10,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>patrolbot_interfaces</depend>
+ 
+   <build_export_depend>tf2_geometry_msgs</build_export_depend>
+   <build_export_depend>std_srvs</build_export_depend>
+--- a/nav2_behavior_tree/plugins/action/compute_path_through_poses_action.cpp
++++ b/nav2_behavior_tree/plugins/action/compute_path_through_poses_action.cpp
+@@ -33,6 +33,9 @@
+ {
+   navigation_goal_id_ = {};
+   (void)config().blackboard->get("patrolbot_navigation_goal_id", navigation_goal_id_);
++  config().blackboard->set("patrolbot_planning_stage", std::string("planning"));
++  config().blackboard->set("patrolbot_planning_error_code", uint16_t{0});
++  config().blackboard->set("patrolbot_planning_error_message", std::string{});
+   getInput("goals", goal_.goals);
+   getInput("planner_id", goal_.planner_id);
+   if (getInput("start", goal_.start)) {
+@@ -42,8 +45,14 @@
+ 
+ BT::NodeStatus ComputePathThroughPosesAction::on_success()
+ {
++  rclcpp_action::GoalUUID current{};
++  (void)config().blackboard->get("patrolbot_navigation_goal_id", current);
++  if (current != navigation_goal_id_) {return BT::NodeStatus::FAILURE;}
+   setOutput("path", result_.result->path);
+   config().blackboard->set("patrolbot_path_goal_id", navigation_goal_id_);
++  config().blackboard->set("patrolbot_planning_stage", std::string("following"));
++  config().blackboard->set("patrolbot_planning_error_code", uint16_t{0});
++  config().blackboard->set("patrolbot_planning_error_message", std::string{});
+   // Set empty error code, action was successful
+   setOutput("error_code_id", ActionResult::NONE);
+   return BT::NodeStatus::SUCCESS;
+@@ -51,14 +60,24 @@
+ 
+ BT::NodeStatus ComputePathThroughPosesAction::on_aborted()
+ {
++  rclcpp_action::GoalUUID current{};
++  (void)config().blackboard->get("patrolbot_navigation_goal_id", current);
++  if (current != navigation_goal_id_) {return BT::NodeStatus::FAILURE;}
+   nav_msgs::msg::Path empty_path;
+   setOutput("path", empty_path);
++  config().blackboard->set("patrolbot_path_goal_id", rclcpp_action::GoalUUID{});
++  config().blackboard->set("patrolbot_planning_stage", std::string("failed"));
++  config().blackboard->set("patrolbot_planning_error_code", result_.result->error_code);
++  config().blackboard->set("patrolbot_planning_error_message", result_.result->error_msg);
+   setOutput("error_code_id", result_.result->error_code);
+   return BT::NodeStatus::FAILURE;
+ }
+ 
+ BT::NodeStatus ComputePathThroughPosesAction::on_cancelled()
+ {
++  rclcpp_action::GoalUUID current{};
++  (void)config().blackboard->get("patrolbot_navigation_goal_id", current);
++  if (current != navigation_goal_id_) {return BT::NodeStatus::FAILURE;}
+   nav_msgs::msg::Path empty_path;
+   setOutput("path", empty_path);
+   // Set empty error code, action was cancelled
+--- a/nav2_behavior_tree/plugins/action/compute_path_to_pose_action.cpp
++++ b/nav2_behavior_tree/plugins/action/compute_path_to_pose_action.cpp
+@@ -32,6 +32,9 @@
+ {
+   navigation_goal_id_ = {};
+   (void)config().blackboard->get("patrolbot_navigation_goal_id", navigation_goal_id_);
++  config().blackboard->set("patrolbot_planning_stage", std::string("planning"));
++  config().blackboard->set("patrolbot_planning_error_code", uint16_t{0});
++  config().blackboard->set("patrolbot_planning_error_message", std::string{});
+   getInput("goal", goal_.goal);
+   getInput("planner_id", goal_.planner_id);
+ 
+@@ -58,8 +61,14 @@
+ 
+ BT::NodeStatus ComputePathToPoseAction::on_success()
+ {
++  rclcpp_action::GoalUUID current{};
++  (void)config().blackboard->get("patrolbot_navigation_goal_id", current);
++  if (current != navigation_goal_id_) {return BT::NodeStatus::FAILURE;}
+   setOutput("path", result_.result->path);
+   config().blackboard->set("patrolbot_path_goal_id", navigation_goal_id_);
++  config().blackboard->set("patrolbot_planning_stage", std::string("following"));
++  config().blackboard->set("patrolbot_planning_error_code", uint16_t{0});
++  config().blackboard->set("patrolbot_planning_error_message", std::string{});
+   // Set empty error code, action was successful
+   setOutput("error_code_id", ActionResult::NONE);
+   return BT::NodeStatus::SUCCESS;
+@@ -67,14 +76,24 @@
+ 
+ BT::NodeStatus ComputePathToPoseAction::on_aborted()
+ {
++  rclcpp_action::GoalUUID current{};
++  (void)config().blackboard->get("patrolbot_navigation_goal_id", current);
++  if (current != navigation_goal_id_) {return BT::NodeStatus::FAILURE;}
+   nav_msgs::msg::Path empty_path;
+   setOutput("path", empty_path);
++  config().blackboard->set("patrolbot_path_goal_id", rclcpp_action::GoalUUID{});
++  config().blackboard->set("patrolbot_planning_stage", std::string("failed"));
++  config().blackboard->set("patrolbot_planning_error_code", result_.result->error_code);
++  config().blackboard->set("patrolbot_planning_error_message", result_.result->error_msg);
+   setOutput("error_code_id", result_.result->error_code);
+   return BT::NodeStatus::FAILURE;
+ }
+ 
+ BT::NodeStatus ComputePathToPoseAction::on_cancelled()
+ {
++  rclcpp_action::GoalUUID current{};
++  (void)config().blackboard->get("patrolbot_navigation_goal_id", current);
++  if (current != navigation_goal_id_) {return BT::NodeStatus::FAILURE;}
+   nav_msgs::msg::Path empty_path;
+   setOutput("path", empty_path);
+   // Set empty error code, action was cancelled
+@@ -84,8 +103,7 @@
+ 
+ void ComputePathToPoseAction::halt()
+ {
+-  nav_msgs::msg::Path empty_path;
+-  setOutput("path", empty_path);
++  // A valid goal-owned path remains evidence for controller obstacle recovery.
+   BtActionNode::halt();
+ }
+ 
+--- a/nav2_behavior_tree/plugins/decorator/patrolbot_localization_guard.cpp
++++ b/nav2_behavior_tree/plugins/decorator/patrolbot_localization_guard.cpp
+@@ -0,0 +1,375 @@
++#include <algorithm>
++#include <chrono>
++#include <cmath>
++#include <future>
++#include <deque>
++#include <utility>
++#include <memory>
++#include <string>
++#include "behaviortree_cpp/bt_factory.h"
++#include "rclcpp/rclcpp.hpp"
++#include "rclcpp_action/types.hpp"
++#include "nav_msgs/msg/odometry.hpp"
++#include "nav_msgs/msg/path.hpp"
++#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
++#include "patrolbot_interfaces/msg/base_state.hpp"
++#include "std_srvs/srv/empty.hpp"
++
++namespace nav2_behavior_tree
++{
++using UUID = rclcpp_action::GoalUUID;
++using Steady = std::chrono::steady_clock;
++
++static bool currentPath(const BT::NodeConfiguration & conf)
++{
++  UUID goal{}, path_goal{};
++  nav_msgs::msg::Path path;
++  return conf.blackboard->get("patrolbot_navigation_goal_id", goal) &&
++         conf.blackboard->get("patrolbot_path_goal_id", path_goal) && goal == path_goal &&
++         conf.blackboard->get("path", path) && !path.poses.empty();
++}
++
++class PatrolbotPathGuard : public BT::DecoratorNode
++{
++public:
++  PatrolbotPathGuard(const std::string & name, const BT::NodeConfiguration & conf)
++  : BT::DecoratorNode(name, conf) {}
++  static BT::PortsList providedPorts() {return {};}
++  BT::NodeStatus tick() override
++  {
++    if (!currentPath(config())) {
++      child_node_->haltNode();
++      return BT::NodeStatus::RUNNING;  // Let the planner finish its contextual clear/retry.
++    }
++    return child_node_->executeTick();
++  }
++};
++
++class PatrolbotMotionRecoveryAllowed : public BT::ConditionNode
++{
++public:
++  PatrolbotMotionRecoveryAllowed(const std::string & name, const BT::NodeConfiguration & conf)
++  : BT::ConditionNode(name, conf) {}
++  static BT::PortsList providedPorts() {return {};}
++  BT::NodeStatus tick() override
++  {
++    uint16_t error = 0;
++    (void)config().blackboard->get("compute_path_error_code", error);
++    if (error == 205 || error == 305 || error == 207 || error == 307) {
++      return BT::NodeStatus::FAILURE;
++    }
++    return currentPath(config()) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
++  }
++};
++
++class PatrolbotLocalizationGuard : public BT::DecoratorNode
++{
++public:
++  PatrolbotLocalizationGuard(const std::string & name, const BT::NodeConfiguration & conf)
++  : BT::DecoratorNode(name, conf)
++  {
++    node_ = config().blackboard->get<rclcpp::Node::SharedPtr>("node");
++    group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
++    executor_.add_callback_group(group_, node_->get_node_base_interface());
++    rclcpp::SubscriptionOptions options;
++    options.callback_group = group_;
++    base_sub_ = node_->create_subscription<patrolbot_interfaces::msg::BaseState>(
++      "/patrolbot/base_state", 10, [this](patrolbot_interfaces::msg::BaseState::SharedPtr msg) {
++        base_ = *msg; base_received_ = Steady::now();
++      }, options);
++    odom_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
++      "/odom", rclcpp::SensorDataQoS(), [this](nav_msgs::msg::Odometry::SharedPtr msg) {
++        const auto now = Steady::now();
++        const auto gap = (rclcpp::Time(msg->header.stamp).nanoseconds() -
++          rclcpp::Time(odom_.header.stamp).nanoseconds()) * 1e-9;
++        if (seconds(now - odom_received_) > 0.5 || gap <= 0 || gap > 0.5) {
++          stationary_since_ = Steady::time_point{};
++        }
++        odom_ = *msg;
++        odom_received_ = now;
++        if (!stationary()) {stationary_since_ = Steady::time_point{};}
++      }, options);
++    pose_sub_ = node_->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
++      "/amcl_pose", rclcpp::QoS(1).transient_local().reliable(),
++      [this](geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
++        pose_ = *msg;
++        pose_received_ = Steady::now();
++        poses_.emplace_back(pose_, pose_received_);
++        if (poses_.size() > 64) {poses_.pop_front();}
++      }, options);
++    refresh_ = node_->create_client<std_srvs::srv::Empty>(
++      "/request_nomotion_update", rclcpp::ServicesQoS(), group_);
++  }
++  static BT::PortsList providedPorts() {return {};}
++
++  void halt() override
++  {
++    clearRequest();
++    refreshing_ = false;
++    BT::DecoratorNode::halt();
++  }
++
++  BT::NodeStatus tick() override
++  {
++    executor_.spin_some();
++    const auto now = Steady::now();
++    UUID goal{};
++    (void)config().blackboard->get("patrolbot_navigation_goal_id", goal);
++    if (goal != goal_) {
++      child_node_->haltNode();
++      clearRequest();
++      goal_ = goal;
++      initialized_ = refreshing_ = false;
++      entered_ = now;
++      context_ = patrolbot_interfaces::msg::BaseState{};
++      awaiting_acceptance_ = {};
++      planner_detail_.clear();
++    }
++    if (!initialized_) {
++      if (base_received_ == Steady::time_point{} || pose_received_ == Steady::time_point{}) {
++        if (seconds(now - entered_) >= 5.0) {return fail("Localization inputs unavailable");}
++        return BT::NodeStatus::RUNNING;
++      }
++      if (!contextValid()) {return fail("Navigation map, seed, epoch or hardware context invalid");}
++      context_ = base_;
++      initialized_ = true;
++    }
++    if (!contextValid() || !sameContext()) {
++      return fail("Navigation context changed; destination invalidated");
++    }
++    if (poses_.empty()) {return BT::NodeStatus::RUNNING;}
++    pose_ = poses_.back().first;
++    if (!poseValid()) {return fail("AMCL estimate failed existing localization checks");}
++    bool accepted = false;
++    for (auto sample = poses_.rbegin(); sample != poses_.rend(); ++sample) {
++      if (rclcpp::Time(sample->first.header.stamp).nanoseconds() <= base_.localization_pose_stamp_ns) {
++        pose_ = sample->first;
++        pose_received_ = sample->second;
++        accepted = true;
++        break;
++      }
++    }
++    if (!accepted) {
++      if (awaiting_acceptance_ == Steady::time_point{}) {awaiting_acceptance_ = now;}
++      child_node_->haltNode();
++      invalidatePath();
++      if (seconds(now - awaiting_acceptance_) >= 5.0 ||
++        (refreshing_ && seconds(now - refresh_started_) >= 5.0))
++      {
++        return fail("AMCL estimate was not accepted by the localization coordinator", refresh_error_);
++      }
++      return BT::NodeStatus::RUNNING;
++    }
++    awaiting_acceptance_ = {};
++    if (!poseValid()) {return fail("Accepted AMCL estimate failed existing localization checks");}
++
++    uint16_t error = 0;
++    (void)config().blackboard->get("compute_path_error_code", error);
++    if (refreshing_) {
++      if (seconds(now - refresh_started_) >= 5.0) {
++        return fail("Stationary localization refresh timed out after 5 seconds", refresh_error_);
++      }
++      if (!stationary()) {
++        stationary_since_ = {};
++        if (requested_) {return fail("Odometry changed during stationary localization refresh", refresh_error_);}
++        return BT::NodeStatus::RUNNING;
++      }
++      if (stationary_since_ == Steady::time_point{}) {stationary_since_ = now;}
++      if (!requested_ && seconds(now - stationary_since_) >= 0.5) {
++        if (!refresh_->service_is_ready()) {
++          return fail("Stationary localization refresh service unavailable", refresh_error_);
++        }
++        request_stamp_ = rclcpp::Time(pose_.header.stamp).nanoseconds();
++        requested_at_ = now;
++        auto pending = refresh_->async_send_request(std::make_shared<std_srvs::srv::Empty::Request>());
++        pending_request_id_ = pending.request_id;
++        future_ = pending.future.share();
++        requested_ = true;
++      }
++      if (requested_ && future_.valid() &&
++        future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready &&
++        pose_received_ > requested_at_ && rclcpp::Time(pose_.header.stamp).nanoseconds() > request_stamp_ &&
++        poseFresh())
++      {
++        try {future_.get();} catch (const std::exception & ex) {
++          return fail(std::string("Stationary localization refresh failed: ") + ex.what(), refresh_error_);
++        }
++        clearRequest();
++        refreshing_ = false;
++        error = 0;
++        config().blackboard->set("compute_path_error_code", uint16_t{0});
++        status("planning", 0, "Localization refreshed; retrying planning");
++        // The child was halted before the request, so this starts one fresh plan.
++      } else {
++        return BT::NodeStatus::RUNNING;
++      }
++    }
++    if (!poseFresh() || error == 205) {
++      bool spent = false;
++      (void)config().blackboard->get("patrolbot_refresh_spent", spent);
++      if (spent) {
++        return fail(error == 205 ? "Planning start remains blocked after localization refresh" :
++          "Localization became stale after the goal's single refresh", error);
++      }
++      config().blackboard->set("patrolbot_refresh_spent", true);
++      child_node_->haltNode();
++      invalidatePath();
++      refreshing_ = true;
++      requested_ = false;
++      refresh_started_ = now;
++      stationary_since_ = {};
++      refresh_error_ = error;
++      planner_detail_.clear();
++      if (error != 0) {
++        (void)config().blackboard->get("patrolbot_planning_error_message", planner_detail_);
++      }
++      status("refreshing", error, "Refreshing localization while stationary" +
++        (planner_detail_.empty() ? std::string{} : ": " + planner_detail_));
++      return BT::NodeStatus::RUNNING;
++    }
++    const auto result = child_node_->executeTick();
++    if (result == BT::NodeStatus::FAILURE) {
++      (void)config().blackboard->get("compute_path_error_code", error);
++      if (error == 205) {return BT::NodeStatus::RUNNING;}
++    }
++    return result;
++  }
++
++private:
++  static double seconds(Steady::duration value) {return std::chrono::duration<double>(value).count();}
++  bool contextValid() const
++  {
++    return seconds(Steady::now() - base_received_) <= 0.5 &&
++      base_.link_connected && base_.hardware_state_valid && std::isfinite(base_.telemetry_age) &&
++      base_.telemetry_age >= 0 && base_.telemetry_age <= 0.5 && !base_.estop_pressed &&
++      base_.fault_flags == 0 && base_.odom_epoch_valid && !base_.localization_recovery_required &&
++      base_.lidar_state == "READY" && std::isfinite(base_.lidar_scan_age) &&
++      base_.lidar_scan_age >= 0 && base_.lidar_scan_age <= 0.5 &&
++      base_.dock_state_valid && base_.dock_state == "CLEAR_CONFIRMED" &&
++      !base_.map_id.empty() && !base_.map_revision.empty() && base_.map_activated_stamp_ns > 0 &&
++      base_.localization_seed_stamp_ns > 0;
++  }
++  bool sameContext() const
++  {
++    return base_.session_generation == context_.session_generation &&
++      base_.odom_epoch == context_.odom_epoch &&
++      base_.odom_epoch_generation == context_.odom_epoch_generation &&
++      base_.map_id == context_.map_id && base_.map_revision == context_.map_revision &&
++      base_.map_activated_stamp_ns == context_.map_activated_stamp_ns &&
++      base_.localization_seed_stamp_ns == context_.localization_seed_stamp_ns;
++  }
++  bool poseValid() const
++  {
++    const auto & p = pose_.pose.pose;
++    const auto stamp = rclcpp::Time(pose_.header.stamp).nanoseconds();
++    if (pose_.header.frame_id != "map" || stamp <= base_.localization_seed_stamp_ns ||
++      stamp < base_.map_activated_stamp_ns || !std::isfinite(p.position.x) ||
++      !std::isfinite(p.position.y) || !std::isfinite(p.position.z) ||
++      !std::isfinite(p.orientation.x) || !std::isfinite(p.orientation.y) ||
++      !std::isfinite(p.orientation.z) || !std::isfinite(p.orientation.w)) {return false;}
++    const auto & q = p.orientation;
++    if (std::abs(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w - 1.0) > 1e-3) {
++      return false;
++    }
++    for (const auto variance : pose_.pose.covariance) {
++      if (!std::isfinite(variance)) {return false;}
++    }
++    for (const auto i : {0, 7, 35}) {
++      const auto variance = pose_.pose.covariance[i];
++      if (!std::isfinite(variance) || variance <= 0 || variance > 0.25) {return false;}
++    }
++    const auto & c = pose_.pose.covariance;
++    for (const auto a : {0, 1, 5}) {
++      for (const auto b : {0, 1, 5}) {
++        if (std::abs(c[6*a+b] - c[6*b+a]) >
++          std::max(1e-10, 1e-9 * std::max(std::abs(c[6*a+b]), std::abs(c[6*b+a]))))
++        {
++          return false;
++        }
++      }
++    }
++    const auto a = c[0], b = c[1], d = c[7], e = c[5], f = c[11], g = c[35];
++    if (a*d-b*b < 0 || a*g-e*e < 0 || d*g-f*f < 0 ||
++      a*d*g+2*b*e*f-a*f*f-d*e*e-g*b*b < 0) {return false;}
++    return (node_->now().nanoseconds() - stamp) * 1e-9 >= -0.1;
++  }
++  bool poseFresh() const
++  {
++    return (node_->now().nanoseconds() - rclcpp::Time(pose_.header.stamp).nanoseconds()) * 1e-9 <= 30.0;
++  }
++  bool stationary() const
++  {
++    const auto & t = odom_.twist.twist;
++    const auto & p = odom_.pose.pose;
++    const auto & q = p.orientation;
++    if (odom_.header.frame_id != "odom" || odom_.child_frame_id != "base_link" ||
++      !std::isfinite(p.position.x) || !std::isfinite(p.position.y) || !std::isfinite(p.position.z) ||
++      !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w) ||
++      std::abs(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w - 1.0) > 1e-3) {return false;}
++    const auto age = (node_->now().nanoseconds() - rclcpp::Time(odom_.header.stamp).nanoseconds()) * 1e-9;
++    return seconds(Steady::now() - odom_received_) <= 0.5 && age >= -0.1 && age <= 0.5 &&
++      std::isfinite(t.linear.x) && std::isfinite(t.linear.y) && std::isfinite(t.linear.z) &&
++      std::isfinite(t.angular.x) && std::isfinite(t.angular.y) && std::isfinite(t.angular.z) &&
++      std::hypot(t.linear.x, t.linear.y) <= 0.005 && std::abs(t.angular.z) <= 0.01;
++  }
++  void invalidatePath()
++  {
++    config().blackboard->set("path", nav_msgs::msg::Path{});
++    config().blackboard->set("patrolbot_path_goal_id", UUID{});
++  }
++  void status(const std::string & stage, uint16_t code, const std::string & message)
++  {
++    config().blackboard->set("patrolbot_planning_stage", stage);
++    config().blackboard->set("patrolbot_planning_error_code", code);
++    config().blackboard->set("patrolbot_planning_error_message", message);
++  }
++  BT::NodeStatus fail(const std::string & message, uint16_t code = 0)
++  {
++    if (code == 0) {code = 200;}
++    child_node_->haltNode();
++    invalidatePath();
++    clearRequest();
++    refreshing_ = false;
++    std::string planner_detail;
++    (void)config().blackboard->get("patrolbot_planning_error_message", planner_detail);
++    if (planner_detail.rfind("Refreshing localization while stationary", 0) == 0) {
++      planner_detail = planner_detail_;
++    }
++    const auto detail = planner_detail.empty() || planner_detail == message ? message : message + ": " + planner_detail;
++    status("failed", code, detail);
++    config().blackboard->set("compute_path_error_code", code);
++    return BT::NodeStatus::FAILURE;
++  }
++  void clearRequest()
++  {
++    if (future_.valid()) {refresh_->remove_pending_request(pending_request_id_);}
++    future_ = {};
++  }
++  rclcpp::Node::SharedPtr node_;
++  rclcpp::CallbackGroup::SharedPtr group_;
++  rclcpp::executors::SingleThreadedExecutor executor_;
++  rclcpp::Subscription<patrolbot_interfaces::msg::BaseState>::SharedPtr base_sub_;
++  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
++  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
++  rclcpp::Client<std_srvs::srv::Empty>::SharedPtr refresh_;
++  rclcpp::Client<std_srvs::srv::Empty>::SharedFuture future_;
++  patrolbot_interfaces::msg::BaseState base_, context_;
++  nav_msgs::msg::Odometry odom_;
++  geometry_msgs::msg::PoseWithCovarianceStamped pose_;
++  std::deque<std::pair<geometry_msgs::msg::PoseWithCovarianceStamped, Steady::time_point>> poses_;
++  UUID goal_{};
++  Steady::time_point entered_{Steady::now()}, base_received_{}, odom_received_{}, pose_received_{};
++  Steady::time_point refresh_started_{}, stationary_since_{}, requested_at_{}, awaiting_acceptance_{};
++  std::string planner_detail_;
++  int64_t request_stamp_{0}, pending_request_id_{0};
++  uint16_t refresh_error_{0};
++  bool initialized_{false}, refreshing_{false}, requested_{false};
++};
++}  // namespace nav2_behavior_tree
++
++BT_REGISTER_NODES(factory)
++{
++  factory.registerNodeType<nav2_behavior_tree::PatrolbotLocalizationGuard>("PatrolbotLocalizationGuard");
++  factory.registerNodeType<nav2_behavior_tree::PatrolbotPathGuard>("PatrolbotPathGuard");
++  factory.registerNodeType<nav2_behavior_tree::PatrolbotMotionRecoveryAllowed>("PatrolbotMotionRecoveryAllowed");
++}
+--- a/nav2_bt_navigator/include/nav2_bt_navigator/navigators/navigate_through_poses.hpp
++++ b/nav2_bt_navigator/include/nav2_bt_navigator/navigators/navigate_through_poses.hpp
+@@ -118,6 +118,10 @@
+     path_pub_;
+   patrolbot_interfaces::msg::NavigationPath last_path_;
+   std::mutex path_mutex_;
++  bool goal_active_{false};
++  std::string planning_stage_;
++  uint16_t planning_error_code_{0};
++  std::string planning_error_message_;
+   rclcpp::Service<patrolbot_interfaces::srv::GetNavigationPath>::SharedPtr path_service_;
+   rclcpp::Time last_path_publish_{0};
+ 
+--- a/nav2_bt_navigator/include/nav2_bt_navigator/navigators/navigate_to_pose.hpp
++++ b/nav2_bt_navigator/include/nav2_bt_navigator/navigators/navigate_to_pose.hpp
+@@ -132,6 +132,10 @@
+     path_pub_;
+   patrolbot_interfaces::msg::NavigationPath last_path_;
+   std::mutex path_mutex_;
++  bool goal_active_{false};
++  std::string planning_stage_;
++  uint16_t planning_error_code_{0};
++  std::string planning_error_message_;
+   rclcpp::Service<patrolbot_interfaces::srv::GetNavigationPath>::SharedPtr path_service_;
+   rclcpp::Time last_path_publish_{0};
+ 
+--- a/nav2_bt_navigator/src/navigators/navigate_through_poses.cpp
++++ b/nav2_bt_navigator/src/navigators/navigate_through_poses.cpp
+@@ -59,11 +59,17 @@
+         response->active = false;
+         return;
+       }
++      std::lock_guard<std::mutex> lock(path_mutex_);
++      if (!goal_active_) {return;}
+       const auto current_id = bt_action_server_->getCurrentGoalId();
+-      std::lock_guard<std::mutex> lock(path_mutex_);
+       response->active = request->goal_id.uuid == current_id &&
+         request->goal_id == last_path_.goal_id;
+-      if (response->active) {response->path = last_path_.path;}
++      if (response->active) {
++        response->path = last_path_.path;
++        response->planning_stage = planning_stage_;
++        response->planning_error_code = planning_error_code_;
++        response->planning_error_message = planning_error_message_;
++      }
+     });
+ 
+   // Odometry smoother object for getting current speed
+@@ -130,9 +136,24 @@
+ 
+ void
+ NavigateThroughPosesNavigator::goalCompleted(
+-  typename ActionT::Result::SharedPtr /*result*/,
+-  const nav2_behavior_tree::BtStatus /*final_bt_status*/)
+-{
++  typename ActionT::Result::SharedPtr result,
++  const nav2_behavior_tree::BtStatus final_bt_status)
++{
++  auto blackboard = bt_action_server_->getBlackboard();
++  uint16_t planning_error = 0;
++  (void)blackboard->get("patrolbot_planning_error_code", planning_error);
++  if (final_bt_status == nav2_behavior_tree::BtStatus::FAILED && planning_error != 0) {
++    result->error_code = planning_error;
++    (void)blackboard->get("patrolbot_planning_error_message", result->error_msg);
++  }
++  blackboard->set("patrolbot_path_goal_id", rclcpp_action::GoalUUID{});
++  blackboard->set(path_blackboard_id_, nav_msgs::msg::Path{});
++  std::lock_guard<std::mutex> lock(path_mutex_);
++  goal_active_ = false;
++  last_path_ = patrolbot_interfaces::msg::NavigationPath{};
++  planning_stage_.clear();
++  planning_error_code_ = 0;
++  planning_error_message_.clear();
+ }
+ 
+ void
+@@ -156,6 +177,9 @@
+   }
+   {
+     std::lock_guard<std::mutex> lock(path_mutex_);
++    (void)blackboard->get("patrolbot_planning_stage", planning_stage_);
++    (void)blackboard->get("patrolbot_planning_error_code", planning_error_code_);
++    (void)blackboard->get("patrolbot_planning_error_message", planning_error_message_);
+     if (path_message != last_path_ || (clock_->now() - last_path_publish_).seconds() >= 1.0) {
+       path_pub_->publish(path_message);
+       last_path_ = path_message;
+@@ -298,6 +322,22 @@
+   blackboard->set("patrolbot_navigation_goal_id", bt_action_server_->getCurrentGoalId());
+   // A late result from the previous request keeps its original UUID.
+   blackboard->set("patrolbot_path_goal_id", rclcpp_action::GoalUUID{});
++  blackboard->set(path_blackboard_id_, nav_msgs::msg::Path{});
++  blackboard->set("compute_path_error_code", uint16_t{0});
++  blackboard->set("patrolbot_refresh_spent", false);
++  blackboard->set("patrolbot_planning_stage", std::string("planning"));
++  blackboard->set("patrolbot_planning_error_code", uint16_t{0});
++  blackboard->set("patrolbot_planning_error_message", std::string{});
++  {
++    std::lock_guard<std::mutex> lock(path_mutex_);
++    goal_active_ = true;
++    last_path_ = patrolbot_interfaces::msg::NavigationPath{};
++    last_path_.goal_id.uuid = bt_action_server_->getCurrentGoalId();
++    last_path_publish_ = clock_->now() - rclcpp::Duration::from_seconds(1.0);
++    planning_stage_ = "planning";
++    planning_error_code_ = 0;
++    planning_error_message_.clear();
++  }
+ 
+   // Update the goal pose on the blackboard
+   blackboard->set<Goals>(goals_blackboard_id_, std::move(goal_poses));
+--- a/nav2_bt_navigator/src/navigators/navigate_to_pose.cpp
++++ b/nav2_bt_navigator/src/navigators/navigate_to_pose.cpp
+@@ -57,11 +57,17 @@
+         response->active = false;
+         return;
+       }
++      std::lock_guard<std::mutex> lock(path_mutex_);
++      if (!goal_active_) {return;}
+       const auto current_id = bt_action_server_->getCurrentGoalId();
+-      std::lock_guard<std::mutex> lock(path_mutex_);
+       response->active = request->goal_id.uuid == current_id &&
+         request->goal_id == last_path_.goal_id;
+-      if (response->active) {response->path = last_path_.path;}
++      if (response->active) {
++        response->path = last_path_.path;
++        response->planning_stage = planning_stage_;
++        response->planning_error_code = planning_error_code_;
++        response->planning_error_message = planning_error_message_;
++      }
+     });
+ 
+   // Odometry smoother object for getting current speed
+@@ -137,9 +143,24 @@
+ 
+ void
+ NavigateToPoseNavigator::goalCompleted(
+-  typename ActionT::Result::SharedPtr /*result*/,
+-  const nav2_behavior_tree::BtStatus /*final_bt_status*/)
+-{
++  typename ActionT::Result::SharedPtr result,
++  const nav2_behavior_tree::BtStatus final_bt_status)
++{
++  auto blackboard = bt_action_server_->getBlackboard();
++  uint16_t planning_error = 0;
++  (void)blackboard->get("patrolbot_planning_error_code", planning_error);
++  if (final_bt_status == nav2_behavior_tree::BtStatus::FAILED && planning_error != 0) {
++    result->error_code = planning_error;
++    (void)blackboard->get("patrolbot_planning_error_message", result->error_msg);
++  }
++  blackboard->set("patrolbot_path_goal_id", rclcpp_action::GoalUUID{});
++  blackboard->set(path_blackboard_id_, nav_msgs::msg::Path{});
++  std::lock_guard<std::mutex> lock(path_mutex_);
++  goal_active_ = false;
++  last_path_ = patrolbot_interfaces::msg::NavigationPath{};
++  planning_stage_.clear();
++  planning_error_code_ = 0;
++  planning_error_message_.clear();
+ }
+ 
+ void
+@@ -148,6 +169,28 @@
+   // action server feedback (pose, duration of task,
+   // number of recoveries, and distance remaining to goal)
+   auto feedback_msg = std::make_shared<ActionT::Feedback>();
++
++  auto blackboard = bt_action_server_->getBlackboard();
++
++  patrolbot_interfaces::msg::NavigationPath path_message;
++  path_message.goal_id.uuid = bt_action_server_->getCurrentGoalId();
++  rclcpp_action::GoalUUID path_goal_id{};
++  if (blackboard->get("patrolbot_path_goal_id", path_goal_id) &&
++    path_goal_id == path_message.goal_id.uuid)
++  {
++    (void)blackboard->get(path_blackboard_id_, path_message.path);
++  }
++  {
++    std::lock_guard<std::mutex> lock(path_mutex_);
++    (void)blackboard->get("patrolbot_planning_stage", planning_stage_);
++    (void)blackboard->get("patrolbot_planning_error_code", planning_error_code_);
++    (void)blackboard->get("patrolbot_planning_error_message", planning_error_message_);
++    if (path_message != last_path_ || (clock_->now() - last_path_publish_).seconds() >= 1.0) {
++      path_pub_->publish(path_message);
++      last_path_ = path_message;
++      last_path_publish_ = clock_->now();
++    }
++  }
+ 
+   geometry_msgs::msg::PoseStamped current_pose;
+   if (!nav2_util::getCurrentPose(
+@@ -157,25 +200,6 @@
+   {
+     RCLCPP_ERROR(logger_, "Robot pose is not available.");
+     return;
+-  }
+-
+-  auto blackboard = bt_action_server_->getBlackboard();
+-
+-  patrolbot_interfaces::msg::NavigationPath path_message;
+-  path_message.goal_id.uuid = bt_action_server_->getCurrentGoalId();
+-  rclcpp_action::GoalUUID path_goal_id{};
+-  if (blackboard->get("patrolbot_path_goal_id", path_goal_id) &&
+-    path_goal_id == path_message.goal_id.uuid)
+-  {
+-    (void)blackboard->get(path_blackboard_id_, path_message.path);
+-  }
+-  {
+-    std::lock_guard<std::mutex> lock(path_mutex_);
+-    if (path_message != last_path_ || (clock_->now() - last_path_publish_).seconds() >= 1.0) {
+-      path_pub_->publish(path_message);
+-      last_path_ = path_message;
+-      last_path_publish_ = clock_->now();
+-    }
+   }
+ 
+   try {
+@@ -303,6 +327,22 @@
+   blackboard->set("patrolbot_navigation_goal_id", bt_action_server_->getCurrentGoalId());
+   // A late result from the previous request keeps its original UUID.
+   blackboard->set("patrolbot_path_goal_id", rclcpp_action::GoalUUID{});
++  blackboard->set(path_blackboard_id_, nav_msgs::msg::Path{});
++  blackboard->set("compute_path_error_code", uint16_t{0});
++  blackboard->set("patrolbot_refresh_spent", false);
++  blackboard->set("patrolbot_planning_stage", std::string("planning"));
++  blackboard->set("patrolbot_planning_error_code", uint16_t{0});
++  blackboard->set("patrolbot_planning_error_message", std::string{});
++  {
++    std::lock_guard<std::mutex> lock(path_mutex_);
++    goal_active_ = true;
++    last_path_ = patrolbot_interfaces::msg::NavigationPath{};
++    last_path_.goal_id.uuid = bt_action_server_->getCurrentGoalId();
++    last_path_publish_ = clock_->now() - rclcpp::Duration::from_seconds(1.0);
++    planning_stage_ = "planning";
++    planning_error_code_ = 0;
++    planning_error_message_.clear();
++  }
+ 
+   // Update the goal pose on the blackboard
+   blackboard->set(goal_blackboard_id_, goal_pose);
+--- a/nav2_navfn_planner/include/nav2_navfn_planner/navfn_planner.hpp
++++ b/nav2_navfn_planner/include/nav2_navfn_planner/navfn_planner.hpp
+@@ -186,6 +186,9 @@
+    */
+   void clearRobotCell(unsigned int mx, unsigned int my);
+ 
++  // Caller holds the costmap mutex and uses Navfn's rounded coordinates.
++  void checkStart(unsigned int mx, unsigned int my);
++
+   /**
+    * @brief Determine if a new planner object should be made
+    * @return true if planner object is out of date
+--- a/nav2_navfn_planner/src/navfn_planner.cpp
++++ b/nav2_navfn_planner/src/navfn_planner.cpp
+@@ -171,6 +171,12 @@
+   if (start.pose.position.x == goal.pose.position.x &&
+     start.pose.position.y == goal.pose.position.y)
+   {
++    std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap_->getMutex()));
++    unsigned int mx, my;
++    if (!worldToMap(start.pose.position.x, start.pose.position.y, mx, my)) {
++      throw nav2_core::StartOutsideMapBounds("Rounded planning start is outside map bounds");
++    }
++    checkStart(mx, my);
+     path.header.stamp = clock_->now();
+     path.header.frame_id = global_frame_;
+     geometry_msgs::msg::PoseStamped pose;
+@@ -215,6 +221,29 @@
+   return false;
+ }
+ 
++void
++NavfnPlanner::checkStart(unsigned int mx, unsigned int my)
++{
++  const auto blocked = [this](int x, int y) {
++      if (x <= 0 || y <= 0 || x >= static_cast<int>(costmap_->getSizeInCellsX()) - 1 ||
++        y >= static_cast<int>(costmap_->getSizeInCellsY()) - 1)
++      {
++        return true;  // Navfn sets the boundary cells to obstacles.
++      }
++      const auto cost = costmap_->getCost(x, y);
++      return cost >= COST_OBS_ROS && !(cost == COST_UNKNOWN_ROS && allow_unknown_);
++    };
++  const auto x = static_cast<int>(mx);
++  const auto y = static_cast<int>(my);
++  if (blocked(x, y) && blocked(x - 1, y) && blocked(x + 1, y) &&
++    blocked(x, y - 1) && blocked(x, y + 1))
++  {
++    throw nav2_core::StartOccupied(
++            "Planning start is occupied with all four exits blocked at rounded cell (" +
++            std::to_string(mx) + ", " + std::to_string(my) + ")");
++  }
++}
++
+ bool
+ NavfnPlanner::makePlan(
+   const geometry_msgs::msg::Pose & start,
+@@ -235,13 +264,13 @@
+     logger_, "Making plan from (%.2f,%.2f) to (%.2f,%.2f)",
+     start.position.x, start.position.y, goal.position.x, goal.position.y);
+ 
++  std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap_->getMutex()));
+   unsigned int mx, my;
+-  worldToMap(wx, wy, mx, my);
+-
+-  // clear the starting cell within the costmap because we know it can't be an obstacle
++  if (!worldToMap(wx, wy, mx, my)) {
++    throw nav2_core::StartOutsideMapBounds("Rounded planning start is outside map bounds");
++  }
++  checkStart(mx, my);
+   clearRobotCell(mx, my);
+-
+-  std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap_->getMutex()));
+ 
+   // make sure to resize the underlying array that Navfn uses
+   planner_->setNavArr(
+--- a/nav2_planner/src/planner_server.cpp
++++ b/nav2_planner/src/planner_server.cpp
+@@ -468,38 +468,47 @@
+   } catch (nav2_core::InvalidPlanner & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::INVALID_PLANNER;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::StartOccupied & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::START_OCCUPIED;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::GoalOccupied & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::GOAL_OCCUPIED;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::NoValidPathCouldBeFound & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::NO_VALID_PATH;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::PlannerTimedOut & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::TIMEOUT;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::StartOutsideMapBounds & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::START_OUTSIDE_MAP;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::GoalOutsideMapBounds & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::GOAL_OUTSIDE_MAP;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::PlannerTFError & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::TF_ERROR;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::NoViapointsGiven & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::NO_VIAPOINTS_GIVEN;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   } catch (nav2_core::PlannerCancelled &) {
+     RCLCPP_INFO(get_logger(), "Goal was canceled. Canceling planning action.");
+@@ -507,6 +516,7 @@
+   } catch (std::exception & ex) {
+     exceptionWarning(curr_start, curr_goal, goal->planner_id, ex);
+     result->error_code = ActionThroughPosesResult::UNKNOWN;
++    result->error_msg = ex.what();
+     action_server_poses_->terminate_current(result);
+   }
+ }
+@@ -570,34 +580,42 @@
+   } catch (nav2_core::InvalidPlanner & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::INVALID_PLANNER;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::StartOccupied & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::START_OCCUPIED;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::GoalOccupied & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::GOAL_OCCUPIED;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::NoValidPathCouldBeFound & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::NO_VALID_PATH;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::PlannerTimedOut & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::TIMEOUT;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::StartOutsideMapBounds & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::START_OUTSIDE_MAP;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::GoalOutsideMapBounds & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::GOAL_OUTSIDE_MAP;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::PlannerTFError & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::TF_ERROR;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   } catch (nav2_core::PlannerCancelled &) {
+     RCLCPP_INFO(get_logger(), "Goal was canceled. Canceling planning action.");
+@@ -605,6 +623,7 @@
+   } catch (std::exception & ex) {
+     exceptionWarning(start, goal->goal, goal->planner_id, ex);
+     result->error_code = ActionToPoseResult::UNKNOWN;
++    result->error_msg = ex.what();
+     action_server_pose_->terminate_current(result);
+   }
+ }

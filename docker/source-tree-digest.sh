@@ -44,10 +44,13 @@ paths+=("$hardware_path")
 LC_ALL=C find "${paths[@]}" -type f \
   ! -path '*/__pycache__/*' \
   ! -path '*/.pytest_cache/*' \
+  ! -path "$ROOT/*/backups/*" \
   ! -path '*/build/*' \
   ! -path '*/install/*' \
   ! -path '*/log/*' \
   ! -name '*.pyc' \
+  ! -name '*.orig' \
+  ! -name '*.rej' \
   ! -name '*.bak' \
   ! -name '*.bak-*' \
   ! -name '*.bak.*' \

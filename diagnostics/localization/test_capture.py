@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import json
 from pathlib import Path
 import unittest
@@ -74,5 +75,20 @@ class CaptureTests(unittest.TestCase):
         result=c.convert(*self.complete_records())
         self.assertTrue(result['complete'],result['missing'])
         self.assertEqual(result['evidence']['amcl_stamp_ns'],result['evidence']['scan_stamp_ns'])
+
+    def test_late_estimate_pairs_its_scan_even_after_newer_stationary_scans(self):
+        records,identity,request=self.complete_records()
+        estimate=records.pop(5)
+        records.append(estimate)
+        newer=copy.deepcopy(records[-2])
+        newer['message']['header']['stamp']['sec']=110
+        newer['now_ns']=110_100_000_000
+        records.append(newer)
+        odom=pose();odom['header']['stamp']['sec']=110
+        records.append({'topic':'/odom','message':odom})
+        result=c.convert(records,identity,request)
+        self.assertTrue(result['complete'],result['missing'])
+        self.assertEqual(result['evidence']['scan_stamp_ns'],100_000_000_000)
+        self.assertEqual(result['evidence']['odom_stamp_ns'],100_000_000_000)
 
 if __name__=='__main__':unittest.main()

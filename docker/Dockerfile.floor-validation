@@ -5,12 +5,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-twist-mux \
     ros-jazzy-joy ros-jazzy-teleop-twist-joy build-essential patch \
     && rm -rf /var/lib/apt/lists/*
+COPY ros2_ws/src/patrolbot_interfaces /opt/patrolbot_ws/src/patrolbot_interfaces
+WORKDIR /opt/patrolbot_ws
+RUN . /opt/ros/jazzy/setup.sh && colcon build --packages-select patrolbot_interfaces \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 WORKDIR /opt/patrolbot_nav2
 ADD --checksum=sha256:bcdf575c86250d63007595c992b9c5785c3ec907e897b79abfb4fc7eacbd1129 https://codeload.github.com/ros-navigation/navigation2/tar.gz/refs/tags/1.3.12 /tmp/nav2.tar.gz
 COPY docker/nav2-patches /opt/patrolbot-nav2-patches
 RUN mkdir src && tar xzf /tmp/nav2.tar.gz -C src --strip-components=1 && \
     for patch_file in /opt/patrolbot-nav2-patches/*.patch; do patch --batch -d src -p1 < "$patch_file" || exit 1; done
-RUN . /opt/ros/jazzy/setup.sh && MAKEFLAGS=-j2 colcon build --parallel-workers 2 \
+RUN . /opt/patrolbot_ws/install/setup.sh && MAKEFLAGS=-j2 colcon build --parallel-workers 2 \
     --packages-up-to nav2_costmap_2d nav2_amcl nav2_map_server nav2_planner nav2_controller nav2_smoother nav2_velocity_smoother nav2_collision_monitor nav2_behaviors nav2_bt_navigator nav2_route nav2_regulated_pure_pursuit_controller nav2_lifecycle_manager nav2_navfn_planner nav2_waypoint_follower opennav_docking \
     --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 WORKDIR /opt/patrolbot_ws

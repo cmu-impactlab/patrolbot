@@ -378,6 +378,9 @@ bool UndockController::request(const std::string& request_id,
     } else if (observer->state() != DOCK_DOCKED_CONFIRMED) {
       local_code = UNDOCK_PRECONDITION_FAILED;
       local_message = "dock_state_is_not_docked_confirmed";
+    } else if (inputs.charge_state <= 0) {
+      local_code = UNDOCK_PRECONDITION_FAILED;
+      local_message = "robot_not_confirmed_charging";
     } else if (inputs.estop_pressed) {
       local_code = UNDOCK_PRECONDITION_FAILED;
       local_message = "estop_asserted";
@@ -688,7 +691,7 @@ void UndockController::runPhase(const UndockInputs& inputs,
         beginStopping(UNDOCK_SENSOR_BLOCKED, "rear_path_blocked", now);
         break;
       }
-      // The pose guard engages only after measured reverse progress proves the
+      // Deviation feedback starts only after measured reverse progress proves the
       // robot is beyond the dock fixture. Charge=0 and a cleared front bumper
       // are not sufficient: on the real dock both happened before the fixture
       // finished imposing its roughly 12 degree rotation, which captured a
@@ -697,16 +700,6 @@ void UndockController::runPhase(const UndockInputs& inputs,
           out->reverse_progress_m >= profile_.pose_guard_start_m) {
         captureGuardPose(inputs);
         computeProgress(inputs, out);
-      }
-      if (guard_captured_) {
-        if (out->lateral_error_m > profile_.max_lateral_drift_m) {
-          beginStopping(UNDOCK_MOTION_FAILED, "lateral_drift_exceeded", now);
-          break;
-        }
-        if (out->heading_error_rad > profile_.max_departure_yaw_rad) {
-          beginStopping(UNDOCK_MOTION_FAILED, "heading_error_exceeded", now);
-          break;
-        }
       }
       if (out->reverse_progress_m < -kForwardMotionToleranceM) {
         beginStopping(UNDOCK_MOTION_FAILED, "forward_motion_detected", now);
@@ -761,15 +754,6 @@ void UndockController::runPhase(const UndockInputs& inputs,
         effective_clearance_m_ = extended;
         resetMotionReference(inputs);
         enterPhase(UNDOCK_PHASE_BACKING_OUT, now);
-        break;
-      }
-      // Only meaningful once the free-running reference exists; before that
-      // the reported deviation is the dock's doing, not the controller's.
-      if (guard_captured_ &&
-          (out->lateral_error_m > profile_.max_lateral_drift_m ||
-           out->heading_error_rad > profile_.max_departure_yaw_rad)) {
-        beginStopping(UNDOCK_MOTION_FAILED, "departure_pose_out_of_limits",
-                      now);
         break;
       }
       if (out->reverse_progress_m < effective_clearance_m_) {

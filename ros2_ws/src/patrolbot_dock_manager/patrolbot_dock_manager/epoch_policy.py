@@ -4,7 +4,8 @@ import math
 
 
 def epoch_hardware_ready(*, origin_valid=False, recovery_required=True,
-                         recovery_stage='', for_pose_initialization=False):
+                         recovery_stage='', for_pose_initialization=False,
+                         for_undock=False):
     """Permit seed recovery without granting motion readiness.
 
     This is only the epoch part of the hardware gate. The caller still checks
@@ -14,6 +15,10 @@ def epoch_hardware_ready(*, origin_valid=False, recovery_required=True,
     if origin_valid is not True:
         return False
     if recovery_required is False:
+        return True
+    if for_undock:
+        # The bridge owns the pending-mutation gate. Map/AMCL labels do not
+        # describe whether raw, fresh hardware can perform this operation.
         return True
     return (for_pose_initialization is True
             and recovery_stage in ('wait-operator-seed', 'wait-amcl-pose'))

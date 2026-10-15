@@ -1,14 +1,8 @@
-<!--
-  Through-poses counterpart to navigate_recovery_always_try.xml; see that file's
-  header for the reasoning. Same change from nav2's stock
-  navigate_through_poses_w_replanning_and_recovery.xml: the WouldA*RecoveryHelp
-  gate is replaced with AlwaysSuccess so a failure mid-patrol-route always backs
-  up + spins to re-scan before giving up, and number_of_retries raised 6 -> 9.
-  BackUp is intentionally first and conservative so recovery near a forward
-  obstruction cannot begin by rotating into it.
--->
+<!-- A goal gets one stationary localization refresh. Planning failures never
+     authorize recovery motion without a current goal-owned path. -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
+    <PatrolbotLocalizationGuard>
     <RecoveryNode number_of_retries="9" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
         <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
@@ -25,6 +19,7 @@
             </Sequence>
           </RecoveryNode>
         </RateController>
+        <PatrolbotPathGuard>
         <RecoveryNode number_of_retries="1" name="FollowPath">
           <FollowPath path="{path}" controller_id="{selected_controller}" error_code_id="{follow_path_error_code}"/>
           <Sequence>
@@ -32,22 +27,24 @@
             <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
           </Sequence>
         </RecoveryNode>
+        </PatrolbotPathGuard>
       </PipelineSequence>
       <Sequence>
-        <AlwaysSuccess/>
+        <PatrolbotMotionRecoveryAllowed/>
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
           <RoundRobin name="RecoveryActions">
+            <BackUp backup_dist="0.10" backup_speed="0.05" error_code_id="{backup_error_code}"/>
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
-            <BackUp backup_dist="0.10" backup_speed="0.05" error_code_id="{backup_error_code}"/>
             <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="3.0"/>
           </RoundRobin>
         </ReactiveFallback>
       </Sequence>
     </RecoveryNode>
+    </PatrolbotLocalizationGuard>
   </BehaviorTree>
 </root>

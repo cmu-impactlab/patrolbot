@@ -36,6 +36,7 @@ def bridge():
         maps=NS(hold=False), _map_goal=None, _future=None, _map_future=None,
         _navigation_status=False, _navigation_idle_at=now,
         require_lidar_seed=Mock())
+    b._undock_turn = NS(busy=False, revoke=Mock())
     b.get_logger = Mock(return_value=Mock())
     b.sock = Mock()
     b.sent = []

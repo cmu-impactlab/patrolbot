@@ -33,12 +33,22 @@
 !hardware/patrolbot_hw_server/
 !hardware/patrolbot_hw_server/**
 
+!dashboard/
+!dashboard/ros2_ws/
+!dashboard/ros2_ws/src/
+!dashboard/ros2_ws/src/patrolbot_web_bridge/
+!dashboard/ros2_ws/src/patrolbot_web_bridge/**
+
 **/.git
 **/.git/**
 **/__pycache__/
 **/__pycache__/**
 **/.pytest_cache/
 **/.pytest_cache/**
+**/backups/
+**/backups/**
+**/*.orig
+**/*.rej
 **/.mypy_cache/
 **/.mypy_cache/**
 **/.ruff_cache/

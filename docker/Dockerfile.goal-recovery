@@ -1,0 +1,17 @@
+# Keep the reviewed Nav2 binaries; install the collision and recovery configuration.
+ARG PATROLBOT_BASE_IMAGE
+FROM ${PATROLBOT_BASE_IMAGE}
+USER root
+WORKDIR /opt/patrolbot_ws
+COPY ros2_ws/src src
+COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server
+RUN . install/setup.sh && MAKEFLAGS=-j2 colcon build --parallel-workers 1 \
+    --packages-select patrolbot_navigation \
+    --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+ARG PATROLBOT_SOURCE_SHA256
+RUN actual=$(/usr/local/bin/patrolbot-source-tree-digest /opt/patrolbot_ws) && \
+    test "$actual" = "$PATROLBOT_SOURCE_SHA256" && printf '%s\n' "$actual" > PATROLBOT_SOURCE_SHA256
+ARG PATROLBOT_REVISION=unknown
+LABEL io.patrolbot.source-tree-sha256=$PATROLBOT_SOURCE_SHA256 \
+      io.patrolbot.source-sha256=$PATROLBOT_SOURCE_SHA256 \
+      org.opencontainers.image.revision=$PATROLBOT_REVISION

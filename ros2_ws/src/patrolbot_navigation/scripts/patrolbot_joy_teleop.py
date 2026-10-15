@@ -35,6 +35,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Bool
 
 from joystick_policy import (
     ANG_SIGN,
@@ -128,6 +129,10 @@ class JoyTeleop(Node):
             self._navigation_status, qos_profile_action_status_default)
         # Remapped to /input/joy in the launch (twist_mux arbitrates above nav).
         self.pub = self.create_publisher(Twist, '/cmd_vel_joy', 10)
+        # Deadman evidence for the bridge: lets a human drive during
+        # localization recovery while autonomy stays blocked. Stale flag
+        # fails closed at the bridge within MANUAL_ACTIVE_TIMEOUT.
+        self.manual_pub = self.create_publisher(Bool, "/patrolbot/manual_active", 10)
         self.nav_cancel = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal')
         self.lidar_power = self.create_client(
@@ -380,6 +385,8 @@ class JoyTeleop(Node):
             self.ang_cmd, self.ang_tgt, self.accel_ang * self.dt)
         moving = abs(self.lin_cmd) > 1e-3 or abs(self.ang_cmd) > 1e-3
 
+        # Deadman evidence first so the last message of a drive tick stays Twist.
+        self.manual_pub.publish(Bool(data=bool(self.active or moving or self._takeover_pending)))
         if self.active or moving or self._takeover_pending:
             # While RB held (manual control) OR still coasting to a stop, keep
             # publishing at a steady rate. A pending takeover adds a fail-closed

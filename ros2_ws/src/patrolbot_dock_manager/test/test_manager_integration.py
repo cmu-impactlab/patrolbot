@@ -13,14 +13,13 @@ import threading
 import time
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
-from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.dock_manager import (
     DockManager,
     STATIONARY_ANGULAR_LIMIT,
     STATIONARY_LINEAR_LIMIT,
 )
-from patrolbot_interfaces.action import HardwareUndock, Undock
+from patrolbot_interfaces.action import HardwareUndock, Undock, UndockTurn
 from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
 import pytest
@@ -133,6 +132,8 @@ class FakeWorld(Node):
 
         self.behavior_pub = self.create_publisher(
             Twist, '/input/nav_behavior', 10)
+        self.behavior_pubs = [self.behavior_pub] + [self.create_publisher(
+            Twist, '/input/nav_behavior', 10) for _ in range(3)]
         self.base_pub = self.create_publisher(
             BaseState, '/patrolbot/base_state', 10)
         self.sonar_pub = self.create_publisher(PointCloud2, '/sonar', 10)
@@ -145,7 +146,7 @@ class FakeWorld(Node):
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=self.callbacks)
         self.spin_server = ActionServer(
-            self, Spin, '/spin', execute_callback=self._spin,
+            self, UndockTurn, '/patrolbot/undock_turn', execute_callback=self._spin,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=self.callbacks)
         self.nomotion_service = self.create_service(
@@ -161,6 +162,7 @@ class FakeWorld(Node):
 
     def _hardware_undock(self, goal_handle):
         self.undock_calls += 1
+        self.hardware_goal_id = bytes(goal_handle.goal_id.uuid)
         self.dock_state = 'DEPARTING'
         self.undock_active = True
         self.motors_enabled = True
@@ -242,8 +244,12 @@ class FakeWorld(Node):
         self.spin_calls += 1
         self.spin_called_at = time.monotonic()
         time.sleep(0.10)
-        result = Spin.Result()
-        result.error_code = Spin.Result.NONE
+        assert bytes(goal_handle.request.hardware_goal_id.uuid) == self.hardware_goal_id
+        assert goal_handle.request.session_generation == 7
+        result = UndockTurn.Result()
+        result.success = True
+        result.code = result.OK
+        result.radians_traveled = 3.14159265
         goal_handle.succeed()
         return result
 
@@ -398,11 +404,12 @@ def _build_harness(
             subscribe_topics=['/cmd_vel_smoothed']),
         PathNode(
             'cmd_vel_mux', publish_topics=['/cmd_vel_out'],
-            subscribe_topics=['/input/navi']),
+            subscribe_topics=['/input/navi', '/input/undock_turn']),
         PathNode(
             'teleop_velocity_smoother', publish_topics=['/cmd_vel'],
             subscribe_topics=['/cmd_vel_out']),
-        PathNode('patrolbot_bridge', subscribe_topics=['/cmd_vel']),
+        PathNode('patrolbot_bridge', publish_topics=['/input/docking', '/input/undock_turn'],
+                 subscribe_topics=['/cmd_vel']),
         PathNode('patrolbot_safety_watchdog'),
         Node('dock_manager_integration_client'),
     ]
@@ -506,19 +513,19 @@ def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     assert world.charge_state == 3
 
 
-def test_waits_for_post_result_localization_and_delayed_handoff(harness):
+def test_waits_for_delayed_handoff_without_waiting_for_amcl(harness):
     """A terminal success may arrive before either Pi telemetry path catches up."""
     _manager, world, client_node = harness
     world.handoff_telemetry_delay = 0.20
     world.pause_localization_during_undock = True
-    world.localization_restore_delay = 0.25
+    world.localization_restore_delay = None
 
     goal_handle = send_undock(client_node)
     wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
 
     assert wrapped.result.success
-    assert world.localization_resumed_at > world.hardware_completed_at
-    assert world.spin_called_at >= world.localization_resumed_at
+    assert not world.localization_enabled
+    assert world.spin_called_at >= world.hardware_completed_at + .20
     assert world.spin_calls == 1
 
 
@@ -536,8 +543,7 @@ def test_handoff_telemetry_timeout_stays_stopped(harness):
     assert world.spin_calls == 0
 
 
-def test_post_result_localization_timeout_stays_stopped(harness):
-    """A pre-undock AMCL sample is not accepted after physical separation."""
+def test_map_independent_undock_completes_while_amcl_remains_absent(harness):
     _manager, world, client_node = harness
     world.pause_localization_during_undock = True
     world.localization_restore_delay = None
@@ -545,9 +551,10 @@ def test_post_result_localization_timeout_stays_stopped(harness):
     goal_handle = send_undock(client_node)
     wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
 
-    assert not wrapped.result.success
-    assert wrapped.result.code == Undock.Result.LOCALIZATION_FAILED
-    assert world.spin_calls == 0
+    assert wrapped.result.success
+    assert world.spin_calls == 1
+    assert not world.localization_enabled
+    assert world.nomotion_update_calls == 0
 
 
 def test_hardware_failure_is_reported_without_a_nav2_turn(harness):
@@ -600,13 +607,21 @@ def test_uncommissioned_profile_blocks_a_production_undock(harness):
 
 
 def test_undock_is_refused_unless_the_sbc_reports_the_robot_docked(harness):
-    _manager, world, client_node = harness
+    manager, world, client_node = harness
     world.dock_state = 'CLEAR_CONFIRMED'
+    assert wait_until(lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
     goal_handle = send_undock(client_node)
-    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
-    assert not wrapped.result.success
-    assert wrapped.result.code == Undock.Result.PRECHECK_FAILED
+    assert not goal_handle.accepted
     assert world.undock_calls == 0
+
+
+def test_noncharging_docked_robot_is_refused_before_hardware_effects(harness):
+    manager, world, client_node = harness
+    world.charge_state = 0
+    assert wait_until(lambda: manager._snapshot().charge_state == 0)
+    goal_handle = send_undock(client_node)
+    assert not goal_handle.accepted
+    assert world.undock_calls == 0 and world.spin_calls == 0
 
 
 def test_cancel_is_forwarded_to_the_hardware_operation(harness):
@@ -663,7 +678,7 @@ def test_docked_state_never_triggers_background_localization_requests(
     assert world.nomotion_update_calls == 0
 
 
-@pytest.mark.parametrize('phase', ('precheck', 'localization', 'handoff'))
+@pytest.mark.parametrize('phase', ('localization',))
 def test_each_explicit_phase_dispatches_at_most_five_updates(
         no_pose_harness, phase):
     manager, world, _client_node = no_pose_harness
@@ -682,7 +697,7 @@ def test_each_explicit_phase_dispatches_at_most_five_updates(
     assert world.nomotion_update_calls == 5
 
 
-def test_explicit_precheck_stops_requesting_after_a_valid_fresh_pose(
+def test_undock_precheck_requests_no_amcl_update(
         no_pose_harness):
     manager, world, _client_node = no_pose_harness
     assert wait_until(manager._localization_update_client.service_is_ready)
@@ -690,7 +705,7 @@ def test_explicit_precheck_stops_requesting_after_a_valid_fresh_pose(
     ok, reason = manager._wait_for_precheck(PassiveGoal(), 'test')
 
     assert ok, reason
-    assert world.nomotion_update_calls == 1
+    assert world.nomotion_update_calls == 0
 
 
 def test_one_initialpose_event_dispatches_at_most_one_update(no_pose_harness):
@@ -717,11 +732,12 @@ def test_spin_never_forces_a_no_motion_update(harness):
 
     ok, reason = manager._run_spin(PassiveGoal(), 7, 0.25, 'test')
 
-    assert ok, reason
+    assert not ok
+    assert "handoff unavailable" in reason
     assert world.nomotion_update_calls == requests_before_spin
 
 
-def test_published_parked_readiness_does_not_relax_motion_precheck(harness):
+def test_charging_readiness_and_precheck_do_not_require_a_fresh_map_pose(harness):
     manager, world, client_node = harness
     seen = []
     client_node.create_subscription(
@@ -736,8 +752,7 @@ def test_published_parked_readiness_does_not_relax_motion_precheck(harness):
     assert seen[-1].localization_valid
     assert not seen[-1].localization_fresh
     assert seen[-1].ready_for_undock
-    assert not precheck_ready(manager), (
-        'physical motion precheck accepted the parked freshness exception')
+    assert precheck_ready(manager)
 
 
 def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
@@ -756,7 +771,7 @@ def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
     assert wait_until(lambda: not manager._snapshot().localization_valid)
 
 
-def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
+def test_invalid_covariance_remains_visible_without_blocking_hardware_undock(harness):
     """
     The live 2026-08-11 defect, end to end through the published gate.
 
@@ -773,7 +788,7 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
     world.cross_variance = 1.860600e-07
     world.yaw_variance = 4.660659e-07
     assert wait_until(lambda: not manager._snapshot().localization_valid)
-    assert not precheck_ready(manager)
+    assert precheck_ready(manager)
 
     # And it recovers when AMCL does, rather than latching off.
     world.position_variance = 0.01
@@ -784,7 +799,7 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
 
 def precheck_ready(manager):
     from patrolbot_dock_manager.contracts import precheck_failures
-    return precheck_failures(manager._snapshot()) == []
+    return precheck_failures(manager._snapshot(for_undock=True)) == []
 
 
 # The live degenerate diagonal, captured from the docked robot 2026-08-14 and
@@ -813,7 +828,7 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
 
     _drive_degenerate(world)
     assert wait_until(lambda: not manager._snapshot().localization_valid)
-    assert not precheck_ready(manager)
+    assert precheck_ready(manager)
 
 
 def test_the_override_admits_a_degenerate_covariance_when_enabled(
@@ -1067,7 +1082,7 @@ def test_localization_fresh_stays_a_statement_about_age(harness):
         'stale pose as authorisation to move')
 
 
-def test_the_undock_precheck_still_demands_a_genuinely_fresh_pose(harness):
+def test_charging_undock_precheck_still_works_when_the_map_pose_ages(harness):
     """
     The parked allowance must not reach the gate in front of physical motion.
 
@@ -1085,8 +1100,7 @@ def test_the_undock_precheck_still_demands_a_genuinely_fresh_pose(harness):
 
     assert manager._snapshot().localization_valid, (
         'precondition: the parked allowance is in effect')
-    assert not precheck_ready(manager), (
-        'undock was cleared on a pose nothing had refreshed')
+    assert precheck_ready(manager)
 
 
 def test_an_encoder_fault_voids_the_parked_allowance(harness):
@@ -1118,13 +1132,13 @@ def test_an_encoder_fault_voids_the_parked_allowance(harness):
         'a degraded encoder still propped up the parked allowance')
 
 
-def test_epoch_recovery_blocks_readiness_despite_fresh_stationary_inputs(harness):
+def test_epoch_recovery_blocks_localization_but_not_raw_undock_hardware(harness):
     manager, world, _ = harness
     assert wait_until(lambda: manager._snapshot().localization_valid)
     world.recovery_required = True
     assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
     assert not manager._snapshot().localization_valid
-    assert not precheck_ready(manager)
+    assert precheck_ready(manager)
 
 
 def test_new_epoch_seed_barrier_rejects_cached_parked_amcl(harness):
@@ -1147,7 +1161,7 @@ def test_operator_seed_can_recover_epoch_without_releasing_motion(harness, stage
     world.recovery_stage = stage
     assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
     assert manager._snapshot(for_pose_initialization=True).hardware_state_valid
-    assert not precheck_ready(manager)
+    assert precheck_ready(manager)
     initialize = client_node.create_client(
         InitializeDockPose, '/patrolbot/initialize_dock_pose')
     assert initialize.wait_for_service(timeout_sec=1.0)

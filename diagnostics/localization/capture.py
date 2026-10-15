@@ -43,6 +43,18 @@ def convert(records,identity,request=None):
         if topic: latest[topic]=message
         if topic=='/scan':
             selected=(record,dict(latest),seed,ack,applied,list(poses))
+    # Stationary AMCL need not update on every scan; pair by acquisition stamp,
+    # including an estimate delivered after its scan callback.
+    estimate=latest.get('/amcl_pose')
+    if estimate:
+        matched=next((r for r in reversed(records) if r.get('topic')=='/scan'
+                      and stamp_ns(r['message'])==stamp_ns(estimate)),None)
+        if matched and (seed is None or stamp_ns(estimate)>stamp_ns(seed)):
+            odometry=[r['message'] for r in records if r.get('topic')=='/odom']
+            paired=dict(latest)
+            if odometry:
+                paired['/odom']=min(odometry,key=lambda m:abs(stamp_ns(m)-stamp_ns(estimate)))
+            selected=(matched,paired,seed,ack,applied,list(poses))
     result={'complete':False,'missing':[],'map':identity,'identity':{
         'command_id':request.get('data',request).get('command_id') if request else None,
         'dashboard_request':request,'command_note':'Exact request supplied separately' if request else

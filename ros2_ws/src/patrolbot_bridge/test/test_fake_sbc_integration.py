@@ -14,6 +14,7 @@ from nav_msgs.srv import GetMap
 from nav2_msgs.srv import ManageLifecycleNodes
 from std_srvs.srv import Trigger
 from patrolbot_bridge.bridge_node import PatrolBotBridge
+from patrolbot_bridge.undock_turn import exclusive_publishers
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.srv import ChargeRelease, MotorEnable, SetLidarPower
 import pytest
@@ -43,7 +44,7 @@ class FakeSbc:
         self.running = True
         self.charge_state = 2
         self.motors_enabled = False
-        self.estop_pressed = True
+        self.estop_pressed = False
         self.connections = 0
         self.received = []
         self.malformed_ids = set()
@@ -147,9 +148,10 @@ class FakeSbc:
                 f'{int(self.profile_commissioned)}')
             odom_x, odom_y, odom_th = self.odom_pose
             laser_field = self.laser_field if self.lidar_state == "READY" else ""
+            laser_age = '' if '|LASER_AGE_MS' in laser_field else '|LASER_AGE_MS:0'
         return (
             f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}'
-            f'|ODOM_EPOCH:{self.odom_epoch}\n'
+            f'{laser_age}|ODOM_EPOCH:{self.odom_epoch}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
             f'DOCK={dock}|LIDAR={self.lidar_state},{int(self.lidar_supported)},'
@@ -339,6 +341,10 @@ class FakeAmcl(Node):
         self.state = 3
         self.transitions = []
         self.navigation_transitions = []
+        self.navigation_states = {name: 2 for name in (
+            'controller_server', 'smoother_server', 'planner_server', 'route_server',
+            'behavior_server', 'velocity_smoother', 'collision_monitor',
+            'bt_navigator', 'waypoint_follower', 'local_costmap/local_costmap')}
         self.create_service(ManageLifecycleNodes,
                             '/lifecycle_manager_navigation/manage_nodes',
                             self.manage_navigation)
@@ -350,6 +356,15 @@ class FakeAmcl(Node):
         self.create_service(GetMap, '/map_server/map', self.map_readback)
         self.create_service(Trigger, '/amcl/map_consumed', self.map_consumed)
         self.create_service(Trigger, '/bt_navigator/navigation_idle', self.localization_active)
+        self.create_service(Trigger, '/lifecycle_manager_navigation/is_active',
+                            self.navigation_active)
+        for name in self.navigation_states:
+            self.create_service(GetState, '/' + name + '/get_state',
+                lambda request, response, name=name: self.navigation_state(response, name))
+            if name in ('local_costmap/local_costmap', 'behavior_server',
+                        'velocity_smoother', 'collision_monitor'):
+                self.create_service(ChangeState, '/' + name + '/change_state',
+                    lambda request, response, name=name: self.navigation_change(request, response, name))
         self.ack = self.create_publisher(
             PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', 10)
         self.pose = self.create_publisher(PoseWithCovarianceStamped, '/amcl_pose', 10)
@@ -381,6 +396,21 @@ class FakeAmcl(Node):
 
     def manage_navigation(self, request, response):
         self.navigation_transitions.append(request.command)
+        for name in self.navigation_states:
+            self.navigation_states[name] = 2 if request.command == request.PAUSE else 3
+        response.success = True
+        return response
+
+    def navigation_active(self, _request, response):
+        response.success = self.navigation_states['bt_navigator'] == 3
+        return response
+
+    def navigation_state(self, response, name):
+        response.current_state.id = self.navigation_states[name]
+        return response
+
+    def navigation_change(self, request, response, name):
+        self.navigation_states[name] = 3 if request.transition.id == 3 else 2
         response.success = True
         return response
 
@@ -430,16 +460,32 @@ def build_harness(fake):
     ])
     client_node = Node('fake_sbc_integration_client')
     client_node.fake_amcl = amcl
+    client_node.path_nodes = []
+    for name, topics in (
+            ('controller_server', ['/input/nav_controller']),
+            ('behavior_server', ['/input/nav_behavior'] * 4),
+            ('nav_command_mux', ['/cmd_vel_nav']),
+            ('velocity_smoother', ['/cmd_vel_smoothed']),
+            ('collision_monitor', ['/input/navi']),
+            ('cmd_vel_mux', ['/cmd_vel_out']),
+            ('teleop_velocity_smoother', ['/cmd_vel'])):
+        node = Node(name)
+        node.path_publishers = [node.create_publisher(Twist, topic, 10) for topic in topics]
+        client_node.path_nodes.append(node)
     executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(amcl)
     executor.add_node(bridge)
     executor.add_node(client_node)
+    for node in client_node.path_nodes:
+        executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
     assert wait_until(lambda: bridge._link_connected)
     assert wait_until(lambda: bridge._pose_received)
     assert wait_until(lambda: bridge._charge_state_at > 0 and bridge._flags_at > 0)
     seed_harness(bridge, client_node)
+    assert wait_until(lambda: exclusive_publishers(bridge))
+    assert wait_until(lambda: bridge._undock_turn.idle_at is not None)
     return bridge, client_node, executor, spin_thread
 
 
@@ -447,7 +493,7 @@ def teardown_harness(bridge, client_node, executor, spin_thread, fake):
     assert executor.shutdown(timeout_sec=3.0), 'executor failed to drain callbacks'
     spin_thread.join(timeout=2.0)
     assert not spin_thread.is_alive(), 'executor spin thread survived shutdown'
-    for node in (bridge, client_node.fake_amcl, client_node):
+    for node in (bridge, client_node.fake_amcl, *client_node.path_nodes, client_node):
         executor.remove_node(node)
         node.destroy_node()
     rclpy.try_shutdown()
@@ -539,7 +585,7 @@ def test_velocity_is_not_replayed_after_hardware_reconnect(harness):
     second_connection = fake.connections
     time.sleep(0.25)
     assert not any(
-        session == second_connection and line.startswith('DRIVE:')
+        session == second_connection and line.startswith('DRIVE:0.04:')
         for session, line in fake.received)
 
 
@@ -580,22 +626,24 @@ def test_hardware_undock_reports_success_with_motors_left_enabled(harness):
     assert all(not line.startswith('DRIVE:') for _session, line in fake.received)
 
 
-def test_hardware_undock_suppresses_cmd_vel_while_active(harness):
+def test_hardware_undock_revokes_on_a_foreign_cmd_vel_publisher(harness):
     fake, bridge, client_node, _executor = harness
     with fake._lock:
         fake.undock_events = 8
-    publisher = client_node.create_publisher(Twist, '/cmd_vel', 10)
     _client, handle = send_undock(client_node)
     assert handle.accepted
     assert wait_until(lambda: bridge._undock_active, timeout=3.0)
+    publisher = client_node.create_publisher(Twist, '/cmd_vel', 10)
     command = Twist()
     command.linear.x = -0.05
     for _ in range(5):
         publisher.publish(command)
         time.sleep(0.02)
-    assert all(not line.startswith('DRIVE:') for _session, line in fake.received)
+    assert not any(line.startswith('DRIVE:-0.05:') for _session, line in fake.received)
     result_future = handle.get_result_async()
     assert wait_until(result_future.done, timeout=10.0)
+    assert not result_future.result().result.success
+    assert any(line.startswith('UNDOCK_CANCEL:') for _session, line in fake.received)
 
 
 def test_hardware_undock_failure_reports_disabled_motors(harness):
@@ -614,12 +662,12 @@ def test_hardware_undock_failure_reports_disabled_motors(harness):
 
 
 def test_hardware_undock_cancel_is_forwarded_and_terminal(harness):
-    fake, _bridge, client_node, _executor = harness
+    fake, bridge, client_node, _executor = harness
     with fake._lock:
         fake.undock_events = 20
     _client, handle = send_undock(client_node)
     assert handle.accepted
-    time.sleep(0.2)
+    assert wait_until(lambda: bridge._undock_active, timeout=3.0)
     handle.cancel_goal_async()
     result_future = handle.get_result_async()
     assert wait_until(result_future.done, timeout=10.0)
@@ -636,7 +684,7 @@ def test_hardware_undock_aborts_when_the_session_disappears(harness):
         fake.undock_events = 40
     _client, handle = send_undock(client_node)
     assert handle.accepted
-    assert wait_until(lambda: bridge._undock_request_id is not None, timeout=3.0)
+    assert wait_until(lambda: bridge._undock_active, timeout=3.0)
     fake.drop_connection()
     result_future = handle.get_result_async()
     assert wait_until(result_future.done, timeout=10.0)

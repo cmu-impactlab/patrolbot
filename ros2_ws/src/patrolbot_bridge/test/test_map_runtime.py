@@ -181,6 +181,24 @@ def test_cancel_at_every_stage_retains_hold_and_never_reseeds(runtime, phase):
     assert runtime.maps.active == active
 
 
+def test_canceled_pending_mutation_cannot_readmit_pose_after_late_completion(runtime):
+    goal = request(runtime); runtime.node.refresh()
+    assert runtime._map_accept(goal) == GoalResponse.ACCEPT
+    step(runtime)
+    future = runtime._map_future
+    future.complete = False
+    token = runtime.maps.token
+    runtime._map_cancel(NS(request=goal))
+    for complete in (False, True):
+        future.complete = complete
+        for _ in range(3): step(runtime)
+        replacement = request(runtime, request_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+        assert runtime._map_accept(replacement) == GoalResponse.REJECT
+        assert runtime.maps.token == token and runtime._map_future is future
+        assert runtime.maps.hold and not runtime.commands_allowed
+        assert len(runtime._navigation.calls) == 1 and runtime.node.seeds == []
+
+
 @pytest.mark.parametrize('failure', ['disconnect','origin','timeout','moving','stale','nonfinite'])
 def test_conflicting_state_fails_closed(runtime, failure):
     runtime.node.refresh(); assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
@@ -215,6 +233,113 @@ def test_lidar_blocks_map_admission_and_failure_keeps_hold(runtime):
     runtime.node._lidar_ready.return_value = False
     runtime.tick()
     assert runtime.maps.stage == 'failed' and runtime.maps.hold
+
+
+@pytest.mark.parametrize('stage', [EpochRecovery.WAIT_RESET, EpochRecovery.WAIT_POSE])
+def test_measured_location_can_recover_cold_or_unfinished_localization(runtime, stage):
+    runtime.recovery.stage = stage
+    runtime.node.refresh()
+    goal = request(runtime); goal.measured_pose = True
+    assert runtime._map_accept(goal) == GoalResponse.ACCEPT
+    assert not runtime.commands_allowed
+    run_until(runtime, lambda: runtime.maps.stage == 'ready')
+    assert len(runtime.node.seeds) == 1 and runtime.commands_allowed
+
+
+@pytest.mark.parametrize('phase', ['wait-localization-manager', 'inspect'])
+def test_valid_location_withdraws_only_an_explicit_read_only_epoch_probe(runtime, phase):
+    pending = Future(NS(success=False)); pending.complete = False
+    pending.cancel = Mock(wraps=pending.cancel)
+    runtime._future, runtime._future_kind, runtime._phase = pending, 'read-only', phase
+    runtime.node.refresh()
+    assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
+    assert runtime._future is None and runtime._future_kind is None
+    pending.cancel.assert_called_once()
+
+
+def test_invalid_location_cannot_withdraw_a_read_only_epoch_probe(runtime):
+    pending = Future(NS(success=False)); pending.complete = False
+    runtime._future, runtime._future_kind = pending, 'read-only'
+    goal = request(runtime); goal.pose.pose.position.x = -100.
+    runtime.node.refresh()
+    assert runtime._map_accept(goal) == GoalResponse.REJECT
+    assert runtime._future is pending and not pending.complete
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_unknown_epoch_mutation_still_refuses_location(runtime, complete):
+    pending = Future(NS(success=True)); pending.complete = complete
+    runtime._future, runtime._future_kind = pending, 'mutation'
+    runtime.node.refresh()
+    assert runtime._map_accept(request(runtime)) == GoalResponse.REJECT
+    assert runtime._future is pending and runtime.maps.stage == 'idle'
+
+
+def test_new_measured_request_can_replace_settled_failed_localization(runtime):
+    runtime.node.refresh(); assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
+    runtime.maps.fail('SEED_INNOVATION_REJECTED: previous measured pose')
+    old_token = runtime.maps.token
+    goal = request(runtime, request_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    goal.measured_pose = True
+    assert runtime._map_accept(goal) == GoalResponse.ACCEPT
+    assert runtime.maps.token != old_token and runtime.maps.hold
+    run_until(runtime, lambda: runtime.maps.stage == 'ready')
+    assert len(runtime.node.seeds) == 1 and runtime.commands_allowed
+
+
+def test_invalid_retry_preserves_failed_transaction_and_hold(runtime):
+    runtime.node.refresh(); runtime._map_accept(request(runtime))
+    runtime.maps.fail('previous localization failed')
+    old_token = runtime.maps.token
+    goal = request(runtime, request_id='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
+    goal.pose.pose.position.x = -100.
+    assert runtime._map_accept(goal) == GoalResponse.REJECT
+    assert runtime.maps.stage == 'failed' and runtime.maps.token == old_token
+    assert runtime.maps.hold
+
+
+def test_missing_idle_hint_accepts_a_hold_then_waits_before_lifecycle_writes(runtime):
+    runtime.node.refresh(); runtime._navigation_idle_at = None
+    runtime._navigation_idle.service_is_ready = lambda: False
+    assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
+    for _ in range(3): step(runtime)
+    assert runtime.maps.hold and not runtime.commands_allowed
+    assert runtime._navigation.calls == [] and runtime._change.calls == []
+    runtime._navigation_idle.service_is_ready = lambda: True
+    run_until(runtime, lambda: runtime.maps.stage == 'ready')
+    assert len(runtime.node.seeds) == 1
+
+
+def test_known_epoch_failure_clears_only_after_confirmed_amcl_activation(runtime):
+    runtime.recovery.stage = EpochRecovery.WAIT_RESET
+    runtime._failed = True
+    runtime.node.refresh()
+    assert runtime._map_accept(request(runtime)) == GoalResponse.ACCEPT
+    run_until(runtime, lambda: runtime._map_step == 'activate')
+    assert runtime._failed
+    run_until(runtime, lambda: runtime._map_step == 'readback')
+    assert not runtime._failed and runtime.maps.hold
+    run_until(runtime, lambda: runtime.maps.stage == 'ready')
+
+
+def test_pose_during_owned_undock_requests_revocation_without_starting_map_mutation(runtime):
+    runtime.undock_hold = True
+    runtime.node._undock_turn = Mock()
+    assert runtime._map_accept(request(runtime)) == GoalResponse.REJECT
+    runtime.node._undock_turn.revoke.assert_called_once()
+    assert runtime.maps.stage == 'idle' and runtime._navigation.calls == []
+
+
+@pytest.mark.parametrize('conflict', ['moving', 'stale', 'nonfinite', 'hardware', 'navigation'])
+def test_recovery_admission_still_refuses_unsafe_or_owned_state(runtime, conflict):
+    runtime.node.refresh()
+    if conflict == 'moving': runtime.node._vx = .01
+    if conflict == 'stale': runtime.node._pose_at = 0.
+    if conflict == 'nonfinite': runtime.node._vth = float('nan')
+    if conflict == 'hardware': runtime.node._undock_goal_reserved = True
+    if conflict == 'navigation': runtime._navigation_status = True
+    assert runtime._map_accept(request(runtime)) == GoalResponse.REJECT
+    assert runtime.maps.stage == 'idle' and runtime.node.seeds == []
 
 
 

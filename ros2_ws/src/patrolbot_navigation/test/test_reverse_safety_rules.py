@@ -402,9 +402,9 @@ class RecoveryTreeTest(unittest.TestCase):
                 path.read_text(encoding='utf-8'), path.name)
             self.assertTrue(all_ok(checks), (path.name, failed(checks)))
 
-    def test_recovery_order_is_clearing_backup_spin_wait(self):
+    def test_recovery_order_is_backup_clearing_spin_wait(self):
         self.assertEqual(
-            RECOVERY_ORDER, ('ClearingActions', 'BackUp', 'Spin', 'Wait'))
+            RECOVERY_ORDER, ('BackUp', 'ClearingActions', 'Spin', 'Wait'))
 
     def test_spin_before_backup_fails(self):
         path = TREE_DIR / 'navigate_recovery_always_try.xml'

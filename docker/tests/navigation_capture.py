@@ -1,6 +1,14 @@
 """Assertions shared by isolated Nav2 integration and offline regression tests."""
 
 
+def world_pose_at(samples, acquired_at):
+    from patrolbot_bridge.pose_innovation import OdomHistory
+    history = OdomHistory()
+    for sample in samples:
+        history.add(round(sample['time'] * 1e9), sample['world_pose'], 'plant-world')
+    return history.at(round(acquired_at * 1e9), 'plant-world')
+
+
 def validate_outcome(capture):
     scenario = capture['scenario']
     if scenario in ('cancel', 'progress-failure', 'bounded-stall-cancel'):
@@ -28,12 +36,15 @@ def validate_outcome(capture):
         assert capture['status'] == 6, 'outside-map goal did not abort'
         assert capture['case_elapsed_s'] <= 120., 'original case budget exceeded'
         assert capture['planner_failure_observed'], 'actual planner failure not observed'
-        assert capture['actual_recovery_stages'] == ['backup', 'spin', 'wait'] * 2, 'full behavior sequence missing'
-        assert capture['outer_recovery_stages'] == ['clear', 'backup', 'spin', 'wait'] * 2 + ['clear'], 'full outer sequence missing'
-        assert capture['full_outer_clears'] == 3, 'full outer clearing sequence missing'
-        assert capture['navigate_error_code'] != 0, 'terminal planner error code missing'
-        assert capture['actual_backup_motion'] and capture['actual_spin_motion'], 'recovery feedback motion missing'
-        assert capture['drive_nonzero'] and capture['stopped'], 'plant motion or terminal stop missing'
+        assert capture['actual_recovery_stages'] == [], 'failed planning started behavior recovery'
+        assert capture['outer_recovery_stages'] == [], 'failed planning entered outer recovery'
+        assert capture['full_outer_clears'] == 0, 'failed planning entered outer clearing'
+        expected_code = 304 if capture.get('tree') == 'through-poses' else 204
+        assert capture['navigate_error_code'] == expected_code, 'terminal planner error code changed'
+        assert 'outside' in capture['navigate_error_message'].lower(), 'planner exception detail missing'
+        assert not capture['actual_backup_motion'] and not capture['actual_spin_motion'], 'failed planning moved the plant'
+        assert not capture['drive_nonzero'] and capture['stopped'], 'failed planning commanded motion'
+        assert capture['distance_m'] == 0., 'failed planning displaced the plant'
         assert capture['terminal_observation_s'] >= .6, 'terminal observation incomplete'
         assert capture['terminal_feedback_fresh'], 'no stopped feedback after terminal status'
         baseline = capture['terminal_latched_drive']

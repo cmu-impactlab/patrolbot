@@ -41,6 +41,10 @@ bool dock_state_valid
 uint8 dock_phase
 string dock_phase_name
 bool undock_active
+# A bounded bridge-owned turn after a correlated successful hardware reverse.
+# This does not authorize navigation or teleop without localization.
+bool undock_turn_active
+string undock_turn_goal_id
 uint16 undock_release_attempts
 float32 minimum_rear_range
 bool rear_sonar_usable
@@ -64,6 +68,9 @@ bool localization_recovery_required
 string localization_recovery_stage
 # Seed barrier used to reject a cached AMCL result from before recovery.
 int64 localization_seed_stamp_ns
+# Latest AMCL source stamp accepted by the bridge's current seed/innovation checks.
+# Zero while recovery holds motion; receipt of raw /amcl_pose alone is insufficient.
+int64 localization_pose_stamp_ns
 
 # Last map verified in map_server and AMCL; empty means unknown, not Floor 2.
 string map_id

@@ -254,3 +254,48 @@ exact candidate image with `--network none` and `PATROLBOT_ISOLATED_TEST=1` befo
 deployment. A live supervised measured seed and independent scan/map wall
 alignment remain required; do not widen readiness gates or repeat seeds to
 obtain acceptance.
+
+
+## Goal-owned stationary refresh and blocked-start planning
+
+`0018-stationary-goal-planning.patch` follows the existing path-UUID patch 0017.
+It rebuilds `nav2_navfn_planner`, `nav2_planner`, `nav2_behavior_tree`, and
+`nav2_bt_navigator` against the regenerated PatrolBot interfaces. Navfn checks
+its rounded start and four exits under the costmap mutex before clearing that
+cell; a trapped occupied start raises the existing `StartOccupied` exception.
+The planner preserves exception messages in its action results.
+
+The production trees use a goal-aware localization decorator and a path guard.
+The decorator shares one 5-second stationary refresh budget between stale-age
+admission and single-goal error 205, stored against the accepted native UUID.
+It requires 0.5 seconds of fresh, continuous stationary odometry before sending
+one `/request_nomotion_update`, then waits for a newer estimate acknowledged by
+the bridge's existing localization checks. A bounded pose cache preserves the
+last accepted fresh estimate while a newer sample awaits that acknowledgment.
+Covariance, quaternion, map/seed, epoch/session and hardware checks remain gates.
+Through-poses error 305 and persistent timeout 207/307 cannot enter motion
+recovery. The existing single contextual costmap clear/retry is retained.
+
+`GetNavigationPath` returns path/stage/error only for its active requested UUID.
+Failed planning, refresh, context invalidation and goal completion withdraw path
+evidence. The follower waits without a path, including during a failed replan's
+contextual retry; ordinary controller recovery from a valid path is retained.
+Native planning status is copied before feedback TF lookup, so missing TF cannot
+keep an old path in the query cache.
+
+Run `docker/tests/integration_stationary_goal.py` for each `--mode` and both
+`--tree to-pose` and `--tree through-poses` in a network-none candidate container
+with `PATROLBOT_ISOLATED_TEST=1` and an isolated ROS domain of at least 90. The
+fixture uses the installed production trees and libraries. It covers refresh
+budget/retry, persistent blocked/timeout failures, failed replanning, normal
+controller recovery, cancellation/replacement/late replies, retained AMCL QoS,
+coordinator acknowledgment delay, and invalid or missing localization/odometry.
+`integration_navigation_path.py` separately verifies UUID ownership, unknown
+distance before a path, forged-path rejection, and lifecycle cleanup. The native
+captured-grid regression is documented in `docker/tests/navfn_captured_grid`.
+
+These synthetic tests establish software behavior only. Retain exact binary,
+plugin, tree, interface and fixture hashes; measured alignment and supervised
+physical navigation remain separate acceptance evidence. Keep dashboard
+age-only admission disabled until the candidate's complete installed stack is
+verified; do not enable `allow_unlocalized` to bypass these gates.

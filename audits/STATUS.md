@@ -9,8 +9,9 @@ See [open work](OPEN.md), [accepted scope](COMPLETED.md), and the
 independent motor-disable control restored over the exact deployed baseline;
 305 frontend, 12 focused Chromium/WebKit cases and isolated installed-image/HTTP
 checks pass. A 60-case responsive-layout probe under a constrained local
-container finished 44 passed / 16 failed on timeouts/slow loads only; a
-single-worker rerun is testing the resource hypothesis. Candidate `9a9235d3`
+container finished 44 passed / 16 failed on timeouts/slow loads only; the
+single-worker rerun of all 16 failing titles passed 28/28, confirming
+contention rather than regression. Candidate `9a9235d3`
 changes static assets only; 49 backend/map files unchanged. Layout/release
 review and fresh rollback/admission/approval remain. Operator reports SBC down;
 no SBC access or robot command. Counts unchanged.

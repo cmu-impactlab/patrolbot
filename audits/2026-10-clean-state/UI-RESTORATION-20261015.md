@@ -68,6 +68,18 @@ resource-contention hypothesis without changing any test or timeout. Full
 layout acceptance still requires either that rerun passing plus an independent
 review, or the standard GitHub browser matrix. No deployment, restart or robot
 command occurred; production remains the previously recorded images/assets.
+
+## Rerun result — contention confirmed, still not deployed
+
+The single-worker rerun finished **28 passed / 0 failed in 7.4 minutes**: all
+seven iPhone, five iPad, eight desktop-Chromium and eight desktop-WebKit titles
+that had failed under three workers now pass with the same code, tests and
+timeouts. The earlier 16 failures were resource contention, not a layout
+regression. Combined with the 44 that passed under contention, all 60 probed
+layout cases have now passed in the isolated container. The complete
+responsive matrix (all presets/roles/widths) still awaits either the standard
+GitHub browser run or a full local pass; that and release review, fresh
+rollback verification and explicit approval remain before any activation.
 Application base: `sha256:04a464df6668b2197795ed965f4c1704f180a7b08bf733dcd2086af47e9240bc`.
 Frontend tree: `13845994ba5e6ffb996f82683c23bb45c45155d8b82e129eb2ee1d95acfd40c6`.
 

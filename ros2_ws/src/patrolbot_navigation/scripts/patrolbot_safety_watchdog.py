@@ -26,6 +26,17 @@ from safety_policy import evaluate_safety, odometry_values_finite
 from sensor_msgs.msg import BatteryState, LaserScan
 
 
+def undock_turn_owned(message):
+    goal = getattr(message, 'undock_turn_goal_id', '')
+    return bool(getattr(message, 'undock_turn_active', False)
+                and len(goal) == 32 and all(c in '0123456789abcdef' for c in goal)
+                and message.link_connected and message.hardware_state_valid
+                and getattr(message, 'odom_epoch_valid', False)
+                and message.motors_enabled and message.dock_state_valid
+                and message.dock_state == 'CLEAR_CONFIRMED'
+                and not message.undock_active)
+
+
 class SafetyWatchdog(Node):
     def __init__(self):
         super().__init__('patrolbot_safety_watchdog')
@@ -118,10 +129,12 @@ class SafetyWatchdog(Node):
 
     def _base_state_cb(self, message):
         self._last_base_state = self._now()
+        # 20261014: localization recovery no longer holds manual control.
+        # A deadman-held human drives with eyes open; autonomy stays blocked
+        # at the bridge (commands_allowed) and dashboard gate until re-seed.
         self._hardware_state_valid = bool(
             message.hardware_state_valid
-            and getattr(message, 'odom_epoch_valid', False)
-            and not getattr(message, 'localization_recovery_required', True))
+            and getattr(message, "odom_epoch_valid", False))
         self._fault_flags = int(message.fault_flags)
         self._estop_pressed = bool(message.estop_pressed)
         self._bumpers_valid = bool(message.bumpers_valid)

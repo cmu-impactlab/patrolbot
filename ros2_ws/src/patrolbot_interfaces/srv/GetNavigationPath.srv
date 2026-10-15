@@ -1,0 +1,5 @@
+# Query the navigator path for this exact NavigateToPose/ThroughPoses action.
+unique_identifier_msgs/UUID goal_id
+---
+bool active
+nav_msgs/Path path

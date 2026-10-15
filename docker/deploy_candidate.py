@@ -128,6 +128,14 @@ else:
     return remote(['python3', '-'], input=variables + '\n' + script, timeout=None)
 
 
+def require_supported_rollout():
+    """Retain historical transaction tests, but offer no unsafe CLI override."""
+    raise RuntimeError(
+        'Legacy shared-image --apply is retired by the October 15 off-device '
+        'backup policy. Use a reviewed per-role release/rollback procedure; '
+        'no device mutation was attempted.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manifest', type=Path, required=True)
@@ -135,6 +143,8 @@ def main():
     parser.add_argument('--soak-container', required=True)
     parser.add_argument('--apply', action='store_true')
     args = parser.parse_args()
+    if args.apply:
+        require_supported_rollout()
     manifest = json.loads(args.manifest.read_text())
     payload = args.payload.read_bytes()
     validate_payload(payload, manifest)

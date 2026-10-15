@@ -8,10 +8,17 @@
 **/.claude/
 **/.codex/
 
-# Audit records: local working copy, deliberately not published.
-# The docs site must stand alone without these (see
-# docs/contributing/documentation-standards.md).
-/audits/
+# Current status and sanitized cleanup evidence are versioned. Historical raw
+# captures remain private until individually reviewed for publication.
+/audits/*
+!/audits/STATUS.md
+!/audits/OPEN.md
+!/audits/COMPLETED.md
+!/audits/2026-10-clean-state/
+!/AGENTS.md
+!/TODO.md
+!/SKILLS/
+!/SKILLS/*.md
 
 /misc/
 # Live SSHFS mount points

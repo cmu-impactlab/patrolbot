@@ -1,0 +1,394 @@
+{
+  "schema_version": 1,
+  "archive_root": "backups/20261015T082506Z-clean-state-review/device-archives",
+  "private": true,
+  "remote_copies_retired": true,
+  "verification": [
+    "remote-stream SHA256 equals local SHA256",
+    "exact tar member path set",
+    "per-file SHA256",
+    "mode/UID/GID/mtime and symlink target",
+    "fresh recheck before exact-path retirement"
+  ],
+  "limitations": [
+    "SBC root-only process inspection unavailable; application/config/mount checks passed.",
+    "Only one private off-device archive location established; second independent encrypted copy recommended."
+  ],
+  "archives": [
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261013-path-feedback.tar",
+      "bytes": 10240,
+      "entries": 4,
+      "paths": [
+        "backups/20261013-path-feedback"
+      ],
+      "sha256": "b1621c43d3a942ee699a4efae582ab7566d3eecf9805288a86044a3a001da99a"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261013-path-feedback-r2.tar",
+      "bytes": 10240,
+      "entries": 4,
+      "paths": [
+        "backups/20261013-path-feedback-r2"
+      ],
+      "sha256": "ce5b603ca6884dd7dec38eb4153651bead02b83ef8f6d682b7b302627d55f870"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261013T101712Z-covariance-roundoff.tar",
+      "bytes": 2795520,
+      "entries": 9,
+      "paths": [
+        "backups/20261013T101712Z-covariance-roundoff"
+      ],
+      "sha256": "ec0a4e8dfe47d3c8b063fe0e44f1248de8dad49ccb51a7d4c13812f087163972"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261013T144042Z-clean-baseline.tar",
+      "bytes": 2795520,
+      "entries": 8,
+      "paths": [
+        "backups/20261013T144042Z-clean-baseline"
+      ],
+      "sha256": "bcd7713fa315e16ac0935fa25c99c58f6831c32898ac5a6e63b2ecd1372d37fe"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261013T174806Z-motor-dock.tar",
+      "bytes": 133120,
+      "entries": 11,
+      "paths": [
+        "backups/20261013T174806Z-motor-dock"
+      ],
+      "sha256": "17b7999cea7b758e3614cc14d339100f47375ebb771212717098844ff6407005"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261014-amcl-retune.tar",
+      "bytes": 10240,
+      "entries": 4,
+      "paths": [
+        "backups/20261014-amcl-retune"
+      ],
+      "sha256": "733c8ecbca85d2b30fb07313b1739f864859711ac74be96c23d5d76fd5bd05f1"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261014-undock.tar",
+      "bytes": 30720,
+      "entries": 9,
+      "paths": [
+        "backups/20261014-undock"
+      ],
+      "sha256": "1946d7e86d3dea248262bd6656e9e889e89a43a6aa32749204b2dc9c111cc392"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261014-undock-map-r3.tar",
+      "bytes": 40960,
+      "entries": 10,
+      "paths": [
+        "backups/20261014-undock-map-r3"
+      ],
+      "sha256": "0d3dfb490e77127a1fdcad303dd2e5cfe76279689324f3586aa299f7f29e8f31"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261014-undock-persistence-r4.tar",
+      "bytes": 30720,
+      "entries": 9,
+      "paths": [
+        "backups/20261014-undock-persistence-r4"
+      ],
+      "sha256": "985ffec85ce3973f0c32c8ff83e219e67c5808efb00165955d7941871495b27a"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261014T214849Z-xml-first.tar",
+      "bytes": 102400,
+      "entries": 17,
+      "paths": [
+        "backups/20261014T214849Z-xml-first"
+      ],
+      "sha256": "aa9aff56696706eb6295738b9ce87f3fc54ae75f121b35fa5c3b80af27eb8a3b"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--20261014T220618Z-undock-wording.tar",
+      "bytes": 61440,
+      "entries": 9,
+      "paths": [
+        "backups/20261014T220618Z-undock-wording"
+      ],
+      "sha256": "340a37d34896811ab357d8b75acfea445af3457ea782e0e009090747a3263f0e"
+    },
+    {
+      "host": "robot-pi2",
+      "archive": "robot-pi2--docker-old-backup-files.tar",
+      "bytes": 40960,
+      "entries": 6,
+      "paths": [
+        "patrolbot-repo/docker/.env.bak.20260730",
+        "patrolbot-repo/docker/.env.bak.20260730T1335",
+        "patrolbot-repo/docker/.env.pre-direct-20260729T1424",
+        "patrolbot-repo/docker/Dockerfile.bak",
+        "patrolbot-repo/docker/docker-compose.yml.pre-web-commands-20260729T1429",
+        "patrolbot-repo/docker/status.sh.bak.20260730"
+      ],
+      "sha256": "212c87c64121c1414feacaa19da9f1754138c72cfb80cb60748336d90b9a6197"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20260925T152115Z-epoch.tar",
+      "bytes": 184320,
+      "entries": 4,
+      "paths": [
+        "backups/20260925T152115Z-epoch"
+      ],
+      "sha256": "a8c692ca6af47b1511906fc7f0b67624b9fdb9df31fa05758ec517ca5a8f271b"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261003T195204Z-system-reset.tar",
+      "bytes": 10240,
+      "entries": 3,
+      "paths": [
+        "backups/20261003T195204Z-system-reset"
+      ],
+      "sha256": "6350794a02c5b172353ca7eaa5645bd7b8759537eddfd80cb2773062a248c6a4"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261011T220323Z-motor-toggle.tar",
+      "bytes": 184320,
+      "entries": 4,
+      "paths": [
+        "backups/20261011T220323Z-motor-toggle"
+      ],
+      "sha256": "c8fb84c682241861b757305d8d1874a928bad453b76417aa31ed01ceaad89ac0"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261012T101200Z-lidar-release.tar",
+      "bytes": 184320,
+      "entries": 4,
+      "paths": [
+        "backups/20261012T101200Z-lidar-release"
+      ],
+      "sha256": "d179e53357d92da39c0573b1b9906a24ae32cc9c6ffd5ed5a3a0bee6d57f8ac8"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261012T104400Z-uarcs-readback.tar",
+      "bytes": 20480,
+      "entries": 3,
+      "paths": [
+        "backups/20261012T104400Z-uarcs-readback"
+      ],
+      "sha256": "fe53f9cfb0937835a0dff75ac26cdcb141b7f3f86b51d1cb7d2052e1674c553f"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261012T105200Z-uarcs-boot-on.tar",
+      "bytes": 51200,
+      "entries": 5,
+      "paths": [
+        "backups/20261012T105200Z-uarcs-boot-on"
+      ],
+      "sha256": "58bcd85a861ffccecf0d350a27f759b023f5c34bbadc0948c9167d3d7f20a568"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261013-motor-dock-before.tar",
+      "bytes": 204800,
+      "entries": 4,
+      "paths": [
+        "backups/20261013-motor-dock-before"
+      ],
+      "sha256": "ad2c36edf15baf6f25979679e93e4249a2c8df2f3b1c3f66ff5a8ffdbf843882"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261014-undock.tar",
+      "bytes": 215040,
+      "entries": 14,
+      "paths": [
+        "backups/20261014-undock"
+      ],
+      "sha256": "e00d2d8f7e312bd57c43de0412b06a85c54dae533d668b80a30713d26bea9fbe"
+    },
+    {
+      "host": "robot-sbc",
+      "archive": "robot-sbc--20261014-undock-persistence-r4.tar",
+      "bytes": 215040,
+      "entries": 14,
+      "paths": [
+        "backups/20261014-undock-persistence-r4"
+      ],
+      "sha256": "255e038ed39c37d7f9ab73d946902e196d19c1c93f9a994e8139e302a609d7b5"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261009-floor66.tar",
+      "bytes": 103434240,
+      "entries": 5,
+      "paths": [
+        "backups/20261009-floor66"
+      ],
+      "sha256": "9355aac6f56100dea00663d54ee02358ae4bf2d3b43ec729c94f65bf35fd73dc"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261010-resume.tar",
+      "bytes": 61440,
+      "entries": 8,
+      "paths": [
+        "backups/20261010-resume"
+      ],
+      "sha256": "7b26e1dfd5ec8efa99d18c5f33b4ba29ac318008004ea48fa3c8d9786084702a"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261011T192500Z-reset-visible.tar",
+      "bytes": 129280000,
+      "entries": 7,
+      "paths": [
+        "backups/20261011T192500Z-reset-visible"
+      ],
+      "sha256": "6592bb6bb5411d0b236b6a60719b7ad260a2140dc1914d3de01b87a72ca4ac77"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261011T193300Z-reset-pose-independent.tar",
+      "bytes": 92160,
+      "entries": 14,
+      "paths": [
+        "backups/20261011T193300Z-reset-pose-independent"
+      ],
+      "sha256": "f783d6a41885cfa4ed072e55ad2bf2d7f15e96e00b3474a3e9f60c2e9ab6e9b1"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261011T195200Z-issue22.tar",
+      "bytes": 51200,
+      "entries": 9,
+      "paths": [
+        "backups/20261011T195200Z-issue22"
+      ],
+      "sha256": "0156c6ee0f252f18bb038e9ced19dfaff20b200e7dd6d5a65a39a937c25ff355"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261011T205357Z-emergency-reset.tar",
+      "bytes": 129443840,
+      "entries": 33,
+      "paths": [
+        "backups/20261011T205357Z-emergency-reset"
+      ],
+      "sha256": "2b2928a5877c39ef2cda961935c84743d9f1142fef0a20f32a7c33548320f998"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261011T220323Z-motor-toggle.tar",
+      "bytes": 129495040,
+      "entries": 6,
+      "paths": [
+        "backups/20261011T220323Z-motor-toggle"
+      ],
+      "sha256": "453d353f9f917fa62a685ccd0a634043a170c1dbce87da85a40e49183b46d1c4"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261012T101200Z-lidar-release.tar",
+      "bytes": 129495040,
+      "entries": 6,
+      "paths": [
+        "backups/20261012T101200Z-lidar-release"
+      ],
+      "sha256": "822b41cda368b77619b409d9b0fe7f8245f0af9b1dec3af9cbdbcc4ca089ef01"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261013-ctrl-measured.tar",
+      "bytes": 1658880,
+      "entries": 40,
+      "paths": [
+        "backups/20261013-ctrl-measured"
+      ],
+      "sha256": "1080de0c1e5d817c6a039812bd37c0ad8eeec5dd78c251533b8403d67a248a68"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261013-path-feedback.tar",
+      "bytes": 1781760,
+      "entries": 44,
+      "paths": [
+        "backups/20261013-path-feedback"
+      ],
+      "sha256": "288d0d47e0a6e8d4464e80b9f5d79125d34a3528c819b4177ae97ec18fea000c"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261013T095426Z-localization-release.tar",
+      "bytes": 153538560,
+      "entries": 7,
+      "paths": [
+        "backups/20261013T095426Z-localization-release"
+      ],
+      "sha256": "df0838d7b6a701c596fc275923bf767a722bc7c3eedfdb41cc1e4f550e33396e"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261013T144042Z-clean-baseline.tar",
+      "bytes": 174981120,
+      "entries": 8,
+      "paths": [
+        "backups/20261013T144042Z-clean-baseline"
+      ],
+      "sha256": "fdd23db17ed026647ffbbb8a5236fdae8912cab71fd2aa0d4c3e5a3ec853815a"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261013T150422Z-motor-disable-final.tar",
+      "bytes": 177418240,
+      "entries": 8,
+      "paths": [
+        "backups/20261013T150422Z-motor-disable-final"
+      ],
+      "sha256": "0e73e1115a31f8863d5ebe9f66fb7d5a6766a96b3dbdc2834db24750ca3dd268"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261013T163901Z-battery-history-index.tar",
+      "bytes": 184985600,
+      "entries": 8,
+      "paths": [
+        "backups/20261013T163901Z-battery-history-index"
+      ],
+      "sha256": "aec8868cf705a35719f055f8f9284379882984706bc638e4974baebe01665332"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261014-undock.tar",
+      "bytes": 1904640,
+      "entries": 48,
+      "paths": [
+        "backups/20261014-undock"
+      ],
+      "sha256": "918a4319bdbff393bd6ab82177f48cfdd6138c63f63ef9b62778e497484110aa"
+    },
+    {
+      "host": "robot-dashboard",
+      "archive": "robot-dashboard--20261014-undock-map-r3.tar",
+      "bytes": 1054720,
+      "entries": 20,
+      "paths": [
+        "backups/20261014-undock-map-r3"
+      ],
+      "sha256": "d3255117050536c02b1f4da9ed2210f6edc9bb56608645b3718f92fb427ecb98"
+    }
+  ]
+}

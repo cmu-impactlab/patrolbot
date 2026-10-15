@@ -110,7 +110,10 @@ def test_transaction_outcomes():
             arguments = ['deploy', '--manifest', str(manifest_path), '--payload', str(payload),
                          '--soak-container', 'test', '--apply']
             failure = None
-            with patch.object(deploy, 'REPO', repo), patch.object(sys, 'argv', arguments), \
+            # Historical transaction semantics remain testable without enabling
+            # an actual CLI bypass for the retired shared-image workflow.
+            with patch.object(deploy, 'require_supported_rollout'), \
+                    patch.object(deploy, 'REPO', repo), patch.object(sys, 'argv', arguments), \
                     patch.object(deploy, 'validate_payload'), patch.object(deploy, 'remote', remote), \
                     patch.object(deploy, 'container_file', return_value=b'fixture'), \
                     patch.object(deploy, 'apply_remote', apply), \
@@ -132,6 +135,20 @@ def test_transaction_outcomes():
             print('PASS entry point', case)
 
 
+def test_retired_apply_refuses_before_files_or_remote_access():
+    arguments = ['deploy', '--manifest', '/missing', '--payload', '/missing',
+                 '--soak-container', 'unused', '--apply']
+    with patch.object(sys, 'argv', arguments), patch.object(deploy, 'remote') as remote:
+        try:
+            deploy.main()
+        except RuntimeError as error:
+            assert 'retired' in str(error)
+        else:
+            raise AssertionError('legacy apply did not refuse')
+        remote.assert_not_called()
+
+
 if __name__ == '__main__':
     test_payload_and_bootstrap()
     test_transaction_outcomes()
+    test_retired_apply_refuses_before_files_or_remote_access()

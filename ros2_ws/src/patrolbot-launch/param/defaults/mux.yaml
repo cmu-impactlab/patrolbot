@@ -6,6 +6,11 @@ cmd_vel_mux:             # Must match the 'name' in your launch file
         topic: "input/safety_controller"
         timeout: 0.2
         priority: 10
+      undock_turn:
+        # The bridge renews this only for its owned, collision-filtered Spin.
+        topic: "input/undock_turn"
+        timeout: 0.25
+        priority: 9
       teleop:
         topic: "input/teleop"
         timeout: 1.0

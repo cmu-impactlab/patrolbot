@@ -1,0 +1,177 @@
+name: patrolbot
+
+# One-line ROS 2 LAN exposure policy for every service below.
+#   LOCALHOST = Pi/container-local discovery only (safer default)
+#   SUBNET    = expose the full unauthenticated ROS graph to the LAN
+x-patrolbot-config:
+  ros_discovery_range: &ros_discovery_range SUBNET
+
+x-common: &common
+  image: ${PATROLBOT_IMAGE:?set PATROLBOT_IMAGE in docker/.env or pass --env-file docker/.env}
+  network_mode: host
+  ipc: host
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 20s
+  security_opt:
+    - no-new-privileges:true
+  environment:
+    ROS_DOMAIN_ID: "0"
+    RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+    ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/patrolbot-healthcheck"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 90s
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "5"
+
+services:
+  bringup:
+    <<: *common
+    container_name: patrolbot-bringup
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
+      PATROLBOT_ROLE: bringup
+    command: ["ros2", "launch", "patrolbot-launch", "bringup.xml"]
+    volumes:
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot-launch:/opt/patrolbot_ws/src/patrolbot-launch:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bringup:/root/.ros/log
+
+  bridge:
+    <<: *common
+    container_name: patrolbot-bridge
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
+      # Keep DDS network I/O out of the bridge's sensor publisher workers. Fast
+      # DDS defaults to synchronous publication, which can block publish() on a
+      # stalled DDS reader and starve both /odom and /scan.
+      RMW_FASTRTPS_PUBLICATION_MODE: ASYNCHRONOUS
+      PATROLBOT_ROLE: bridge
+    command:
+      - ros2
+      - run
+      - patrolbot_bridge
+      - bridge_node
+      - --ros-args
+      - --params-file
+      - /opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml
+    volumes:
+      - patrolbot-state:/var/lib/patrolbot
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
+
+  # Read-only telemetry bridge for the web dashboard (patrolbot-dashboard
+  # repo). Opt-in: it only starts when named explicitly —
+  #   docker compose up -d web-bridge
+  # It subscribes to existing topics, opens NO SBC connections, and does not
+  # publish unless WEB_BRIDGE_ENABLE_COMMANDS=1 is added deliberately.
+  # The stock image lacks python3-websockets/psutil; use the derived image
+  # built on the Pi (see patrolbot-dashboard/docs/PI_DEPLOY.md §2).
+  web-bridge:
+    <<: *common
+    image: ${WEB_BRIDGE_IMAGE:-patrolbot-web-bridge:dev}
+    container_name: patrolbot-web-bridge
+    profiles: ["web-bridge"]
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
+      PATROLBOT_ROLE: web-bridge
+      # Keep the opt-in profile from making unrelated core-stack Compose
+      # operations require dashboard secrets. The shell command below enforces
+      # both values only when this profile is actually started.
+      WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:-}"
+      WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:-}"
+      WEB_BRIDGE_ENABLE_COMMANDS: "${WEB_BRIDGE_ENABLE_COMMANDS:-0}"
+    # The shared healthcheck script knows the ROS roles, not this bridge.
+    healthcheck:
+      disable: true
+    entrypoint: ["bash", "-lc"]
+    command:
+      - >-
+        : "$${WEB_BRIDGE_SERVER_URL:?set WEB_BRIDGE_SERVER_URL in docker/.env}" &&
+        : "$${WEB_BRIDGE_TOKEN:?set WEB_BRIDGE_TOKEN in docker/.env}" &&
+        source /opt/ros/jazzy/setup.bash &&
+        source /opt/patrolbot_ws/install/setup.bash 2>/dev/null;
+        export PYTHONPATH=/opt/web_bridge:$$PYTHONPATH &&
+        python3 -m patrolbot_web_bridge.bridge_node
+        --ros-args -p server_url:="$$WEB_BRIDGE_SERVER_URL" -p token:="$$WEB_BRIDGE_TOKEN"
+    volumes:
+      - ${WEB_BRIDGE_ROOT:-/home/ubuntu/patrolbot-dashboard}/ros2_ws/src/patrolbot_web_bridge:/opt/web_bridge:ro
+
+  gimbal:
+    <<: *common
+    container_name: patrolbot-gimbal
+    # Opt-in only. The camera gimbal must never come up with the navigation
+    # stack: it is a peripheral, and a missing or faulty gimbal board must not
+    # be able to delay or disturb the robot's motion stack in any way.
+    #   docker compose --profile gimbal up -d gimbal
+    profiles: ["gimbal"]
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
+      PATROLBOT_ROLE: gimbal
+    # The shared healthcheck script knows the navigation roles, not this one.
+    healthcheck:
+      disable: true
+    command:
+      - ros2
+      - launch
+      - patrolbot_gimbal
+      - gimbal.launch.py
+      - "port:=${PATROLBOT_GIMBAL_PORT:-/dev/patrolbot_gimbal}"
+    volumes:
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_gimbal:/opt/patrolbot_ws/src/patrolbot_gimbal:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/gimbal:/root/.ros/log
+      # Read-only: this container reads /joy from the shared ROS graph and
+      # never opens an input device itself.
+      - /dev/input:/dev/input:ro
+      # The gimbal's own serial port, via the udev symlink.
+      - ${PATROLBOT_GIMBAL_PORT:-/dev/patrolbot_gimbal}:${PATROLBOT_GIMBAL_PORT:-/dev/patrolbot_gimbal}
+    device_cgroup_rules:
+      - "c 13:* r"        # input devices, read
+      - "c 166:* rwm"     # USB CDC ACM
+      - "c 188:* rwm"     # USB serial
+
+  navigation:
+    <<: *common
+    image: patrolbot:reset-bt-ready-20261015-arm64
+    container_name: patrolbot-navigation
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        ROS_DISTRO: jazzy
+        PATROLBOT_REVISION: ${PATROLBOT_REVISION:?set PATROLBOT_REVISION in docker/.env or pass --env-file docker/.env}
+        PATROLBOT_SOURCE_SHA256: ${PATROLBOT_SOURCE_SHA256:-unknown}
+    environment:
+      ROS_DOMAIN_ID: "0"
+      RMW_IMPLEMENTATION: rmw_fastrtps_cpp
+      ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
+      PATROLBOT_ROLE: navigation
+      # SDL's libudev netlink monitor never joins a multicast group without /run/udev,
+      # so no hotplug uevent arrives and joy_node only enumerates once at startup.
+      # Disable udev to poll /dev/input every ~3s and re-detect replugged gamepads.
+      SDL_JOYSTICK_DISABLE_UDEV: "1"
+    command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
+    volumes:
+      - patrolbot-state:/var/lib/patrolbot:ro
+      - /home/ubuntu/patrolbot-reset-bt-ready-20261015-214500Z/private-bind/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/navigation:/root/.ros/log
+      - /dev/input:/dev/input:rw
+    device_cgroup_rules:
+      - "c 13:* rw"
+
+volumes:
+  patrolbot-state:

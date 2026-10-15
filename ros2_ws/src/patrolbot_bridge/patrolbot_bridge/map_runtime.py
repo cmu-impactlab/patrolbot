@@ -116,11 +116,21 @@ class MapRuntimeMixin:
 
     def _map_accept(self, request):
         with self.lock:
+            if self.undock_hold:
+                self.node._undock_turn.revoke('map localization requested during undock')
+                return GoalResponse.REJECT
             if (not self.node._lidar_ready() or self._map_error or self.maps is None or self._map_goal is not None
-                    or self._future is not None or self._map_future is not None or not self.guard.ready
-                    or self.recovery.stage not in (EpochRecovery.READY, EpochRecovery.WAIT_SEED)
-                    or self._navigation_status or self._navigation_idle_at is None
-                    or not 0 <= time.monotonic() - self._navigation_idle_at <= .5):
+                    or (self._future is not None and self._future_kind != 'read-only')
+                    or self._map_future is not None or not self.guard.ready
+                    or self.recovery.stage not in (EpochRecovery.READY, EpochRecovery.WAIT_SEED,
+                                                   EpochRecovery.WAIT_RESET, EpochRecovery.WAIT_POSE)
+                    or self._navigation_status):
+                self.node.get_logger().warning(
+                    f'Map localization refused: stage={self.recovery.stage} map_stage='
+                    f'{self.maps.stage if self.maps else "unavailable"} '
+                    f'epoch_pending={self._future is not None} epoch_kind={self._future_kind} '
+                    f'map_pending={self._map_future is not None} navigation={self._navigation_status} '
+                    f'map_error={self._map_error}')
                 return GoalResponse.REJECT
             pose = request.pose.pose
             q = pose.orientation
@@ -134,6 +144,11 @@ class MapRuntimeMixin:
             with self.node._state_lock, self.node._pose_lock, self.node._control_lock, self.node._undock_goal_lock:
                 age = max(now-self.node._pose_at, now-self.node._flags_at,
                           now-self.node._charge_state_at)
+                previous_stage = self.maps.stage
+                if previous_stage == 'failed':
+                    # A new operator request may replace a settled failure;
+                    # outstanding mutations were refused above.
+                    self.maps.stage = 'ready'
                 try:
                     self.maps.begin(request.request_id, request.map_id, request.map_revision,
                         (pose.position.x, pose.position.y, 2*math.atan2(q.z,q.w)),
@@ -141,8 +156,17 @@ class MapRuntimeMixin:
                         age, self.node._vx, self.node._vth, self._navigation_status,
                         self.node._undock_active or self.node._undock_goal_reserved,
                         bool(self.node._pending_controls))
-                except ValueError:
+                except ValueError as exc:
+                    self.maps.stage = previous_stage
+                    self.node.get_logger().warning('Map localization refused: ' + str(exc))
                     return GoalResponse.REJECT
+            if self._future is not None:
+                client = (self._localization_active if self._phase == 'wait-localization-manager'
+                          else self._get)
+                client.remove_pending_request(self._future)
+                self._future.cancel()
+                self._future = None
+                self._future_kind = None
             # The shared cmd_vel guard reads this hold under this same lock.
             self._navigation_ready = False
             self._accepted_seed_stamp = None
@@ -154,7 +178,7 @@ class MapRuntimeMixin:
             self._map_refresh_started = None
             self._map_refresh_deadline = None
             self._map_refresh_baseline_stamp = None
-            self._map_step = 'pause'
+            self._map_step = ('wait-navigation-idle' if self.navigation_idle_problem() else 'pause')
             self.node.cmd_vel_callback(Twist())
             self.maps.advance(self.maps.token, 'hold')
             return GoalResponse.ACCEPT
@@ -262,7 +286,10 @@ class MapRuntimeMixin:
     def _tick_map_stage(self):
         tx = self.maps; token = tx.token; step = self._map_step
         ok = lambda r: r.success is True
-        if step in ('pause', 'resume'):
+        if step == 'wait-navigation-idle':
+            if not self.navigation_idle_problem():
+                self._map_step = 'pause'
+        elif step in ('pause', 'resume'):
             request = ManageLifecycleNodes.Request()
             request.command = request.PAUSE if step == 'pause' else request.RESUME
             if self._map_call(self._navigation, request, 'inspect' if step == 'pause' else 'clear-global', ok):
@@ -280,6 +307,7 @@ class MapRuntimeMixin:
                 # Keep the same origin generation; only localization evidence is reset.
                 self.recovery.stage = EpochRecovery.WAIT_RESET
                 self.recovery.reset_complete(self.recovery.token, self.node.get_clock().now().nanoseconds)
+                self._failed = False
                 self.withdraw(reset_odometry=False)
         elif step == 'load':
             if tx.stage == 'reset-amcl': tx.advance(token, 'reset-amcl')

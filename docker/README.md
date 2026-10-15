@@ -106,10 +106,12 @@ or `patrolbot-repo-rollbacks/` trees. They are rollback aids, not active runtime
 state. Keep the two newest snapshots and prune the rest once supervised SBC-on
 acceptance passes:
 
-```bash
-du -sh ~/backups/*
-ls -1dt ~/backups/*/ | tail -n +3 | xargs -r rm -rf   # keep the 2 newest
-```
+**October 15 policy supersedes the keep-two paragraph above.** Durable snapshots
+are archived off-device, with SHA256 plus per-file/metadata verification before
+exact-path retirement. Do not use age-based deletion. Device-local copies may
+exist only during bounded testing/transactions; preserve unresolved outcomes.
+See `docs/operations/source-and-release-state.md` for the current mixed-role
+deployment and its read-only verifier. The legacy rollout `--apply` is disabled.
 
 Do not run Docker and the old bare-metal services simultaneously. Joystick and
 Nav2 goal tests require a clear robot area and an operator at the deadman/E-stop.

@@ -1,5 +1,12 @@
 # Candidate rollout
 
+> **Historical tool, October 15 correction:** check-only inspection remains
+> available; `--apply` now refuses before access/mutation. Its shared-image and
+> keep-two device-snapshot assumptions do not describe the current deployment.
+> Use the per-role manifests and read-only checks in
+> `docs/operations/source-and-release-state.md`. Do not execute the old apply or
+> device-local rollback examples below without a separately reviewed procedure.
+
 Run `deploy_candidate.py` from the workstation with the prescribed Pi SSHFS
 mount available. The default mode checks the payload and completed eight-hour
 soak only. It performs no deployment:

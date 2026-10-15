@@ -1505,6 +1505,8 @@ class PatrolBotBridge(Node):
         """Admit one undock goal at a time, against an SBC that supports it."""
         with self._epoch.lock:
             if not self._epoch.commands_allowed:
+                self.get_logger().error(
+                    'Hardware undock rejected: epoch commands_allowed=False.')
                 return GoalResponse.REJECT
         for name, value in (
                 ('clearance_distance', request.clearance_distance),
@@ -1531,6 +1533,8 @@ class PatrolBotBridge(Node):
             return GoalResponse.REJECT
         with self._epoch.lock, self._undock_goal_lock:
             if not self._lidar_ready():
+                self.get_logger().error(
+                    'Hardware undock rejected: lidar_not_ready.')
                 return GoalResponse.REJECT
             if self._undock_goal_reserved:
                 self.get_logger().error(

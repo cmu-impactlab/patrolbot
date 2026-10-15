@@ -22,7 +22,6 @@ from uuid import uuid4
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
 from patrolbot_dock_manager.epoch_policy import epoch_hardware_ready, lidar_ready
 from patrolbot_dock_manager.contracts import (
@@ -39,7 +38,7 @@ from patrolbot_dock_manager.contracts import (
     transition_allowed,
     validate_goal,
 )
-from patrolbot_interfaces.action import HardwareUndock, Undock
+from patrolbot_interfaces.action import HardwareUndock, Undock, UndockTurn
 from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
 import rclpy
@@ -102,6 +101,7 @@ class DockManager(Node):
         self._path_reason = 'not checked'
         self._other_action_active = {}
         self._owned_spin_goal_id = None
+        self._hardware_goal_id = None
         self._active_correlation_id = ''
         self._last_localization_update_request_at = 0.0
 
@@ -183,8 +183,8 @@ class DockManager(Node):
         self._hardware_undock_client = ActionClient(
             self, HardwareUndock, '/patrolbot/hardware_undock',
             callback_group=self._callbacks)
-        self._spin_client = ActionClient(
-            self, Spin, '/spin', callback_group=self._callbacks)
+        self._turn_client = ActionClient(
+            self, UndockTurn, '/patrolbot/undock_turn', callback_group=self._callbacks)
         self._initial_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10)
         self._readiness_pub = self.create_publisher(
@@ -289,7 +289,7 @@ class DockManager(Node):
         return response
 
     def _readiness_timer(self):
-        snapshot = self._snapshot()
+        snapshot = self._snapshot(for_undock=True)
         now = time.monotonic()
         with self._lock:
             base_age = now - self._base_state_at if self._base_state_at else 1e6
@@ -298,8 +298,7 @@ class DockManager(Node):
             pose_age = (
                 now - self._localization_at if self._localization_at else 1e6)
             state_name = self._state_name
-        failures = precheck_failures(
-            snapshot, require_fresh_localization=False)
+        failures = precheck_failures(snapshot)
         message = DockReadiness()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = 'base_link'
@@ -444,8 +443,11 @@ class DockManager(Node):
         if not request.operator_authorized:
             self.get_logger().error('Undock goal rejected: operator authorization absent.')
             return GoalResponse.REJECT
-        if self._base_state is None or getattr(self._base_state, 'map_id', '') != 'cmuq-floor2':
-            self.get_logger().error('Undock refused: dock coordinates belong to Floor 2.')
+        state = self._snapshot(for_undock=True)
+        if not (state.hardware_state_valid and state.charge_state_valid
+                and state.charge_state > 0 and state.dock_state_valid
+                and state.dock_state == DOCK_DOCKED_CONFIRMED):
+            self.get_logger().error('Undock goal rejected: fresh charging required.')
             return GoalResponse.REJECT
         if request.dock_id != self.get_parameter('dock_id').value:
             self.get_logger().error(
@@ -484,6 +486,7 @@ class DockManager(Node):
         self._hardware_distance = 0.0
         self._hardware_phase = ''
         self._hardware_release_attempts = 0
+        self._hardware_goal_id = None
         initial_charge = -1
         try:
             self._transition('PRECHECK', correlation_id)
@@ -497,16 +500,6 @@ class DockManager(Node):
                     goal_handle, Undock.Result.PRECHECK_FAILED, reason,
                     initial_charge, manual_recovery=False)
             expected_session = self._snapshot().session_generation
-
-            # AMCL can age out while the robot sits still, and the SBC will move
-            # it in a moment, so refresh the estimate before anything moves.
-            self._transition('VERIFY_LOCALIZATION', correlation_id)
-            if not self._wait_for_localization(
-                    goal_handle, 2.0, correlation_id):
-                return self._abort(
-                    goal_handle, Undock.Result.LOCALIZATION_FAILED,
-                    'localization invalid immediately before undocking',
-                    initial_charge, manual_recovery=False)
 
             self._transition('VERIFY_COMMAND_PATH', correlation_id)
             self._refresh_command_path(force=True)
@@ -524,29 +517,21 @@ class DockManager(Node):
             self._transition('HARDWARE_UNDOCK', correlation_id)
             hardware_ok, hardware_reason, hardware_result = (
                 self._run_hardware_undock(goal_handle, correlation_id))
-            hardware_completed_at = time.monotonic()
             traveled = self._hardware_distance
             if not hardware_ok:
+                if hardware_result is None:
+                    # The waiter returns None only for an unavailable server
+                    # or explicit rejection, never an unknown child outcome.
+                    return self._abort(
+                        goal_handle, Undock.Result.REJECTED, hardware_reason,
+                        initial_charge, manual_recovery=False, distance=0.0)
                 code = self._undock_result_code(
                     goal_handle, hardware_result)
                 return self._abort(
                     goal_handle, code, hardware_reason, initial_charge,
                     manual_recovery=True, distance=traveled)
 
-            # Localization is restored BEFORE the handoff gate, because the
-            # gate checks it: the robot has just moved half a metre, so the
-            # pre-undock AMCL sample is necessarily stale by now.
-            self._transition('RESTORE_LOCALIZATION', correlation_id)
-            if not self._wait_for_localization(
-                    goal_handle,
-                    float(self.get_parameter(
-                        'post_undock_localization_timeout').value),
-                    correlation_id, newer_than=hardware_completed_at):
-                return self._abort(
-                    goal_handle, Undock.Result.LOCALIZATION_FAILED,
-                    'localization did not recover after the hardware undock',
-                    initial_charge, manual_recovery=True, distance=traveled)
-
+            self._transition('VERIFY_HANDOFF', correlation_id)
             # The SBC hands off stopped, physically clear, with the motors still
             # live, and its terminal frame says so before the telemetry does:
             # BaseState publishes at 10 Hz and its dock section carries the
@@ -584,6 +569,8 @@ class DockManager(Node):
                 False, traveled)
             goal_handle.succeed()
             return result
+        except ExternalShutdownException:
+            raise
         except Exception as exc:  # Fail closed; action never publishes velocity.
             self.get_logger().error(
                 f'undock={correlation_id} unhandled fail-closed error: {exc}')
@@ -640,43 +627,40 @@ class DockManager(Node):
         if not self._hardware_undock_client.wait_for_server(timeout_sec=3.0):
             return False, 'hardware undock action unavailable', None
         goal = HardwareUndock.Goal()
-        goal.clearance_distance = float(
-            self.get_parameter('undock_clearance_distance').value)
-        goal.reverse_speed = float(
-            self.get_parameter('undock_reverse_speed').value)
+        goal.clearance_distance = float(goal_handle.request.reverse_distance)
+        goal.reverse_speed = float(goal_handle.request.reverse_speed)
         goal.maximum_duration = float(
             self.get_parameter('undock_max_duration').value)
         goal.validation_mode = bool(goal_handle.request.validation_mode)
 
-        send_future = self._hardware_undock_client.send_goal_async(
-            goal, feedback_callback=self._hardware_feedback_callback)
-        if not self._wait_future(send_future, goal_handle, 5.0, correlation_id):
-            return False, 'hardware undock goal acceptance timeout', None
-        hardware_goal = send_future.result()
-        if hardware_goal is None or not hardware_goal.accepted:
+        acceptance_deadline = time.monotonic() + 5.0
+        try:
+            send_future = self._hardware_undock_client.send_goal_async(
+                goal, feedback_callback=self._hardware_feedback_callback)
+        except Exception:
+            send_future = None
+        hardware_goal = self._wait_child_future(
+            send_future, goal_handle, acceptance_deadline, correlation_id)
+        if not hardware_goal.accepted:
             return False, 'hardware undock goal rejected', None
+        self._hardware_goal_id = hardware_goal.goal_id
 
-        result_future = hardware_goal.get_result_async()
-        deadline = time.monotonic() + goal.maximum_duration + 30.0
-        cancel_sent = False
-        while not result_future.done() and time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested and not cancel_sent:
-                hardware_goal.cancel_goal_async()
-                cancel_sent = True
-            self._publish_feedback(goal_handle, deadline, correlation_id)
-            time.sleep(0.05)
-        if not result_future.done():
-            hardware_goal.cancel_goal_async()
-            return False, 'hardware undock produced no result', None
-
-        wrapped = result_future.result()
-        if wrapped is None:
-            return False, 'hardware undock returned no result', None
+        try:
+            result_future = hardware_goal.get_result_async()
+        except Exception:
+            result_future = None
+        deadline = (acceptance_deadline if time.monotonic() >= acceptance_deadline
+                    else time.monotonic() + goal.maximum_duration + 30.0)
+        wrapped = self._wait_child_future(
+            result_future, goal_handle, deadline, correlation_id,
+            child=hardware_goal)
         result = wrapped.result
         self._hardware_distance = float(result.distance_traveled)
         self._hardware_release_attempts = int(result.release_attempts)
         if not result.success:
             return False, result.message or 'hardware undock failed', result
+        if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
+            return False, 'hardware undock action did not succeed', result
         if not result.physically_clear:
             return (
                 False,
@@ -700,21 +684,14 @@ class DockManager(Node):
         independent telemetry path before anything commands velocity.
         """
         deadline = time.monotonic() + timeout
-        attempts = 0
-        attempt_limit = self._localization_update_attempt_limit()
         last_failures = ['handoff not evaluated']
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during handoff'
-            state = self._snapshot()
+            state = self._snapshot(for_undock=True)
             failures = resume_failures(state, expected_session)
             if not failures:
                 return True, ''
-            localization_satisfied = bool(
-                state.localization_fresh and state.localization_valid)
-            if not localization_satisfied and attempts < attempt_limit:
-                if self._request_localization_update(force=attempts == 0):
-                    attempts += 1
             last_failures = failures
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
@@ -731,23 +708,13 @@ class DockManager(Node):
             self, goal_handle, correlation_id, validation_mode=False):
         deadline = time.monotonic() + float(
             self.get_parameter('precheck_timeout').value)
-        attempts = 0
-        attempt_limit = self._localization_update_attempt_limit()
-        localization_satisfied = False
         stable_since = None
         last_failures = ['precheck not evaluated']
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during precheck'
-            state = self._snapshot()
-            if state.localization_fresh and state.localization_valid:
-                localization_satisfied = True
-            failures = precheck_failures(
-                state, validation_mode,
-                require_fresh_localization=not localization_satisfied)
-            if not localization_satisfied and attempts < attempt_limit:
-                if self._request_localization_update(force=attempts == 0):
-                    attempts += 1
+            state = self._snapshot(for_undock=True)
+            failures = precheck_failures(state, validation_mode)
             if failures:
                 stable_since = None
                 last_failures = failures
@@ -799,80 +766,84 @@ class DockManager(Node):
 
     def _run_spin(
             self, goal_handle, expected_session, target_yaw, correlation_id):
-        """
-        Turn away from the dock through Nav2, on the full safety chain.
-
-        Deliberately not an SBC manoeuvre: the SBC is blind to the costmap, the
-        laser and the collision monitor, and a 180 degree in-place turn is a
-        navigation concern rather than a hardware-contact one. By this point the
-        SBC has handed motion authority back with the motors live and the dock
-        observer in CLEAR_CONFIRMED, so an ordinary DRIVE is permitted again
-        without any charge-state exception.
-        """
-        if not self._spin_client.wait_for_server(timeout_sec=2.0):
-            return False, 'Nav2 Spin action unavailable'
-        spin = Spin.Goal()
-        spin.target_yaw = target_yaw
-        timeout = float(self.get_parameter('spin_timeout').value)
-        spin.time_allowance.sec = int(timeout)
-        spin.time_allowance.nanosec = 0
-        send_future = self._spin_client.send_goal_async(spin)
-        if not self._wait_future(
-                send_future, goal_handle, 2.0, correlation_id):
-            return False, 'Spin goal acceptance timeout'
-        nav_goal = send_future.result()
-        if nav_goal is None or not nav_goal.accepted:
-            return False, 'Spin goal rejected'
-        with self._lock:
-            self._owned_spin_goal_id = bytes(nav_goal.goal_id.uuid)
-            self._other_action_active['spin'] = False
-        result_future = nav_goal.get_result_async()
-        deadline = time.monotonic() + timeout
-        reason = ''
-        while not result_future.done() and time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                reason = 'goal canceled during turn'
-                break
-            failures = resume_failures(self._snapshot(), expected_session)
-            if failures:
-                reason = '; '.join(failures)
-                break
-            self._publish_feedback(goal_handle, deadline, correlation_id)
-            time.sleep(0.05)
-        if reason or not result_future.done():
-            if not reason:
-                reason = 'Spin hard timeout'
-            cancel_future = nav_goal.cancel_goal_async()
-            cancel_deadline = time.monotonic() + 1.0
-            while not cancel_future.done() and time.monotonic() < cancel_deadline:
-                time.sleep(0.02)
-            if not self._wait_for_odom_zero(1.5):
-                reason += '; zero velocity after Spin cancellation not confirmed'
-            with self._lock:
-                self._owned_spin_goal_id = None
-            return False, reason
-        wrapped = result_future.result()
-        with self._lock:
-            self._owned_spin_goal_id = None
-        if (wrapped is None or wrapped.status != GoalStatus.STATUS_SUCCEEDED or
-                wrapped.result.error_code != Spin.Result.NONE):
-            message = 'Spin failed'
-            if wrapped is not None:
-                message = wrapped.result.error_msg or message
-            return False, message
+        """Consume the reverse's one-shot handoff; the bridge owns Nav2 Spin."""
+        if (self._hardware_goal_id is None or
+                abs(target_yaw - math.pi) > 1e-6):
+            return False, 'fixed 180 degree hardware handoff unavailable'
+        if not self._turn_client.wait_for_server(timeout_sec=2.0):
+            return False, 'bridge-owned undock turn unavailable'
+        turn = UndockTurn.Goal()
+        turn.hardware_goal_id = self._hardware_goal_id
+        turn.session_generation = expected_session
+        acceptance_deadline = time.monotonic() + 2.0
+        try:
+            send_future = self._turn_client.send_goal_async(turn)
+        except Exception:
+            send_future = None
+        turn_goal = self._wait_child_future(
+            send_future, goal_handle, acceptance_deadline, correlation_id)
+        if not turn_goal.accepted:
+            return False, 'undock turn rejected'
+        try:
+            result_future = turn_goal.get_result_async()
+        except Exception:
+            result_future = None
+        deadline = (acceptance_deadline if time.monotonic() >= acceptance_deadline
+                    else time.monotonic() + 45.0)
+        wrapped = self._wait_child_future(
+            result_future, goal_handle, deadline, correlation_id, child=turn_goal)
+        if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
+            return False, wrapped.result.message
+        if not wrapped.result.success:
+            return False, wrapped.result.message or 'undock turn failed'
         if not self._wait_for_odom_zero(1.5):
-            return False, 'zero velocity after Spin was not confirmed'
+            return False, 'zero velocity after undock turn not confirmed'
         return True, ''
 
-    def _wait_future(
-            self, future, goal_handle, timeout, correlation_id):
-        deadline = time.monotonic() + timeout
-        while not future.done() and time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                return False
-            self._publish_feedback(goal_handle, deadline, correlation_id)
+    def _wait_child_future(
+            self, future, goal_handle, deadline, correlation_id, *, child=None):
+        """Keep public ownership until explicit rejection or a child terminal."""
+        cancel_sent = False
+        feedback_error_logged = False
+        while True:
+            if not rclpy.ok():
+                raise ExternalShutdownException()
+            expired = time.monotonic() >= deadline
+            stopping = goal_handle.is_cancel_requested or (child is not None and expired)
+            if child is not None and stopping and not cancel_sent:
+                cancel_sent = True
+                try:
+                    child.cancel_goal_async()
+                except Exception:
+                    pass
+            if future is not None and future.done():
+                try:
+                    value = future.result()
+                    if child is None:
+                        known = isinstance(getattr(value, 'accepted', None), bool)
+                    else:
+                        known = (getattr(value, 'result', None) is not None
+                                 and value.status in (
+                                     GoalStatus.STATUS_SUCCEEDED, GoalStatus.STATUS_CANCELED,
+                                     GoalStatus.STATUS_ABORTED))
+                    if known:
+                        return value
+                except Exception:
+                    pass
+                # An RPC exception or unknown result is not proof of a stop.
+                future = None
+            state = ('STOPPING' if stopping else
+                     'UNKNOWN' if expired or future is None else None)
+            try:
+                self._publish_feedback(goal_handle, deadline, correlation_id, state=state)
+            except ExternalShutdownException:
+                raise
+            except Exception as exc:
+                if not feedback_error_logged:
+                    self.get_logger().error(
+                        f'Undock progress unavailable; child ownership remains held: {exc}')
+                    feedback_error_logged = True
             time.sleep(0.05)
-        return future.done()
 
     def _wait_for_odom_zero(self, timeout, stable_duration=0.25):
         deadline = time.monotonic() + timeout
@@ -927,7 +898,7 @@ class DockManager(Node):
             base is not None and
             not fault_flags & ENCODER_FAULT_MASK)
 
-    def _snapshot(self, *, for_pose_initialization=False):
+    def _snapshot(self, *, for_pose_initialization=False, for_undock=False):
         now = time.monotonic()
         timeout = float(self.get_parameter('sensor_timeout').value)
         self._refresh_command_path()
@@ -971,7 +942,8 @@ class DockManager(Node):
             origin_valid=getattr(base, 'odom_epoch_valid', False),
             recovery_required=getattr(base, 'localization_recovery_required', True),
             recovery_stage=getattr(base, 'localization_recovery_stage', ''),
-            for_pose_initialization=for_pose_initialization)
+            for_pose_initialization=for_pose_initialization,
+            for_undock=for_undock)
         seed_stamp = getattr(base, 'localization_seed_stamp_ns', 0) if base else 0
         pose_stamp = (pose.header.stamp.sec * 1_000_000_000 +
                       pose.header.stamp.nanosec) if pose else 0
@@ -1141,25 +1113,32 @@ class DockManager(Node):
              {'nav_command_mux'}),
             ('/input/nav_behavior', {'behavior_server'},
              {'nav_command_mux'}),
-            ('/input/docking', set(), {'nav_command_mux'}),
+            ('/input/docking', {'patrolbot_bridge'}, {'nav_command_mux'}),
             ('/cmd_vel_nav', {'nav_command_mux'},
              {'velocity_smoother'}),
             ('/cmd_vel_smoothed', {'velocity_smoother'},
              {'collision_monitor'}),
             ('/input/navi', {'collision_monitor'}, {'cmd_vel_mux'}),
+            ('/input/undock_turn', {'patrolbot_bridge'}, {'cmd_vel_mux'}),
             ('/cmd_vel_out', {'cmd_vel_mux'}, {'teleop_velocity_smoother'}),
             ('/cmd_vel', {'teleop_velocity_smoother'}, {'patrolbot_bridge'}),
         )
         for topic, expected_publishers, required_subscribers in expected_path:
+            publisher_infos = self.get_publishers_info_by_topic(topic)
             publishers = {
                 info.node_name
-                for info in self.get_publishers_info_by_topic(topic)
+                for info in publisher_infos
             }
             subscribers = {
                 info.node_name
                 for info in self.get_subscriptions_info_by_topic(topic)
             }
-            if publishers != expected_publishers:
+            if (publishers != expected_publishers or
+                    len(publisher_infos) != (4 if topic == '/input/nav_behavior'
+                                             else len(expected_publishers)) or
+                    any(info.node_namespace != '/' or
+                        info.topic_type != 'geometry_msgs/msg/Twist'
+                        for info in publisher_infos)):
                 failures.append(
                     f'{topic} publishers={sorted(publishers)}, expected='
                     f'{sorted(expected_publishers)}')
@@ -1178,7 +1157,7 @@ class DockManager(Node):
         self._path_valid = not failures
         self._path_reason = '; '.join(failures) if failures else 'valid'
 
-    def _publish_feedback(self, goal_handle, deadline, _correlation_id):
+    def _publish_feedback(self, goal_handle, deadline, _correlation_id, *, state=None):
         now = time.monotonic()
         snapshot = self._snapshot()
         with self._lock:
@@ -1187,7 +1166,7 @@ class DockManager(Node):
             pose_age = (
                 now - self._localization_at if self._localization_at else 1e6)
         feedback = Undock.Feedback()
-        feedback.state = self._state_name
+        feedback.state = state or self._state_name
         feedback.elapsed_seconds = float(now - self._action_started)
         feedback.state_timeout_remaining = float(max(0.0, deadline - now))
         feedback.sonar_age = float(sonar_age)

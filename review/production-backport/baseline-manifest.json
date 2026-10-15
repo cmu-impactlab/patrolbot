@@ -1,0 +1,50 @@
+{
+  "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/bridge_node.py": {
+    "sha256": "8aa1147f20eb6defc71047e5382fa97cc3f98868d51eb9c45e4dc9ed059e4095",
+    "container": "patrolbot-bridge",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/bridge_node.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/bridge_node.py"
+  },
+  "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/epoch_runtime.py": {
+    "sha256": "2c01af306d7521778c92a1dad911690a668bfdf71e38628156df998e32bccca1",
+    "container": "patrolbot-bridge",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/epoch_runtime.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/epoch_runtime.py"
+  },
+  "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/map_runtime.py": {
+    "sha256": "5b94b260a33e9604f05fda728dec39f8705ae0a4587fa97fdb9c11d39df53d9e",
+    "container": "patrolbot-bridge",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/map_runtime.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/map_runtime.py"
+  },
+  "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/map_transaction.py": {
+    "sha256": "90cdbb7b5ffb459eda113b79bd92c0950d711c4ea93bb6f7d53afd3583102b7d",
+    "container": "patrolbot-bridge",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/map_transaction.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/map_transaction.py"
+  },
+  "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/undock_turn.py": {
+    "sha256": "322e4445227fc9810e2a2afaa750a35e4e65f557d7b2713332e404928842478c",
+    "container": "patrolbot-bridge",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/undock_turn.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/undock_turn.py"
+  },
+  "ros2_ws/src/patrolbot_bridge/patrolbot_bridge/manual_active.py": {
+    "sha256": "7d278f5d7e27cfd00703e113bbe052c6d0f8ac589b11ab01d72cbe0d4de91330",
+    "container": "patrolbot-bridge",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/manual_active.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_bridge/lib/python3.12/site-packages/patrolbot_bridge/manual_active.py"
+  },
+  "ros2_ws/src/patrolbot_dock_manager/patrolbot_dock_manager/dock_manager.py": {
+    "sha256": "0307aac4a9fd2784f3e0540f940ea56c7703f0424629f52a538a757c3d60191b",
+    "container": "patrolbot-navigation",
+    "installed_path": "/opt/patrolbot_ws/install/patrolbot_dock_manager/lib/python3.12/site-packages/patrolbot_dock_manager/dock_manager.py",
+    "realpath": "/opt/patrolbot_ws/install/patrolbot_dock_manager/lib/python3.12/site-packages/patrolbot_dock_manager/dock_manager.py"
+  },
+  "ros2_ws/src/patrolbot_web_bridge/patrolbot_web_bridge/commands.py": {
+    "sha256": "e87887b1455f3519988163af3cc63713b2242d54ce2e310d7ab98fb33a2852d8",
+    "container": "patrolbot-web-bridge",
+    "installed_path": "/opt/web_bridge/patrolbot_web_bridge/commands.py",
+    "realpath": "/opt/web_bridge/patrolbot_web_bridge/commands.py"
+  }
+}

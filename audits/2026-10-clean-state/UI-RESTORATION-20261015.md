@@ -43,6 +43,31 @@ Subsequent candidate-branch changes are verification/documentation only.
 | Actual isolated HTTP | Health and all15 assets pass; robot_connected=false, no live credentials/data or external network. Application cleanup completes. |
 
 Browser image: `mcr.microsoft.com/playwright@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27`.
+
+## Layout-suite failure under constrained local run — candidate still not deployed
+
+A broader responsive-layout probe (60 cases: Operator preset, observer/operator
+roles, 320/390/1024/1440px, four browser projects) finished **44 passed /
+16 failed** in 10.9 minutes with three workers on two CPUs. Every failure is a
+timeout or slow load, never a wrong-content assertion:
+
+- Six iPhone/iPad cases at 1024/1440px never found `widget-liveMap` within 7s
+  of page load; the page simply had not rendered yet under contention.
+- Ten cases timed out clicking the theme toggle or evaluating overflow while
+  the main thread was busy; the button was visible, enabled and stable.
+
+The captured failure snapshots show the restored uncertainty text and the
+independent motor-disable button rendering correctly, so the failures do not
+demonstrate a layout regression. The fixture now pushes base_state every 100ms
+(merged `d4925f8` change), which raises re-render load; with three Playwright
+workers plus the dev server on two CPUs, WebKit emulation falls behind its
+45s budgets. Android/Chromium runs of the same titles passed.
+
+A single-worker rerun of exactly the failing titles is in progress to test the
+resource-contention hypothesis without changing any test or timeout. Full
+layout acceptance still requires either that rerun passing plus an independent
+review, or the standard GitHub browser matrix. No deployment, restart or robot
+command occurred; production remains the previously recorded images/assets.
 Application base: `sha256:04a464df6668b2197795ed965f4c1704f180a7b08bf733dcd2086af47e9240bc`.
 Frontend tree: `13845994ba5e6ffb996f82683c23bb45c45155d8b82e129eb2ee1d95acfd40c6`.
 

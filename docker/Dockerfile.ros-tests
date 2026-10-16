@@ -38,6 +38,8 @@ WORKDIR /opt/patrolbot
 COPY ros2_ws/src/patrolbot_interfaces ros2_ws/src/patrolbot_interfaces
 COPY ros2_ws/src/patrolbot_bridge ros2_ws/src/patrolbot_bridge
 COPY ros2_ws/src/patrolbot_dock_manager ros2_ws/src/patrolbot_dock_manager
+# Map data for the catalog/persistence suites (read directly from source).
+COPY ros2_ws/src/patrolbot_navigation ros2_ws/src/patrolbot_navigation
 
 RUN rosdep update \
     && apt-get update \
@@ -54,9 +56,8 @@ RUN . /opt/ros/jazzy/setup.sh \
         --base-paths ros2_ws/src \
         --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation
 
-# Map data and helper scripts for the catalog/persistence suites. Not built:
-# nothing imports this package, tests read its files directly.
-COPY ros2_ws/src/patrolbot_navigation ros2_ws/src/patrolbot_navigation
+# Map data and helper scripts for the catalog/persistence suites.
+# Built so the ament index resolves its share dir; nothing imports it.
 
 COPY docker/run-ros-tests.sh /usr/local/bin/run-ros-tests.sh
 

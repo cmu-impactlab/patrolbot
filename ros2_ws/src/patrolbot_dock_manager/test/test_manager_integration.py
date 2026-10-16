@@ -826,7 +826,7 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
     the one you get by not knowing the parameter exists. A default flip here
     would silently undo the whole guard on every robot that never sets it.
     """
-    manager, world, _client_node = harness
+    manager, world, client_node = harness
     assert wait_until(
         lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().localization_valid)

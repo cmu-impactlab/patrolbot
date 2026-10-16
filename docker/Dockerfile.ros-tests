@@ -23,7 +23,8 @@ FROM ros:jazzy-ros-base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    ROS_LOCALHOST_ONLY=1
+    ROS_LOCALHOST_ONLY=1 \
+    PATROLBOT_RUN_INTEGRATION=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \

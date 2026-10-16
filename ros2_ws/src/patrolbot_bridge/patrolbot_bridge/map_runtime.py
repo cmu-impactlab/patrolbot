@@ -153,6 +153,9 @@ class MapRuntimeMixin:
 
     def _map_accept(self, request):
         with self.lock:
+            if self.undock_hold:
+                self.node._undock_turn.revoke('map localization requested during undock')
+                return GoalResponse.REJECT
             if (
                 not self.node._lidar_ready()
                 or self._map_error

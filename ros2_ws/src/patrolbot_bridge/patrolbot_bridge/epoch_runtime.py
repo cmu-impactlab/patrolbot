@@ -45,9 +45,11 @@ class EpochRuntime(MapRuntimeMixin):
         )
         self._phase = 'wait-localization-manager'
         self._future = None
+        self._future_kind = None
         self._deadline = None
         self._failed = False
         self._navigation_ready = False
+        self.undock_hold = False
         self._lidar_reseed = False
         self._lidar_cancel = [
             node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
@@ -89,6 +91,9 @@ class EpochRuntime(MapRuntimeMixin):
                 self.withdraw()
 
     def withdraw(self, reset_odometry=True):
+        turn = getattr(self.node, '_undock_turn', None)
+        if turn is not None:
+            turn.revoke('odometry transport withdrawn')
         self.first_tf_ns = None
         self._tf_generation += 1
         self._tf_ready_at = None
@@ -97,6 +102,7 @@ class EpochRuntime(MapRuntimeMixin):
             with self.node._pose_lock:
                 self.node._pose_received = False
                 self.node._pose_at = 0.0
+                self.node._undock_scan_at = 0.0
 
     def announce(self, session, epoch):
         with self.lock:
@@ -254,6 +260,9 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed(self, message):
         with self.lock:
+            if self.undock_hold:
+                self.node._undock_turn.revoke('initial pose requested during undock')
+                return
             if not self.node._lidar_ready():
                 return
             if self._lidar_reseed and (
@@ -329,6 +338,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     def pose(self, message):
         with self.lock:
+            if self.undock_hold:
+                return
             if (
                 not self.node._lidar_ready()
                 or not self.streams_allowed
@@ -423,6 +434,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed_accepted(self, message):
         with self.lock:
+            if self.undock_hold:
+                return
             if not self.node._lidar_ready():
                 return
             stamp = self.stamp_ns(message)
@@ -446,6 +459,9 @@ class EpochRuntime(MapRuntimeMixin):
         )
 
     def _request(self, phase):
+        self._future_kind = (
+            'read-only' if phase in ('wait-localization-manager', 'inspect') else 'mutation'
+        )
         if phase == 'wait-localization-manager':
             if not self._localization_active.service_is_ready():
                 return
@@ -483,6 +499,8 @@ class EpochRuntime(MapRuntimeMixin):
         with self.lock:
             self.recovery.observe_clock(self.node.get_clock().now().nanoseconds)
             token = self.recovery.token
+            if self.undock_hold:
+                return
             self._poll_tf_readiness()
             self.poll_navigation_idle()
             if self.tick_map():
@@ -499,6 +517,7 @@ class EpochRuntime(MapRuntimeMixin):
                         self._localization_active.remove_pending_request(self._future)
                         self._future.cancel()
                         self._future = None
+                        self._future_kind = None
                         return
                     if (
                         self._deadline is not None
@@ -513,6 +532,7 @@ class EpochRuntime(MapRuntimeMixin):
                         # not start overlapping transitions or cancel-and-retry.
                     return
                 future, self._future = self._future, None
+                self._future_kind = None
                 if token != self._token:
                     self._phase = 'wait-localization-manager'
                     self._failed = False

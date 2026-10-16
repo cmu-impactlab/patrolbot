@@ -36,6 +36,7 @@ def bridge():
     b._vth = 0.1
     b.CONTROL_TIMEOUT = 0.01
     b._epoch = NS(lock=threading.RLock(), commands_allowed=False, maps=NS(hold=True))
+    b._undock_turn = NS(busy=False, revoke=Mock())
     b._lidar_ready = Mock(return_value=False)
     b.get_logger = Mock(return_value=Mock())
     b.sock = Mock()

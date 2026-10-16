@@ -17,10 +17,9 @@ import xml.etree.ElementTree as ET
 
 
 # The RoundRobin children of both recovery trees, in the order the trees are
-# written. Clearing costs nothing and runs first; BackUp precedes Spin so a
-# robot against a wall makes a short sonar-guarded reverse rather than rotating
-# into the obstacle.
-RECOVERY_ORDER = ('ClearingActions', 'BackUp', 'Spin', 'Wait')
+# written. BackUp runs first so a blocked robot attempts a short sonar-guarded
+# reverse before another stationary clearing/replanning interval or rotation.
+RECOVERY_ORDER = ('BackUp', 'ClearingActions', 'Spin', 'Wait')
 
 # BT.CPP reports these while a node owns the tick, or as its terminal verdict.
 ACTIVE_STATUSES = ('RUNNING', 'SUCCESS', 'FAILURE')

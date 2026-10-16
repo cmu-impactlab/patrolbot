@@ -22,16 +22,23 @@ from uuid import uuid4
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
-from patrolbot_dock_manager.contracts import (automatic_docking_allowed, DOCK_DOCKED_CONFIRMED,
-                                              dock_pose_initialization_failures, DOCK_UNKNOWN,
-                                              localization_position_limit, odometry_values_finite,
-                                              planar_covariance_usable, precheck_failures,
-                                              resume_failures, SafetySnapshot, transition_allowed,
-                                              validate_goal)
+from patrolbot_dock_manager.contracts import (
+    automatic_docking_allowed,
+    DOCK_DOCKED_CONFIRMED,
+    dock_pose_initialization_failures,
+    DOCK_UNKNOWN,
+    localization_position_limit,
+    odometry_values_finite,
+    planar_covariance_usable,
+    precheck_failures,
+    resume_failures,
+    SafetySnapshot,
+    transition_allowed,
+    validate_goal,
+)
 from patrolbot_dock_manager.epoch_policy import epoch_hardware_ready, lidar_ready
-from patrolbot_interfaces.action import HardwareUndock, Undock
+from patrolbot_interfaces.action import HardwareUndock, Undock, UndockTurn
 from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
 import rclpy
@@ -87,6 +94,7 @@ class DockManager(Node):
         self._path_reason = 'not checked'
         self._other_action_active = {}
         self._owned_spin_goal_id = None
+        self._hardware_goal_id = None
         self._active_correlation_id = ''
         self._last_localization_update_request_at = 0.0
 
@@ -195,7 +203,9 @@ class DockManager(Node):
         self._hardware_undock_client = ActionClient(
             self, HardwareUndock, '/patrolbot/hardware_undock', callback_group=self._callbacks
         )
-        self._spin_client = ActionClient(self, Spin, '/spin', callback_group=self._callbacks)
+        self._turn_client = ActionClient(
+            self, UndockTurn, '/patrolbot/undock_turn', callback_group=self._callbacks
+        )
         self._initial_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', 10
         )
@@ -474,9 +484,7 @@ class DockManager(Node):
             self.get_logger().error('Undock goal rejected: fresh charging required.')
             return GoalResponse.REJECT
         if request.dock_id != self.get_parameter('dock_id').value:
-            self.get_logger().error(
-                f'Undock goal rejected: unknown dock ID {request.dock_id !r}.'
-            )
+            self.get_logger().error(f'Undock goal rejected: unknown dock ID {request.dock_id !r}.')
             return GoalResponse.REJECT
         failures = validate_goal(
             request.reverse_distance, request.reverse_speed, request.validation_mode
@@ -510,6 +518,7 @@ class DockManager(Node):
         self._hardware_distance = 0.0
         self._hardware_phase = ''
         self._hardware_release_attempts = 0
+        self._hardware_goal_id = None
         initial_charge = -1
         try:
             self._transition('PRECHECK', correlation_id)
@@ -721,6 +730,7 @@ class DockManager(Node):
             return False, 'hardware undock goal acceptance unknown', None
         if not hardware_goal.accepted:
             return False, 'hardware undock goal rejected', None
+        self._hardware_goal_id = hardware_goal.goal_id
 
         result_future = hardware_goal.get_result_async()
         deadline = time.monotonic() + goal.maximum_duration + 30.0
@@ -858,72 +868,95 @@ class DockManager(Node):
         return True
 
     def _run_spin(self, goal_handle, expected_session, target_yaw, correlation_id):
-        """
-        Turn away from the dock through Nav2, on the full safety chain.
+        """Consume the reverse's one-shot handoff; the bridge owns the turn.
 
-        Deliberately not an SBC manoeuvre: the SBC is blind to the costmap, the
-        laser and the collision monitor, and a 180 degree in-place turn is a
-        navigation concern rather than a hardware-contact one. By this point the
-        SBC has handed motion authority back with the motors live and the dock
-        observer in CLEAR_CONFIRMED, so an ordinary DRIVE is permitted again
-        without any charge-state exception.
+        The turn target comes from the undock_turn_yaw parameter (default
+        pi); 0 < target_yaw <= pi is enforced here and again at the bridge.
         """
-        if not self._spin_client.wait_for_server(timeout_sec=2.0):
-            return False, 'Nav2 Spin action unavailable'
-        spin = Spin.Goal()
-        spin.target_yaw = target_yaw
-        timeout = float(self.get_parameter('spin_timeout').value)
-        spin.time_allowance.sec = int(timeout)
-        spin.time_allowance.nanosec = 0
-        send_future = self._spin_client.send_goal_async(spin)
-        if not self._wait_future(send_future, goal_handle, 2.0, correlation_id):
-            return False, 'Spin goal acceptance timeout'
-        nav_goal = send_future.result()
-        if nav_goal is None or not nav_goal.accepted:
-            return False, 'Spin goal rejected'
-        with self._lock:
-            self._owned_spin_goal_id = bytes(nav_goal.goal_id.uuid)
-            self._other_action_active['spin'] = False
-        result_future = nav_goal.get_result_async()
-        deadline = time.monotonic() + timeout
-        reason = ''
-        while not result_future.done() and time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                reason = 'goal canceled during turn'
-                break
-            failures = resume_failures(self._snapshot(), expected_session)
-            if failures:
-                reason = '; '.join(failures)
-                break
-            self._publish_feedback(goal_handle, deadline, correlation_id)
-            time.sleep(0.05)
-        if reason or not result_future.done():
-            if not reason:
-                reason = 'Spin hard timeout'
-            cancel_future = nav_goal.cancel_goal_async()
-            cancel_deadline = time.monotonic() + 1.0
-            while not cancel_future.done() and time.monotonic() < cancel_deadline:
-                time.sleep(0.02)
-            if not self._wait_for_odom_zero(1.5):
-                reason += '; zero velocity after Spin cancellation not confirmed'
-            with self._lock:
-                self._owned_spin_goal_id = None
-            return False, reason
-        wrapped = result_future.result()
-        with self._lock:
-            self._owned_spin_goal_id = None
-        if (
-            wrapped is None
-            or wrapped.status != GoalStatus.STATUS_SUCCEEDED
-            or wrapped.result.error_code != Spin.Result.NONE
-        ):
-            message = 'Spin failed'
-            if wrapped is not None:
-                message = wrapped.result.error_msg or message
-            return False, message
+        if self._hardware_goal_id is None:
+            return False, 'no hardware handoff owns this turn'
+        if not (math.isfinite(target_yaw) and 0.0 < target_yaw <= math.pi):
+            return False, 'turn target outside (0, pi]'
+        if not self._turn_client.wait_for_server(timeout_sec=2.0):
+            return False, 'bridge-owned undock turn unavailable'
+        turn = UndockTurn.Goal()
+        turn.hardware_goal_id = self._hardware_goal_id
+        turn.session_generation = expected_session
+        turn.target_yaw = float(target_yaw)
+        acceptance_deadline = time.monotonic() + 2.0
+        try:
+            send_future = self._turn_client.send_goal_async(turn)
+        except Exception:
+            send_future = None
+        turn_goal = self._wait_child_future(
+            send_future, goal_handle, acceptance_deadline, correlation_id
+        )
+        if not turn_goal.accepted:
+            return False, 'undock turn rejected'
+        try:
+            result_future = turn_goal.get_result_async()
+        except Exception:
+            result_future = None
+        deadline = (
+            acceptance_deadline
+            if time.monotonic() >= acceptance_deadline
+            else time.monotonic() + 45.0
+        )
+        wrapped = self._wait_child_future(
+            result_future, goal_handle, deadline, correlation_id, child=turn_goal
+        )
+        if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
+            return False, wrapped.result.message
+        if not wrapped.result.success:
+            return False, wrapped.result.message or 'undock turn failed'
         if not self._wait_for_odom_zero(1.5):
-            return False, 'zero velocity after Spin was not confirmed'
+            return False, 'zero velocity after undock turn not confirmed'
         return True, ''
+
+    def _wait_child_future(self, future, goal_handle, deadline, correlation_id, *, child=None):
+        """Keep public ownership until explicit rejection or a child terminal."""
+        cancel_sent = False
+        feedback_error_logged = False
+        while True:
+            if not rclpy.ok():
+                raise ExternalShutdownException()
+            expired = time.monotonic() >= deadline
+            stopping = goal_handle.is_cancel_requested or (child is not None and expired)
+            if child is not None and stopping and not cancel_sent:
+                cancel_sent = True
+                try:
+                    child.cancel_goal_async()
+                except Exception:
+                    pass
+            if future is not None and future.done():
+                try:
+                    value = future.result()
+                    if child is None:
+                        known = isinstance(getattr(value, 'accepted', None), bool)
+                    else:
+                        known = getattr(value, 'result', None) is not None and value.status in (
+                            GoalStatus.STATUS_SUCCEEDED,
+                            GoalStatus.STATUS_CANCELED,
+                            GoalStatus.STATUS_ABORTED,
+                        )
+                    if known:
+                        return value
+                except Exception:
+                    pass
+                # An RPC exception or unknown result is not proof of a stop.
+                future = None
+            state = 'STOPPING' if stopping else 'UNKNOWN' if expired or future is None else None
+            try:
+                self._publish_feedback(goal_handle, deadline, correlation_id, state=state)
+            except ExternalShutdownException:
+                raise
+            except Exception as exc:
+                if not feedback_error_logged:
+                    self.get_logger().error(
+                        f'Undock progress unavailable; child ownership remains held: {exc}'
+                    )
+                    feedback_error_logged = True
+            time.sleep(0.05)
 
     def _wait_future(self, future, goal_handle, timeout, correlation_id):
         deadline = time.monotonic() + timeout
@@ -1224,17 +1257,27 @@ class DockManager(Node):
         expected_path = (
             ('/input/nav_controller', {'controller_server'}, {'nav_command_mux'}),
             ('/input/nav_behavior', {'behavior_server'}, {'nav_command_mux'}),
-            ('/input/docking', set(), {'nav_command_mux'}),
+            ('/input/docking', {'patrolbot_bridge'}, {'nav_command_mux'}),
             ('/cmd_vel_nav', {'nav_command_mux'}, {'velocity_smoother'}),
             ('/cmd_vel_smoothed', {'velocity_smoother'}, {'collision_monitor'}),
             ('/input/navi', {'collision_monitor'}, {'cmd_vel_mux'}),
+            ('/input/undock_turn', {'patrolbot_bridge'}, {'cmd_vel_mux'}),
             ('/cmd_vel_out', {'cmd_vel_mux'}, {'teleop_velocity_smoother'}),
             ('/cmd_vel', {'teleop_velocity_smoother'}, {'patrolbot_bridge'}),
         )
         for topic, expected_publishers, required_subscribers in expected_path:
-            publishers = {info.node_name for info in self.get_publishers_info_by_topic(topic)}
+            publisher_infos = self.get_publishers_info_by_topic(topic)
+            publishers = {info.node_name for info in publisher_infos}
             subscribers = {info.node_name for info in self.get_subscriptions_info_by_topic(topic)}
-            if publishers != expected_publishers:
+            if (
+                publishers != expected_publishers
+                or len(publisher_infos)
+                != (4 if topic == '/input/nav_behavior' else len(expected_publishers))
+                or any(
+                    info.node_namespace != '/' or info.topic_type != 'geometry_msgs/msg/Twist'
+                    for info in publisher_infos
+                )
+            ):
                 failures.append(
                     f'{topic} publishers={sorted(publishers)}, expected='
                     f'{sorted(expected_publishers)}'
@@ -1257,7 +1300,7 @@ class DockManager(Node):
         self._path_valid = not failures
         self._path_reason = '; '.join(failures) if failures else 'valid'
 
-    def _publish_feedback(self, goal_handle, deadline, _correlation_id):
+    def _publish_feedback(self, goal_handle, deadline, _correlation_id, *, state=None):
         now = time.monotonic()
         snapshot = self._snapshot()
         with self._lock:
@@ -1265,7 +1308,7 @@ class DockManager(Node):
             base_age = now - self._base_state_at if self._base_state_at else 1e6
             pose_age = now - self._localization_at if self._localization_at else 1e6
         feedback = Undock.Feedback()
-        feedback.state = self._state_name
+        feedback.state = state or self._state_name
         feedback.elapsed_seconds = float(now - self._action_started)
         feedback.state_timeout_remaining = float(max(0.0, deadline - now))
         feedback.sonar_age = float(sonar_age)

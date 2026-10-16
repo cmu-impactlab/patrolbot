@@ -44,6 +44,7 @@ def bridge():
     b.CONTROL_TIMEOUT = 0.001
     b._lidar.update('READY,1,0', now)
     b._server_hello = parse_hello('HELLO:PROTOCOL=2:FEATURES=LIDAR_POWER')
+    b._undock_turn = NS(busy=False, revoke=Mock())
     b._epoch = NS(
         lock=threading.RLock(),
         commands_allowed=True,

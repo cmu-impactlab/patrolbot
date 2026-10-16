@@ -16,6 +16,10 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 LAUNCH_FILE = PACKAGE_ROOT / 'launch' / 'patrolbot_navigation_launch.py'
 PARAMS_FILE = PACKAGE_ROOT / 'config' / 'nav2_params.yaml'
 BRIDGE_FILE = PACKAGE_ROOT.parent / 'patrolbot_bridge' / 'patrolbot_bridge' / 'bridge_node.py'
+UNDOCK_TURN_FILE = (
+    PACKAGE_ROOT.parent / 'patrolbot_bridge' / 'patrolbot_bridge' /
+    'undock_turn.py'
+)
 DOCK_MANAGER_FILE = (
     PACKAGE_ROOT.parent / 'patrolbot_dock_manager' /
     'patrolbot_dock_manager' / 'dock_manager.py'
@@ -111,7 +115,7 @@ class SafetyContractTest(unittest.TestCase):
         for config in (local, global_):
             value = config['inflation_layer']['cost_scaling_factor']
             self.assertIsInstance(value, float)
-            self.assertEqual(value, 4.0)
+            self.assertEqual(value, 3.0)
 
     def test_close_range_scan_filter_remains_pinned(self):
         bridge_text = BRIDGE_FILE.read_text(encoding='utf-8')
@@ -140,8 +144,9 @@ class SafetyContractTest(unittest.TestCase):
 
     def test_amcl_recovery_and_bounded_update_policy_are_pinned(self):
         amcl = self.params['amcl']['ros__parameters']
-        self.assertEqual(amcl['recovery_alpha_slow'], 0.001)
-        self.assertEqual(amcl['recovery_alpha_fast'], 0.1)
+        # 20261014 jump-limit: recovery injection stays disabled.
+        self.assertEqual(amcl['recovery_alpha_slow'], 0.0)
+        self.assertEqual(amcl['recovery_alpha_fast'], 0.0)
         self.assertEqual(amcl['resample_interval'], 1)
         self.assertEqual(amcl['robot_model_type'], (
             'nav2_amcl::DifferentialMotionModel'))
@@ -171,10 +176,10 @@ class SafetyContractTest(unittest.TestCase):
                 'laser_max_range': -1.0,
                 'laser_min_range': -1.0,
                 'laser_model_type': 'likelihood_field_prob',
-                'sigma_hit': 0.3,
-                'z_hit': 0.7,
+                'sigma_hit': 0.2,
+                'z_hit': 0.5,
                 'z_max': 0.0,
-                'z_rand': 0.3,
+                'z_rand': 0.5,
                 'z_short': 0.0,
             })
         self.assertEqual(amcl['max_beams'], 60)
@@ -536,7 +541,11 @@ class SafetyContractTest(unittest.TestCase):
 
     def test_cancel_stops_backup_and_requires_zero_velocity_confirmation(self):
         manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')
-        self.assertIn('nav_goal.cancel_goal_async()', manager_text)
+        # Cancel stops the hardware undock chain at the manager (the reverse
+        # goal, then the bridge-owned turn child), and the turn still ends
+        # only after a confirmed stop.
+        self.assertIn('hardware_goal.cancel_goal_async()', manager_text)
+        self.assertIn('child.cancel_goal_async()', manager_text)
         self.assertIn('_wait_for_odom_zero(1.5)', manager_text)
         self.assertIn('goal_handle.is_cancel_requested', manager_text)
 
@@ -690,8 +699,13 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('reverse_failures', manager_text)
         self.assertNotIn('allow_transient_dock_charge', manager_text)
         self.assertIn('HardwareUndock', manager_text)
-        # The turn is still Nav2's, so it keeps costmap awareness.
-        self.assertIn('Spin.Goal()', manager_text)
+        # The turn is bridge-owned now: the manager only requests it by action
+        # and never drives it. The bridge's Spin still runs on the Nav2 safety
+        # chain, so costmap awareness is kept where the turn executes.
+        self.assertIn('UndockTurn', manager_text)
+        self.assertNotIn('Spin.Goal()', manager_text)
+        self.assertIn(
+            'Spin.Goal()', UNDOCK_TURN_FILE.read_text(encoding='utf-8'))
 
     def test_sbc_service_logging_is_compatible_with_systemd_229(self):
         unit_text = SERVER_UNIT_FILE.read_text(encoding='utf-8')

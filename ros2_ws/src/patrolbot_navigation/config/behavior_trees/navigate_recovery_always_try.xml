@@ -9,15 +9,23 @@
   without ever backing up + spinning to re-scan and check.
 
   Change from stock: the WouldA*RecoveryHelp gate is replaced with AlwaysSuccess,
-  so ANY navigate/control failure always runs the full ClearCostmaps -> BackUp ->
+  so ANY navigate/control failure always runs the full BackUp -> ClearCostmaps ->
   Spin -> Wait round-robin before giving up, regardless of error classification.
   number_of_retries raised 6 -> 9 (over 2 full round-robin cycles) to give the
   backup+re-scan a real chance to clear a false dead-end.
 
-  Safety order: BackUp precedes Spin. A robot against a forward wall must first
+  Safety order: BackUp precedes outer clearing and Spin. Replanning after the
+  first guarded 0.10 m move avoids spending another progress interval in place. A robot against a forward wall must first
   make a short, sonar-guarded reverse move rather than rotate into the wall.
   Dock departure uses its own guarded action state machine and never relies on
   this general recovery tree.
+
+  20261014 consensus: replan-only-if-invalid (PathExpiringTimer 10 s + IsPathValid)
+  so a valid remaining path is kept after BackUp instead of replanning every tick;
+  RoundRobin wrap_around=true keeps cycling recoveries. BackUp stays 0.10 m /
+  0.05 m/s, NOT stock 0.30 m: blind reverse is bounded by the rear sonar
+  stop-box; longer risks dock and walls. True path-retrace does not exist in
+  stock Nav2 and would need a custom behavior + safety review.
 -->
 <root BTCPP_format="4" main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -27,7 +35,7 @@
         <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
         <RateController hz="1.0">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
-            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+            <!-- 20261014 consensus: reuse remaining path while fresh, unchanged and valid; replan only when invalid. After BackUp the replan runs from the backed-up pose. --><Fallback><ReactiveSequence><Inverter><PathExpiringTimer seconds="10" path="{path}"/></Inverter><Inverter><GlobalUpdatedGoal/></Inverter><IsPathValid path="{path}"/></ReactiveSequence><ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/></Fallback>
             <Sequence>
               <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
@@ -49,11 +57,11 @@
         <ReactiveFallback name="RecoveryFallback">
           <GoalUpdated/>
           <RoundRobin name="RecoveryActions">
+            <BackUp backup_dist="0.10" backup_speed="0.05" error_code_id="{backup_error_code}"/>
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
             </Sequence>
-            <BackUp backup_dist="0.10" backup_speed="0.05" error_code_id="{backup_error_code}"/>
             <Spin spin_dist="1.57" error_code_id="{spin_error_code}"/>
             <Wait wait_duration="3.0"/>
           </RoundRobin>

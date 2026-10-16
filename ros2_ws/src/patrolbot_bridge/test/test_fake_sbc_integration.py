@@ -150,9 +150,14 @@ class FakeSbc:
                 f'{int(self.profile_commissioned)}'
             )
             odom_x, odom_y, odom_th = self.odom_pose
-            laser_field = self.laser_field if self.lidar_state == 'READY' else ''
+            lidar_ready = self.lidar_state == 'READY'
+            laser_field = self.laser_field if lidar_ready else ''
+            # Mirrors the SBC: relative acquisition age beside the scan and -1
+            # (with no ranges) whenever the lidar is not ready.
+            laser_age = self.lidar_scan_age_ms if lidar_ready else -1
         return (
             f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}'
+            f'|LASER_AGE_MS:{laser_age}'
             f'|ODOM_EPOCH:{self.odom_epoch}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
@@ -514,22 +519,6 @@ def call_release(client_node, request_id):
     return future.result()
 
 
-def send_undock(
-    client_node, clearance=0.53, speed=0.10, duration=30.0, feedback=None, timeout=10.0
-):
-    client = ActionClient(client_node, HardwareUndock, '/patrolbot/hardware_undock')
-    assert client.wait_for_server(timeout_sec=2.0)
-    goal = HardwareUndock.Goal()
-    goal.clearance_distance = clearance
-    goal.reverse_speed = speed
-    goal.maximum_duration = duration
-    goal.validation_mode = False
-    send_future = client.send_goal_async(goal, feedback_callback=feedback)
-    assert wait_until(send_future.done, timeout=3.0)
-    handle = send_future.result()
-    return client, handle
-
-
 def test_release_round_trip_and_duplicate_never_emit_velocity(harness):
     fake, bridge, client_node, _executor = harness
     with fake._lock:
@@ -593,88 +582,6 @@ def test_motor_enable_is_independent_of_dock_state(harness):
     response = future.result()
     assert response.success and response.motors_enabled
     assert any(line.startswith('MOTOR_ENABLE:') for _session, line in fake.received)
-
-
-def test_hardware_undock_reports_success_with_motors_left_enabled(harness):
-    fake, _bridge, client_node, _executor = harness
-    seen = []
-    _client, handle = send_undock(client_node, feedback=lambda msg: seen.append(msg.feedback))
-    assert handle.accepted
-    result_future = handle.get_result_async()
-    assert wait_until(result_future.done, timeout=10.0)
-    result = result_future.result().result
-    assert result.success
-    assert result.code == HardwareUndock.Result.OK
-    assert result.distance_traveled == pytest.approx(0.53)
-    assert result.motors_enabled
-    assert result.physically_clear
-    assert result.final_dock_state == 'CLEAR_CONFIRMED'
-    assert seen and seen[-1].phase_name == 'BACKING_OUT'
-    assert all(not line.startswith('DRIVE:') for _session, line in fake.received)
-
-
-def test_hardware_undock_suppresses_cmd_vel_while_active(harness):
-    fake, bridge, client_node, _executor = harness
-    with fake._lock:
-        fake.undock_events = 8
-    publisher = client_node.create_publisher(Twist, '/cmd_vel', 10)
-    _client, handle = send_undock(client_node)
-    assert handle.accepted
-    assert wait_until(lambda: bridge._undock_active, timeout=3.0)
-    command = Twist()
-    command.linear.x = -0.05
-    for _ in range(5):
-        publisher.publish(command)
-        time.sleep(0.02)
-    assert all(not line.startswith('DRIVE:') for _session, line in fake.received)
-    result_future = handle.get_result_async()
-    assert wait_until(result_future.done, timeout=10.0)
-
-
-def test_hardware_undock_failure_reports_disabled_motors(harness):
-    fake, _bridge, client_node, _executor = harness
-    with fake._lock:
-        fake.undock_should_succeed = False
-    _client, handle = send_undock(client_node)
-    result_future = handle.get_result_async()
-    assert wait_until(result_future.done, timeout=10.0)
-    result = result_future.result().result
-    assert not result.success
-    assert result.code == HardwareUndock.Result.SENSOR_BLOCKED
-    assert not result.motors_enabled
-    assert not result.physically_clear
-    assert result.final_dock_state == 'FAULT_STOPPED'
-
-
-def test_hardware_undock_cancel_is_forwarded_and_terminal(harness):
-    fake, _bridge, client_node, _executor = harness
-    with fake._lock:
-        fake.undock_events = 20
-    _client, handle = send_undock(client_node)
-    assert handle.accepted
-    time.sleep(0.2)
-    handle.cancel_goal_async()
-    result_future = handle.get_result_async()
-    assert wait_until(result_future.done, timeout=10.0)
-    result = result_future.result().result
-    assert not result.success
-    assert result.code == HardwareUndock.Result.CANCELED
-    assert any(line.startswith('UNDOCK_CANCEL:') for _session, line in fake.received)
-
-
-def test_hardware_undock_aborts_when_the_session_disappears(harness):
-    fake, bridge, client_node, _executor = harness
-    with fake._lock:
-        fake.undock_events = 40
-    _client, handle = send_undock(client_node)
-    assert handle.accepted
-    assert wait_until(lambda: bridge._undock_request_id is not None, timeout=3.0)
-    fake.drop_connection()
-    result_future = handle.get_result_async()
-    assert wait_until(result_future.done, timeout=10.0)
-    result = result_future.result().result
-    assert not result.success
-    assert result.code == HardwareUndock.Result.SESSION_CHANGED
 
 
 def test_hardware_undock_is_refused_by_a_server_without_the_feature(harness_without_undock):

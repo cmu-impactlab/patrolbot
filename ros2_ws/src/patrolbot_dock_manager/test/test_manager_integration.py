@@ -15,9 +15,12 @@ import time
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
-from patrolbot_dock_manager.dock_manager import (DockManager, STATIONARY_ANGULAR_LIMIT,
-                                                 STATIONARY_LINEAR_LIMIT)
-from patrolbot_interfaces.action import HardwareUndock, Undock
+from patrolbot_dock_manager.dock_manager import (
+    DockManager,
+    STATIONARY_ANGULAR_LIMIT,
+    STATIONARY_LINEAR_LIMIT,
+)
+from patrolbot_interfaces.action import HardwareUndock, Undock, UndockTurn
 from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
 import pytest
@@ -29,6 +32,7 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from sensor_msgs.msg import PointCloud2, PointField
 from std_srvs.srv import Empty
+from unique_identifier_msgs.msg import UUID
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('PATROLBOT_RUN_INTEGRATION') != '1',
@@ -106,6 +110,8 @@ class FakeWorld(Node):
         self.localization_resumed_at = 0.0
         self.spin_called_at = 0.0
         self.spin_calls = 0
+        self.turn_called_at = 0.0
+        self.turn_calls = 0
         # Stands in for AMCL's no-motion update service. A real stationary AMCL
         # publishes nothing until asked, which is why the manager asks.
         self.nomotion_update_calls = 0
@@ -127,6 +133,12 @@ class FakeWorld(Node):
         self.pose_y = 0.0
 
         self.behavior_pub = self.create_publisher(Twist, '/input/nav_behavior', 10)
+        # The command-path contract expects four behavior publishers on this
+        # topic (mirroring the deployed graph); the set must stay exactly
+        # {'behavior_server'}.
+        self._behavior_extra_pubs = [
+            self.create_publisher(Twist, '/input/nav_behavior', 10) for _ in range(3)
+        ]
         self.base_pub = self.create_publisher(BaseState, '/patrolbot/base_state', 10)
         self.sonar_pub = self.create_publisher(PointCloud2, '/sonar', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
@@ -144,6 +156,17 @@ class FakeWorld(Node):
             Spin,
             '/spin',
             execute_callback=self._spin,
+            cancel_callback=lambda _goal: CancelResponse.ACCEPT,
+            callback_group=self.callbacks,
+        )
+        # Stands in for the bridge-owned turn. The command-path contract
+        # expects patrolbot_bridge publishers on both turn inputs, and the
+        # real bridge revokes the turn on any foreign velocity source.
+        self.turn_server = ActionServer(
+            self,
+            UndockTurn,
+            '/patrolbot/undock_turn',
+            execute_callback=self._turn,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
             callback_group=self.callbacks,
         )
@@ -239,6 +262,18 @@ class FakeWorld(Node):
         time.sleep(0.10)
         result = Spin.Result()
         result.error_code = Spin.Result.NONE
+        goal_handle.succeed()
+        return result
+
+    def _turn(self, goal_handle):
+        self.turn_calls += 1
+        self.turn_called_at = time.monotonic()
+        time.sleep(0.10)
+        result = UndockTurn.Result()
+        result.success = True
+        result.code = UndockTurn.Result.OK
+        result.message = 'fake turn complete'
+        result.radians_traveled = float(goal_handle.request.target_yaw)
         goal_handle.succeed()
         return result
 
@@ -338,6 +373,7 @@ class FakeWorld(Node):
     def destroy_node(self):
         self.undock_server.destroy()
         self.spin_server.destroy()
+        self.turn_server.destroy()
         return super().destroy_node()
 
 
@@ -392,13 +428,21 @@ def _build_harness(
             publish_topics=['/input/navi'],
             subscribe_topics=['/cmd_vel_smoothed'],
         ),
-        PathNode('cmd_vel_mux', publish_topics=['/cmd_vel_out'], subscribe_topics=['/input/navi']),
+        PathNode(
+            'cmd_vel_mux',
+            publish_topics=['/cmd_vel_out'],
+            subscribe_topics=['/input/navi', '/input/undock_turn'],
+        ),
         PathNode(
             'teleop_velocity_smoother',
             publish_topics=['/cmd_vel'],
             subscribe_topics=['/cmd_vel_out'],
         ),
-        PathNode('patrolbot_bridge', subscribe_topics=['/cmd_vel']),
+        PathNode(
+            'patrolbot_bridge',
+            publish_topics=['/input/docking', '/input/undock_turn'],
+            subscribe_topics=['/cmd_vel'],
+        ),
         PathNode('patrolbot_safety_watchdog'),
         Node('dock_manager_integration_client'),
     ]
@@ -496,8 +540,10 @@ def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     assert wrapped.result.distance_traveled == pytest.approx(0.53)
     assert wrapped.result.physically_clear
     assert wrapped.result.final_dock_state == 'CLEAR_CONFIRMED'
-    # The turn stays in Nav2 so it keeps costmap awareness.
-    assert world.spin_calls == 1
+    # The turn is bridge-owned: Nav2 Spin is never invoked directly, and the
+    # correlated turn goal completes through the UndockTurn action instead.
+    assert world.turn_calls == 1
+    assert world.spin_calls == 0
     # A stale charge state after clearance must not have blocked anything.
     assert world.charge_state == 3
 
@@ -514,8 +560,9 @@ def test_waits_for_post_result_localization_and_delayed_handoff(harness):
 
     assert wrapped.result.success
     assert world.localization_resumed_at > world.hardware_completed_at
-    assert world.spin_called_at >= world.localization_resumed_at
-    assert world.spin_calls == 1
+    assert world.turn_called_at >= world.localization_resumed_at
+    assert world.turn_calls == 1
+    assert world.spin_calls == 0
 
 
 def test_handoff_telemetry_timeout_stays_stopped(harness):
@@ -710,17 +757,19 @@ def test_one_initialpose_event_dispatches_at_most_one_update(no_pose_harness):
     assert manager._localization is None
 
 
-def test_spin_never_forces_a_no_motion_update(harness):
+def test_turn_never_forces_a_no_motion_update(harness):
     manager, world, _client_node = harness
     world.dock_state = 'CLEAR_CONFIRMED'
     world.motors_enabled = True
     assert wait_until(lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
-    requests_before_spin = world.nomotion_update_calls
+    requests_before_turn = world.nomotion_update_calls
+    manager._hardware_goal_id = UUID(uuid=list(range(16)))
 
     ok, reason = manager._run_spin(PassiveGoal(), 7, 0.25, 'test')
 
     assert ok, reason
-    assert world.nomotion_update_calls == requests_before_spin
+    assert world.turn_calls == 1
+    assert world.nomotion_update_calls == requests_before_turn
 
 
 def test_parked_freshness_neither_grants_nor_blocks_motion_precheck(harness):

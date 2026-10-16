@@ -41,6 +41,10 @@ bool dock_state_valid
 uint8 dock_phase
 string dock_phase_name
 bool undock_active
+# A bounded bridge-owned turn after a correlated successful hardware reverse.
+# This does not authorize navigation or teleop without localization.
+bool undock_turn_active
+string undock_turn_goal_id
 uint16 undock_release_attempts
 float32 minimum_rear_range
 bool rear_sonar_usable

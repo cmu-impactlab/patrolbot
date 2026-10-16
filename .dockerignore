@@ -4,6 +4,8 @@
 !docker/
 !docker/Dockerfile
 !docker/Dockerfile.nav2-fixes
+!docker/Dockerfile.ros-tests
+!docker/run-ros-tests.sh
 !docker/nav2-patches/
 !docker/nav2-patches/**
 !docker/docker-compose.yml

@@ -18,9 +18,8 @@ import time
 from types import MethodType, SimpleNamespace as NS
 from unittest.mock import Mock
 
-import pytest
-
 from patrolbot_bridge.manual_active import manual_drive_bypass
+import pytest
 
 PACKAGE = Path(__file__).parents[1] / 'patrolbot_bridge'
 BRIDGE_SOURCE = PACKAGE / 'bridge_node.py'

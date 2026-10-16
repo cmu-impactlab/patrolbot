@@ -10,14 +10,14 @@ from patrolbot_bridge.manual_active import (
 
 
 def base_kwargs(**overrides):
-    kwargs = dict(
-        undock_hold=False,
-        lidar_ready=True,
-        guard_ready=True,
-        raw_odom_ready=True,
-        map_blocked=False,
-        mutation_blocked=False,
-    )
+    kwargs = {
+        'undock_hold': False,
+        'lidar_ready': True,
+        'guard_ready': True,
+        'raw_odom_ready': True,
+        'map_blocked': False,
+        'mutation_blocked': False,
+    }
     kwargs.update(overrides)
     return kwargs
 
@@ -47,10 +47,10 @@ class ManualDriveBypassTest(unittest.TestCase):
         self.assertFalse(manual_drive_bypass(0.51, **base_kwargs()))
         self.assertFalse(manual_drive_bypass(60.0, **base_kwargs()))
         self.assertFalse(manual_drive_bypass(None, **base_kwargs()))
-        self.assertFalse(manual_drive_bypass(float("nan"), **base_kwargs()))
-        self.assertFalse(manual_drive_bypass(float("inf"), **base_kwargs()))
+        self.assertFalse(manual_drive_bypass(float('nan'), **base_kwargs()))
+        self.assertFalse(manual_drive_bypass(float('inf'), **base_kwargs()))
         self.assertFalse(manual_drive_bypass(-0.1, **base_kwargs()))
-        self.assertFalse(manual_drive_bypass("fresh", **base_kwargs()))
+        self.assertFalse(manual_drive_bypass('fresh', **base_kwargs()))
 
     def test_stale_or_invalid_raw_odometry_fails_closed(self):
         self.assertFalse(manual_drive_bypass(0.0, **base_kwargs(raw_odom_ready=False)))
@@ -63,5 +63,5 @@ class ManualDriveBypassTest(unittest.TestCase):
         self.assertFalse(manual_drive_bypass(0.0, **base_kwargs(mutation_blocked=True)))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

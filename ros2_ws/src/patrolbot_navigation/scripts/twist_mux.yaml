@@ -1,3 +1,7 @@
+# LEGACY / NOT LOADED. The running mux is launched by patrolbot-launch from
+# param/defaults/mux.yaml (safety 10 > undock 9 > teleop 8 / joy 8 > ...).
+# These 100/50 priorities match no deployed configuration and MUST NOT be used
+# as a reference for current behavior. See docs/reference/configuration.md.
 # config/twist_mux.yaml
 twist_mux:
   ros__parameters:

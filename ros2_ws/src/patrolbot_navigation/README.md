@@ -55,8 +55,9 @@ ros2 launch patrolbot_navigation bringup.launch.py
 
 - `scripts/lms200_sanitizer.py` — fixes SICK LMS-200 header fields
   (`/bad_scan` → `/good_scan`); no `/bad_scan` publisher in current stack
-- `scripts/twist_mux.yaml` — reference velocity-priority config; the active
-  `twist_mux` is launched by `patrolbot-launch` with `param/defaults/mux.yaml`
+- `scripts/twist_mux.yaml` — legacy, not loaded, and banner-marked as such in
+  the file; the active `twist_mux` is launched by `patrolbot-launch` with
+  `param/defaults/mux.yaml`
 - `maps/cmuq_1st_floor.yaml` + `.pgm` — older CMU-Q map, not loaded at launch
 
 ## Dependencies

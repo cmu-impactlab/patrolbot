@@ -20,4 +20,10 @@ python3 -B -m pytest -q -p no:cacheprovider \
     ros2_ws/src/patrolbot_bridge/test || status=1
 python3 -B -m pytest -q -p no:cacheprovider \
     ros2_ws/src/patrolbot_dock_manager/test || status=1
+# Navigation policy suites. test_collision_monitor_integration needs a live
+# Nav2 stack and stays out of this image; the rest are offline policy checks.
+python3 -B -m pytest -q -p no:cacheprovider \
+    ros2_ws/src/patrolbot_navigation/test \
+    --ignore=ros2_ws/src/patrolbot_navigation/test/test_collision_monitor_integration.py \
+    || status=1
 exit $status

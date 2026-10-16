@@ -52,7 +52,7 @@ RUN rosdep update \
 RUN . /opt/ros/jazzy/setup.sh \
     && colcon build \
         --base-paths ros2_ws/src \
-        --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager
+        --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation
 
 # Map data and helper scripts for the catalog/persistence suites. Not built:
 # nothing imports this package, tests read its files directly.

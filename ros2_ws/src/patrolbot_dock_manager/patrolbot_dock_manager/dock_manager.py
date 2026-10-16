@@ -680,10 +680,11 @@ class DockManager(Node):
         wrapped = result_future.result()
         if wrapped is None:
             return False, 'hardware undock returned no result', None
-        if wrapped.status != GoalStatus.STATUS_SUCCEEDED:
-            # A result riding on a non-terminal action proves nothing, not
-            # even when its success flag reads true. Classify via whatever
-            # result content exists; absence maps to MOTION_FAILED.
+        if (wrapped.status != GoalStatus.STATUS_SUCCEEDED
+                and (wrapped.result is None or wrapped.result.success)):
+            # A success flag riding on a non-terminal action proves nothing.
+            # Failure details from a terminally-failed action are still
+            # mapped below; only claimed success is distrusted here.
             return False, 'hardware undock action did not succeed', wrapped.result
         result = wrapped.result
         self._hardware_distance = float(result.distance_traveled)

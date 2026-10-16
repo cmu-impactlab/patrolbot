@@ -602,8 +602,9 @@ def test_uncommissioned_profile_blocks_a_production_undock(harness):
 def test_undock_is_refused_unless_the_sbc_reports_the_robot_docked(harness):
     # Refused at goal admission (fresh charging required), so the hardware
     # is never asked: the goal is rejected, not failed after a precheck.
-    _manager, world, client_node = harness
+    manager, world, client_node = harness
     world.dock_state = 'CLEAR_CONFIRMED'
+    assert wait_until(lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
     goal_handle = send_undock(client_node)
     assert not goal_handle.accepted
     assert world.undock_calls == 0
@@ -832,7 +833,16 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
 
     _drive_degenerate(world)
     assert wait_until(lambda: not manager._snapshot().localization_valid)
-    assert not precheck_ready(manager)
+    # Authorized 2026-10-16: admission no longer consults the filter, so
+    # the degenerate estimate does not block the precheck. It still cannot
+    # survive the VERIFY_LOCALIZATION step: the goal fails there, before
+    # any hardware is asked.
+    goal_handle = send_undock(client_node)
+    assert goal_handle.accepted
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.LOCALIZATION_FAILED
+    assert world.undock_calls == 0
 
 
 def test_the_override_admits_a_degenerate_covariance_when_enabled(

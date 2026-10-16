@@ -39,6 +39,7 @@ COPY ros2_ws/src/patrolbot_bridge ros2_ws/src/patrolbot_bridge
 COPY ros2_ws/src/patrolbot_dock_manager ros2_ws/src/patrolbot_dock_manager
 
 RUN rosdep update \
+    && apt-get update \
     && rosdep install --from-paths ros2_ws/src --ignore-src -r -y --rosdistro jazzy \
     && rm -rf /var/lib/apt/lists/*
 

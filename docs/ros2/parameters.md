@@ -138,15 +138,18 @@ a 0.25 s timeout. `/input/docking` intentionally has no publisher.
 | Input | Topic | Priority | Timeout | Active? |
 |---|---|---|---|---|
 | safety_controller | `input/safety_controller` | 10 | 0.2 s | **yes** (`patrolbot_safety_watchdog.py`) |
-| teleop | `input/teleop` | 8 | 1.0 s | no publisher |
 | **joy** | `input/joy` | 8 | 0.5 s | **yes** (`patrolbot_joy_teleop`) |
+| teleop | `input/teleop` | 7 | 1.0 s | **yes** (`patrolbot_web_bridge`, dashboard deadman teleop) |
 | switch | `input/switch` | 6 | 1.0 s | no publisher |
 | **navigation** | `input/navi` | 5 | 1.0 s | **yes** (`collision_monitor`) |
 
-Higher priority wins; the joystick (8) outranks navigation (5). RB cancels the
-active Nav2 goal, and the 0.5 s timeout releases the manual mux input only after
-the zero ramp and cancellation confirmation. Navigation never resumes that
-canceled goal automatically.
+Higher priority wins; the joystick (8) outranks the dashboard deadman teleop (7), which outranks
+navigation (5). RB cancels the active Nav2 goal, and the 0.5 s timeout releases the joystick mux
+input only after the zero ramp and cancellation confirmation. Navigation never resumes that
+canceled goal automatically. The dashboard channel publishes only while its browser deadman is
+held and zeroes `input/teleop` within 0.3 s of the last frame; the mux slot itself times out 1.0 s
+later. Topic names, priorities and timings are pinned by `contracts/web-teleop.json` (see
+[Topics](topics.md)).
 
 ## Final velocity smoother (`smoother.yaml`)
 

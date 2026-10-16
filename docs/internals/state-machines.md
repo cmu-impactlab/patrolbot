@@ -157,9 +157,12 @@ stateDiagram-v2
 The joystick (priority 8) preempts navigation (priority 5) when RB is held and
 cancels the active Nav2 goal. On release the teleop ramps to zero and stays at
 priority 8 until cancellation is confirmed, then goes silent and times out
-after 0.5 s. A new autonomous goal must be sent explicitly. Configured-but-unused
-inputs (safety 10, teleop 8, switch 6) would slot into this ordering if a
-publisher appeared.
+after 0.5 s. A new autonomous goal must be sent explicitly. The dashboard's
+on-screen deadman teleop (`patrolbot_web_bridge` → `input/teleop`) slots in
+below the joystick at priority 7: it preempts Nav2 while held but never the
+F710, and it publishes a zero at its 0.3 s watchdog. The remaining unused mode
+input (`input/switch`, 6) would slot into this ordering if a publisher
+appeared.
 
 ## Joystick interlock (deadman)
 

@@ -22,6 +22,9 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 | `/patrolbot/dock_readiness` | `patrolbot_interfaces/DockReadiness` | `patrolbot_dock_manager` | monitoring | 2 Hz |
 | `/joy` | `sensor_msgs/Joy` | `joy_node` | `patrolbot_joy_teleop` | event-driven |
 | `/cmd_vel_joy` → `/input/joy` | `geometry_msgs/Twist` | `patrolbot_joy_teleop` | `twist_mux` (prio 8) | 30 Hz while RB held/ramping or awaiting Nav2 cancellation; one final zero |
+| `/input/teleop` | `geometry_msgs/Twist` | `patrolbot_web_bridge` (dashboard) | `twist_mux` (prio 7) | ~10–15 Hz while the dashboard deadman is held; zeroed by the 0.3 s watchdog |
+| `/patrolbot/manual_active` | `std_msgs/Bool` | `patrolbot_joy_teleop` | `patrolbot_bridge` | while RB held or ramping to a stop |
+| `/patrolbot/web_teleop_active` | `std_msgs/Bool` | `patrolbot_web_bridge` (dashboard) | `patrolbot_bridge` | while the dashboard deadman is held |
 | `/input/nav_controller` | `geometry_msgs/Twist` | `controller_server` (RPP) | `nav_command_mux` | 5 Hz |
 | `/input/nav_behavior` | `geometry_msgs/Twist` | `behavior_server` | `nav_command_mux` | behavior-dependent |
 | `/input/docking` | `geometry_msgs/Twist` | none (reserved) | `nav_command_mux` | no publisher until commissioned |
@@ -57,19 +60,24 @@ flowchart LR
     C -->|input/navi| D["twist_mux"]
     S["patrolbot_safety_watchdog"] -->|input/safety_controller| D
     J["patrolbot_joy_teleop"] -->|input/joy| D
+    W["patrolbot_web_bridge (dashboard)"] -->|input/teleop| D
     D -->|cmd_vel_out| E["teleop_velocity_smoother"]
     E -->|/cmd_vel| F["patrolbot_bridge"]
 ```
 
+The dashboard teleop channel is pinned by `contracts/web-teleop.json` (repository root): topic names
+and types, mux priorities and timeouts, deadman-evidence freshness, and the web bridge's 0.3 s zero
+watchdog. `patrolbot-dashboard` vendors a byte-identical copy and compares it against this
+repository's `main`, so a mismatched pair fails CI rather than the robot.
+
 ## Configured but unused mux inputs
 
-`mux.yaml` reserves two more priorities with **no current publisher**. They are valid topics if a
-future source is added, but nothing writes them today. `input/safety_controller` is active and owned
-by `patrolbot_safety_watchdog`.
+`mux.yaml` reserves one more priority with **no current publisher**. It is a valid topic if a future
+source is added, but nothing writes it today. `input/safety_controller` is active and owned by
+`patrolbot_safety_watchdog`; `input/teleop` is now the dashboard deadman teleop channel.
 
 | Topic | Priority | Intended source |
 |---|---|---|
-| `input/teleop` | 8 | keyboard / external teleop |
 | `input/switch` | 6 | a mode switch |
 
 ## Inactive topics (legacy `rosaria2` path only)

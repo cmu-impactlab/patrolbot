@@ -46,7 +46,10 @@ flowchart LR
 (`sensor_msgs/PointCloud2`), `/battery` (`sensor_msgs/BatteryState`), `/diagnostics`
 (`diagnostic_msgs/DiagnosticArray`), `/patrolbot/base_state`
 (`patrolbot_interfaces/BaseState`), TF `odom→base_link` (50 Hz).
-**Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`).
+**Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`), `/patrolbot/manual_active`
+(`std_msgs/Bool`, fresh deadman evidence from the joystick teleop that admits nonzero `DRIVE`
+while localization — recovery stage, Nav2 readiness, AMCL pose freshness, map state — would
+otherwise hold autonomy).
 **Services:** `/patrolbot/charge_release` (`patrolbot_interfaces/srv/ChargeRelease`),
 `/patrolbot/motor_enable` (`patrolbot_interfaces/srv/MotorEnable`), `/patrolbot/dock_reset`
 (`patrolbot_interfaces/srv/DockReset`).

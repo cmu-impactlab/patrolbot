@@ -39,8 +39,11 @@ DRIVE:linear:angular\n
 CHARGE_RELEASE:request_uuid\n
 MOTOR_ENABLE:request_uuid\n
 ```
-Subscribed topic: `/cmd_vel` (`geometry_msgs/Twist`) — the command after Nav2,
-collision monitoring, `twist_mux`, and final velocity smoothing.
+Subscribed topics: `/cmd_vel` (`geometry_msgs/Twist`) — the command after Nav2,
+collision monitoring, `twist_mux`, and final velocity smoothing — and
+`/patrolbot/manual_active` (`std_msgs/Bool`) — fresh deadman evidence from the
+joystick teleop that admits nonzero `DRIVE` while localization (recovery
+stage, Nav2 readiness, AMCL pose freshness, map state) would hold autonomy.
 
 Services:
 

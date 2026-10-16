@@ -24,6 +24,7 @@ from patrolbot_bridge.control_protocol import (
 )
 from patrolbot_bridge.epoch_runtime import EpochRuntime
 from patrolbot_bridge.lidar_state import LidarState
+from patrolbot_bridge.manual_active import manual_drive_bypass
 from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
 from patrolbot_bridge.safety_telemetry import (
@@ -64,6 +65,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import BatteryState, LaserScan, PointCloud2, PointField
+from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster
 
 
@@ -104,6 +106,11 @@ class PatrolBotBridge(Node):
                 LaserScan, self.unfiltered_scan_topic, qos_profile_sensor_data
             )
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+        # Deadman evidence from the joystick teleop (see manual_active).
+        self._manual_active_at = 0.0
+        self.manual_sub = self.create_subscription(
+            Bool, '/patrolbot/manual_active', self._manual_active_cb, 10
+        )
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Auxiliary telemetry (sonar / battery / diagnostics). Parsed from a separate
@@ -1768,9 +1775,53 @@ class PatrolBotBridge(Node):
         self.get_logger().error(f'Hardware undock aborted: {message}')
         return result
 
-        # ------------------------------------------------------------------
-        # Velocity forwarding
-        # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Velocity forwarding
+    # ------------------------------------------------------------------
+
+    def _manual_active_cb(self, msg):
+        if bool(getattr(msg, 'data', False)):
+            self._manual_active_at = time.monotonic()
+
+    def _manual_drive_allowed(self):
+        # Scoped bypass: fresh deadman evidence AND no in-flight/unknown
+        # owner (callers hold the epoch lock, like _lidar_ready). Localization
+        # recovery stage, Nav2 readiness, AMCL pose freshness and map state do
+        # not gate manual DRIVE; autonomy (which never asserts manual_active)
+        # stays blocked by commands_allowed.
+        now = time.monotonic()
+        with self._pose_lock:
+            odom_age = now - self._pose_at
+            raw_odom_ready = bool(
+                self._pose_received
+                and math.isfinite(odom_age)
+                and 0.0 <= odom_age <= self._odom_tf_timeout
+            )
+        epoch = self._epoch
+        # A settled map (ready or failed) or no map at all allows manual
+        # DRIVE; an in-flight transaction or unknown map state does not.
+        map_blocked = bool(
+            epoch._map_error
+            or epoch.maps is None
+            or (epoch.maps.hold and epoch.maps.stage != 'failed')
+        )
+        # In-flight or unknown lifecycle/map mutation ownership blocks
+        # manual DRIVE; a read-only readiness probe does not.
+        mutation_blocked = bool(
+            epoch._failed
+            or epoch._map_goal is not None
+            or epoch._map_future is not None
+            or (epoch._future is not None and epoch._future_kind != 'read-only')
+        )
+        return manual_drive_bypass(
+            now - self._manual_active_at,
+            undock_hold=epoch.undock_hold,
+            lidar_ready=self._lidar_ready(),
+            guard_ready=epoch.guard.ready,
+            raw_odom_ready=raw_odom_ready,
+            map_blocked=map_blocked,
+            mutation_blocked=mutation_blocked,
+        )
 
     def cmd_vel_callback(self, msg):
         # Defence in depth. The SBC refuses every nonzero DRIVE while its undock
@@ -1788,7 +1839,11 @@ class PatrolBotBridge(Node):
                         if not (self._undock_turn.drive_allowed and pure_angular(msg)):
                             return
                     elif not self._epoch.commands_allowed or not self._lidar_ready():
-                        return
+                        # Manual deadman evidence bypasses only the
+                        # localization hold and forwards the admitted DRIVE;
+                        # autonomy never asserts it.
+                        if not self._manual_drive_allowed():
+                            return
                 if self.sock is None:
                     return
                 self.sock.sendall(f'DRIVE:{msg.linear.x}:{msg.angular.z}\n'.encode('utf-8'))

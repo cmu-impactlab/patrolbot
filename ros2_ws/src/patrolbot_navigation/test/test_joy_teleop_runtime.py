@@ -289,6 +289,25 @@ def test_existing_rb_takeover_retries_cancel_and_holds_zero_after_release(teleop
     assert not teleop._takeover_pending
 
 
+def test_manual_evidence_is_not_kept_alive_by_the_takeover_zero_hold(teleop):
+    # An unconfirmable takeover latches _takeover_pending, which keeps
+    # publishing priority-8 zero. That fail-closed zero hold is not manual
+    # intent and must not keep the bridge's manual bypass open.
+    teleop.nav_cancel.ready = False
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.tick()
+    evidence = [m for m in teleop.messages if hasattr(m, 'data')]
+    assert evidence and evidence[-1].data is True
+    teleop.joy_cb(joy(teleop.now))
+    for _ in range(30):
+        teleop.tick()
+    assert teleop._takeover_pending
+    evidence = [m for m in teleop.messages if hasattr(m, 'data')]
+    assert evidence[-1].data is False
+    twists = [m for m in teleop.messages if hasattr(m, 'linear')]
+    assert twists[-1].linear.x == 0.0
+
+
 def test_gap_without_timer_cannot_preserve_an_old_pending_chord(teleop):
     teleop._base_state_cb(state(teleop.now))
     chord(teleop)

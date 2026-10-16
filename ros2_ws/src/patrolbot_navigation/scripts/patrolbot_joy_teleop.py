@@ -386,7 +386,10 @@ class JoyTeleop(Node):
         moving = abs(self.lin_cmd) > 1e-3 or abs(self.ang_cmd) > 1e-3
 
         # Deadman evidence first so the last message of a drive tick stays Twist.
-        self.manual_pub.publish(Bool(data=bool(self.active or moving or self._takeover_pending)))
+        # Evidence is real manual intent only (held deadman or still coasting);
+        # the fail-closed _takeover_pending zero hold is not intent and must
+        # not keep the bridge's manual bypass open.
+        self.manual_pub.publish(Bool(data=bool(self.active or moving)))
         if self.active or moving or self._takeover_pending:
             # While RB held (manual control) OR still coasting to a stop, keep
             # publishing at a steady rate. A pending takeover adds a fail-closed

@@ -20,6 +20,7 @@
   <depend>std_srvs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>patrolbot_interfaces</depend>
+  <depend>unique_identifier_msgs</depend>
   <exec_depend>tf2_ros</exec_depend>
 
   <test_depend>ament_copyright</test_depend>

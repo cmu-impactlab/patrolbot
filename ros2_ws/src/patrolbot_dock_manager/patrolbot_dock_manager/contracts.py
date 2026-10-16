@@ -212,29 +212,22 @@ def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
 
 
 def precheck_failures(
-        state: SafetySnapshot, validation_mode: bool = False,
-        require_fresh_localization: bool = True) -> List[str]:
+        state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
     """
     Validate the Pi-side gates before asking the SBC to undock.
 
-    Physical readiness is the SBC's call: it owns the bumpers, the rear sonar,
-    the charger and the motors, and refuses the operation itself if any of them
-    is wrong. What is checked here is what only the Pi can see — localization,
-    the velocity command path, and whether another navigation action is running
-    — plus the SBC's own published verdict on whether the robot is docked and
-    commissioned.
-
-    E-stop and motor state are intentionally not required. A docked robot has
-    been observed reporting estop=1 with motors=0, and the SBC's release
-    sequence disables and confirms the motors itself before touching the
-    charger.
-
-    ``require_fresh_localization`` lets published readiness report a valid
-    stationary pose without weakening the strict pre-motion gate.
+    Charging is the operator entry condition. Live hardware and an exclusive
+    collision-checked command path still have to support the manoeuvre.
     """
     failures = []
     if not state.link_connected or not state.hardware_state_valid:
         failures.append('hardware link/state invalid')
+    if not state.charge_state_valid or state.charge_state <= 0:
+        failures.append('robot is not confirmed charging')
+    if state.estop_pressed or state.fault_flags:
+        failures.append('E-stop or hardware fault')
+    # The bridge checks raw stationary odometry before release. Normal /odom
+    # is deliberately unpublished while a cold AMCL reset is pending.
     if not state.dock_state_valid:
         failures.append('SBC dock state is stale or unavailable')
     elif state.dock_state == DOCK_FAULT_STOPPED:
@@ -250,17 +243,6 @@ def precheck_failures(
         # Production undocking is refused by the SBC until rear-sonar indices,
         # E-stop semantics and fault masks have been physically validated.
         failures.append('SBC undock hardware profile is not commissioned')
-    # Two different facts since the parked-robot allowance split them, and an
-    # operator acts on them differently. A stationary robot legitimately holds
-    # localization_valid true while localization_fresh goes false, because it
-    # cannot produce a fresh pose message without being forced to resample.
-    # Message freshness is therefore a question only the caller about to move
-    # the robot may insist on. Calling an unrefreshed pose "invalid" sends the
-    # reader hunting for a broken pose estimate that is in fact fine.
-    if not state.localization_valid:
-        failures.append('localization invalid')
-    elif require_fresh_localization and not state.localization_fresh:
-        failures.append('localization not refreshed since the robot last moved')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')
     if not state.navigation_idle:
@@ -290,17 +272,12 @@ def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
         failures.append('motors are not live for the Nav2 handoff')
     if state.estop_pressed:
         failures.append('E-stop asserted')
+    if state.fault_flags:
+        failures.append('hardware fault')
     if not state.odom_fresh:
         failures.append('odometry stale')
-    # Two different facts since the parked-robot allowance split them, and an
-    # operator acts on them differently. A stationary robot legitimately holds
-    # localization_valid true while localization_fresh goes false, because AMCL
-    # publishes nothing when nothing moves. Calling that "invalid" sends the
-    # reader hunting for a broken pose estimate that is in fact fine.
-    if not state.localization_valid:
-        failures.append('localization invalid')
-    elif not state.localization_fresh:
-        failures.append('localization not refreshed since the robot last moved')
+    elif not state.stationary:
+        failures.append('robot is not stationary at the handoff')
     if not state.command_path_valid:
         failures.append('velocity command path invalid')
     if not state.navigation_idle:

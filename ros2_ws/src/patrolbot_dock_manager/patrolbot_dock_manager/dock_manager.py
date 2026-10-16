@@ -298,8 +298,7 @@ class DockManager(Node):
             pose_age = (
                 now - self._localization_at if self._localization_at else 1e6)
             state_name = self._state_name
-        failures = precheck_failures(
-            snapshot, require_fresh_localization=False)
+        failures = precheck_failures(snapshot)
         message = DockReadiness()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = 'base_link'
@@ -444,8 +443,11 @@ class DockManager(Node):
         if not request.operator_authorized:
             self.get_logger().error('Undock goal rejected: operator authorization absent.')
             return GoalResponse.REJECT
-        if self._base_state is None or getattr(self._base_state, 'map_id', '') != 'cmuq-floor2':
-            self.get_logger().error('Undock refused: dock coordinates belong to Floor 2.')
+        state = self._snapshot(for_undock=True)
+        if not (state.hardware_state_valid and state.charge_state_valid
+                and state.charge_state > 0 and state.dock_state_valid
+                and state.dock_state == DOCK_DOCKED_CONFIRMED):
+            self.get_logger().error('Undock goal rejected: fresh charging required.')
             return GoalResponse.REJECT
         if request.dock_id != self.get_parameter('dock_id').value:
             self.get_logger().error(
@@ -712,10 +714,13 @@ class DockManager(Node):
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during handoff'
-            state = self._snapshot()
+            state = self._snapshot(for_undock=True)
             failures = resume_failures(state, expected_session)
             if not failures:
                 return True, ''
+            # Pose sync stays here even though admission no longer gates on
+            # localization: Nav2 must not take control without a fresh pose.
+            # Only the admission precheck was authorized to drop it.
             localization_satisfied = bool(
                 state.localization_fresh and state.localization_valid)
             if not localization_satisfied and attempts < attempt_limit:
@@ -737,23 +742,13 @@ class DockManager(Node):
             self, goal_handle, correlation_id, validation_mode=False):
         deadline = time.monotonic() + float(
             self.get_parameter('precheck_timeout').value)
-        attempts = 0
-        attempt_limit = self._localization_update_attempt_limit()
-        localization_satisfied = False
         stable_since = None
         last_failures = ['precheck not evaluated']
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
                 return False, 'goal canceled during precheck'
-            state = self._snapshot()
-            if state.localization_fresh and state.localization_valid:
-                localization_satisfied = True
-            failures = precheck_failures(
-                state, validation_mode,
-                require_fresh_localization=not localization_satisfied)
-            if not localization_satisfied and attempts < attempt_limit:
-                if self._request_localization_update(force=attempts == 0):
-                    attempts += 1
+            state = self._snapshot(for_undock=True)
+            failures = precheck_failures(state, validation_mode)
             if failures:
                 stable_since = None
                 last_failures = failures
@@ -933,7 +928,7 @@ class DockManager(Node):
             base is not None and
             not fault_flags & ENCODER_FAULT_MASK)
 
-    def _snapshot(self, *, for_pose_initialization=False):
+    def _snapshot(self, *, for_pose_initialization=False, for_undock=False):
         now = time.monotonic()
         timeout = float(self.get_parameter('sensor_timeout').value)
         self._refresh_command_path()
@@ -977,7 +972,8 @@ class DockManager(Node):
             origin_valid=getattr(base, 'odom_epoch_valid', False),
             recovery_required=getattr(base, 'localization_recovery_required', True),
             recovery_stage=getattr(base, 'localization_recovery_stage', ''),
-            for_pose_initialization=for_pose_initialization)
+            for_pose_initialization=for_pose_initialization,
+            for_undock=for_undock)
         seed_stamp = getattr(base, 'localization_seed_stamp_ns', 0) if base else 0
         pose_stamp = (pose.header.stamp.sec * 1_000_000_000 +
                       pose.header.stamp.nanosec) if pose else 0
@@ -1002,13 +998,14 @@ class DockManager(Node):
             rear_clear=rear_clear,
             odom_fresh=odom_age <= timeout,
             stationary=stationary,
-            # Raw, deliberately. Physical-motion consumers gate on this:
-            # precheck_failures and _wait_for_localization treat it as proof
-            # that a pose arrived recently, and _wait_for_localization's
-            # default newer_than=0.0 would otherwise accept an arbitrarily old
-            # pose as authorization for the 0.53 m hardware undock. The
-            # parked-robot allowance is a usability relaxation for consumers
-            # that are not about to move the robot, and must not reach this.
+            # Raw, deliberately. The VERIFY/RESTORE localization flow steps
+            # treat it as proof that a pose arrived recently, and
+            # _wait_for_localization's default newer_than=0.0 would otherwise
+            # accept an arbitrarily old pose as authorization for the 0.53 m
+            # hardware undock. The parked-robot allowance is a usability
+            # relaxation for consumers that are not about to move the robot,
+            # and must not reach this. Undock admission itself no longer
+            # consults localization (authorized 2026-10-16).
             localization_fresh=pose_age <= timeout,
             localization_valid=(
                 localization_valid and pose_still_describes_the_robot),

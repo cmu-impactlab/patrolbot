@@ -39,7 +39,7 @@ SAFE_DOCKED = SafetySnapshot(
     charge_state_valid=True,
     charge_state=2,
     motors_enabled=False,
-    estop_pressed=True,
+    estop_pressed=False,
     bumpers_valid=True,
     sonar_fresh=True,
     rear_clear=True,
@@ -73,10 +73,17 @@ SAFE_HANDOFF = replace(
 # Precheck
 # ---------------------------------------------------------------------------
 
-def test_docked_precheck_passes_with_estop_and_motors_unresolved():
-    """A docked robot reporting estop=1, motors=0 is normal, not a failure."""
+def test_docked_precheck_passes_with_motors_unresolved_but_requires_no_estop():
+    """Undock admission requires E-stop clear and charging contact.
+
+    Authorized 2026-10-16: the preconditions are a released E-stop and
+    confirmed charging contact. An asserted E-stop blocks undocking even
+    docked; unresolved motor state does not, since the SBC release
+    sequence disables and confirms the motors itself.
+    """
     assert precheck_failures(SAFE_DOCKED) == []
     assert precheck_failures(replace(SAFE_DOCKED, motors_enabled=True)) == []
+    assert precheck_failures(replace(SAFE_DOCKED, estop_pressed=True)) != []
 
 
 @pytest.mark.parametrize(
@@ -84,11 +91,13 @@ def test_docked_precheck_passes_with_estop_and_motors_unresolved():
     [
         ('link_connected', False),
         ('hardware_state_valid', False),
+        ('charge_state_valid', False),
+        ('charge_state', 0),
+        ('estop_pressed', True),
+        ('fault_flags', 1),
         ('dock_state_valid', False),
         ('undock_active', True),
         ('undock_profile_commissioned', False),
-        ('localization_fresh', False),
-        ('localization_valid', False),
         ('command_path_valid', False),
         ('navigation_idle', False),
     ],
@@ -154,8 +163,9 @@ def test_handoff_detects_a_session_change():
         ('link_connected', False),
         ('hardware_state_valid', False),
         ('estop_pressed', True),
+        ('fault_flags', 1),
         ('odom_fresh', False),
-        ('localization_valid', False),
+        ('stationary', False),
         ('command_path_valid', False),
         ('navigation_idle', False),
     ],
@@ -361,48 +371,33 @@ def test_a_healthy_filter_still_passes():
     assert planar_covariance_usable(9.0, 9.0, 3.0)
 
 
-def test_a_stale_but_valid_pose_is_not_reported_as_invalid():
+def test_undock_precheck_does_not_consult_localization():
+    """Authorized 2026-10-16: admission is E-stop plus charging contact.
+
+    Localization state — fresh, stale, valid or invalid — must neither
+    admit nor refuse an undock goal. Post-undock pose recovery stays
+    enforced by the VERIFY/RESTORE localization flow steps and the motion
+    gates, not by admission.
     """
-    Say which of the two localization terms actually failed.
-
-    Since the parked-robot allowance split freshness from validity, these are
-    different facts: a stationary robot legitimately holds `localization_valid`
-    true while `localization_fresh` goes false, because AMCL stops publishing
-    when nothing moves. Reporting that as "localization invalid" sends an
-    operator hunting for a broken pose estimate when the pose is fine and
-    merely un-refreshed -- observed live with localization_age at 99.8 s,
-    localization_valid true, and the dashboard still saying invalid.
-    """
-    stale = replace(
-        SAFE_DOCKED, localization_fresh=False, localization_valid=True)
-    failures = precheck_failures(stale)
-
-    assert failures != [], 'undock must still be refused on a stale pose'
-    assert 'localization invalid' not in failures
-    assert any('not refreshed' in failure for failure in failures), failures
-
-
-def test_a_genuinely_invalid_pose_still_reads_as_invalid():
-    """The unchanged half: a bad estimate is still reported as a bad estimate."""
     for snapshot in (
+            replace(SAFE_DOCKED, localization_fresh=False,
+                    localization_valid=True),
             replace(SAFE_DOCKED, localization_valid=False),
-            replace(
-                SAFE_DOCKED, localization_valid=False,
-                localization_fresh=False)):
-        assert 'localization invalid' in precheck_failures(snapshot)
+            replace(SAFE_DOCKED, localization_valid=False,
+                    localization_fresh=False)):
+        assert precheck_failures(snapshot) == []
 
 
-def test_the_handoff_gate_distinguishes_the_same_two_terms():
-    """resume_failures carries the identical wording bug, so it gets the fix."""
-    stale = replace(
-        SAFE_HANDOFF, localization_fresh=False, localization_valid=True)
-    failures = resume_failures(stale, 7)
-
-    assert failures != [], 'handoff must still be refused on a stale pose'
-    assert 'localization invalid' not in failures
-    assert any('not refreshed' in failure for failure in failures), failures
-    assert 'localization invalid' in resume_failures(
-        replace(SAFE_HANDOFF, localization_valid=False), 7)
+def test_the_handoff_gate_checks_stillness_not_localization():
+    """resume_failures pins a stationary handoff, not pose freshness."""
+    assert resume_failures(SAFE_HANDOFF, 7) == []
+    assert resume_failures(
+        replace(SAFE_HANDOFF, localization_fresh=False,
+                localization_valid=True), 7) == []
+    assert resume_failures(
+        replace(SAFE_HANDOFF, localization_valid=False), 7) == []
+    failures = resume_failures(replace(SAFE_HANDOFF, stationary=False), 7)
+    assert any('stationary' in failure for failure in failures)
 
 
 def test_non_finite_odometry_cannot_satisfy_dock_freshness():

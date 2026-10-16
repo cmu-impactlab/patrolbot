@@ -600,12 +600,12 @@ def test_uncommissioned_profile_blocks_a_production_undock(harness):
 
 
 def test_undock_is_refused_unless_the_sbc_reports_the_robot_docked(harness):
+    # Refused at goal admission (fresh charging required), so the hardware
+    # is never asked: the goal is rejected, not failed after a precheck.
     _manager, world, client_node = harness
     world.dock_state = 'CLEAR_CONFIRMED'
     goal_handle = send_undock(client_node)
-    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
-    assert not wrapped.result.success
-    assert wrapped.result.code == Undock.Result.PRECHECK_FAILED
+    assert not goal_handle.accepted
     assert world.undock_calls == 0
 
 
@@ -663,9 +663,16 @@ def test_docked_state_never_triggers_background_localization_requests(
     assert world.nomotion_update_calls == 0
 
 
-@pytest.mark.parametrize('phase', ('precheck', 'localization', 'handoff'))
-def test_each_explicit_phase_dispatches_at_most_five_updates(
-        no_pose_harness, phase):
+@pytest.mark.parametrize(
+    ('phase', 'expect_ok', 'expect_updates'),
+    # Authorized 2026-10-16: admission no longer consults AMCL, so the
+    # precheck passes on a silent filter without requesting updates. The
+    # localization step and the handoff pose sync still do.
+    (('precheck', True, 0),
+     ('localization', False, 5),
+     ('handoff', False, 5)))
+def test_explicit_phases_request_updates_only_where_a_pose_is_needed(
+        no_pose_harness, phase, expect_ok, expect_updates):
     manager, world, _client_node = no_pose_harness
     world.localization_enabled = False
     assert wait_until(manager._localization_update_client.service_is_ready)
@@ -678,19 +685,22 @@ def test_each_explicit_phase_dispatches_at_most_five_updates(
     else:
         ok, _reason = manager._wait_for_handoff(goal, 7, 1.4, 'test')
 
-    assert not ok
-    assert world.nomotion_update_calls == 5
+    assert ok == expect_ok
+    assert world.nomotion_update_calls == expect_updates
 
 
-def test_explicit_precheck_stops_requesting_after_a_valid_fresh_pose(
+def test_explicit_precheck_never_requests_a_pose_update(
         no_pose_harness):
+    # Admission does not consult AMCL, so the precheck must not poke it:
+    # no requests even while the filter stays silent, and success follows
+    # from E-stop plus charging contact alone.
     manager, world, _client_node = no_pose_harness
     assert wait_until(manager._localization_update_client.service_is_ready)
 
     ok, reason = manager._wait_for_precheck(PassiveGoal(), 'test')
 
     assert ok, reason
-    assert world.nomotion_update_calls == 1
+    assert world.nomotion_update_calls == 0
 
 
 def test_one_initialpose_event_dispatches_at_most_one_update(no_pose_harness):
@@ -721,7 +731,11 @@ def test_spin_never_forces_a_no_motion_update(harness):
     assert world.nomotion_update_calls == requests_before_spin
 
 
-def test_published_parked_readiness_does_not_relax_motion_precheck(harness):
+def test_parked_freshness_neither_grants_nor_blocks_motion_precheck(harness):
+    # Authorized 2026-10-16: admission is E-stop plus charging contact and
+    # no longer consults localization, so a stale-but-valid pose neither
+    # grants nor blocks the motion precheck. Freshness stays enforced by
+    # the VERIFY/RESTORE localization flow steps, not by admission.
     manager, world, client_node = harness
     seen = []
     client_node.create_subscription(
@@ -736,8 +750,10 @@ def test_published_parked_readiness_does_not_relax_motion_precheck(harness):
     assert seen[-1].localization_valid
     assert not seen[-1].localization_fresh
     assert seen[-1].ready_for_undock
-    assert not precheck_ready(manager), (
-        'physical motion precheck accepted the parked freshness exception')
+    assert precheck_ready(manager)
+    # ...and losing charging contact blocks it again regardless of pose.
+    world.charge_state = 0
+    assert wait_until(lambda: not precheck_ready(manager))
 
 
 def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
@@ -773,7 +789,10 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
     world.cross_variance = 1.860600e-07
     world.yaw_variance = 4.660659e-07
     assert wait_until(lambda: not manager._snapshot().localization_valid)
-    assert not precheck_ready(manager)
+    # Authorized 2026-10-16: admission no longer consults the filter, so
+    # the degenerate estimate does not block the precheck. Pose gating
+    # moved to the VERIFY/RESTORE localization flow steps, not admission.
+    assert precheck_ready(manager)
 
     # And it recovers when AMCL does, rather than latching off.
     world.position_variance = 0.01
@@ -1063,16 +1082,20 @@ def test_localization_fresh_stays_a_statement_about_age(harness):
     assert snapshot.localization_valid, (
         'precondition: the parked allowance is in effect')
     assert not snapshot.localization_fresh, (
-        'localization_fresh was relaxed; the undock precheck now accepts a '
-        'stale pose as authorisation to move')
+        'precondition: the pose message went stale while parked')
+    # Authorized 2026-10-16: admission no longer reads localization_fresh,
+    # so a stale pose neither grants nor blocks the precheck. Freshness
+    # stays enforced by the VERIFY/RESTORE localization flow steps.
+    assert precheck_ready(manager)
 
 
-def test_the_undock_precheck_still_demands_a_genuinely_fresh_pose(harness):
+def test_the_undock_precheck_ignores_pose_freshness_by_authorization(harness):
     """
-    The parked allowance must not reach the gate in front of physical motion.
+    Authorized 2026-10-16: admission is E-stop plus charging contact.
 
-    Accepting a navigation goal is a UI decision. Reversing 0.53 m off a
-    charging dock is not, and it keeps the stricter contract.
+    The parked allowance still governs what localization_valid means, but
+    a stale pose no longer blocks the undock precheck. Freshness stays
+    enforced by the VERIFY/RESTORE localization flow steps, not admission.
     """
     manager, world, _client_node = harness
     assert wait_until(
@@ -1085,8 +1108,7 @@ def test_the_undock_precheck_still_demands_a_genuinely_fresh_pose(harness):
 
     assert manager._snapshot().localization_valid, (
         'precondition: the parked allowance is in effect')
-    assert not precheck_ready(manager), (
-        'undock was cleared on a pose nothing had refreshed')
+    assert precheck_ready(manager)
 
 
 def test_an_encoder_fault_voids_the_parked_allowance(harness):

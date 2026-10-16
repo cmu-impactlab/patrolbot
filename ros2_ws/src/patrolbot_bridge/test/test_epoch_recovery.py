@@ -1,4 +1,5 @@
 """Recovery must prove lifecycle, seed and result ordering for one origin."""
+
 import unittest
 
 from patrolbot_bridge.epoch_recovery import EpochRecovery

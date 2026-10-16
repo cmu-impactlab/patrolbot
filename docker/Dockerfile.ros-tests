@@ -1,9 +1,8 @@
 # ROS test image for the PatrolBot Pi-side Python stack.
 #
-# Builds patrolbot_interfaces (rosidl) + patrolbot_bridge +
-# patrolbot_dock_manager and runs their pytest suites, including the
-# in-process fake-world integration tests. No hardware, no Nav2 nodes,
-# no network services, no robot commands.
+# Builds the interfaces, bridge, dock manager and navigation share data.
+# Runs fake-peer integration tests and offline navigation policy tests.
+# No hardware, real Nav2 stack, external services or robot commands.
 #
 # Hermetic by default: ROS_LOCALHOST_ONLY keeps DDS discovery on loopback
 # (see issue #20), and --network=none can be added at run time since the
@@ -17,9 +16,10 @@
 #   docker run --rm patrolbot-ros-tests \
 #     ros2_ws/src/patrolbot_dock_manager/test/test_contracts.py
 #
-# CI shape (workflow to be added separately): build once, run the default
-# suite, fail the job on nonzero exit. No credentials, no devices, no pushes.
-FROM ros:jazzy-ros-base
+# Build just the reusable toolchain with --target ros-test-env. Source
+# changes invalidate only the second stage, not apt/rosdep installation.
+# CI can build the final stage and fail on a nonzero container exit.
+FROM ros:jazzy-ros-base AS ros-test-env
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -34,30 +34,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && (rosdep init || true)
 
-WORKDIR /opt/patrolbot
-COPY ros2_ws/src/patrolbot_interfaces ros2_ws/src/patrolbot_interfaces
-COPY ros2_ws/src/patrolbot_bridge ros2_ws/src/patrolbot_bridge
-COPY ros2_ws/src/patrolbot_dock_manager ros2_ws/src/patrolbot_dock_manager
-# Map data for the catalog/persistence suites (read directly from source).
-COPY ros2_ws/src/patrolbot_navigation ros2_ws/src/patrolbot_navigation
+WORKDIR /tmp/ros-test-deps
+COPY ros2_ws/src/patrolbot_interfaces/package.xml patrolbot_interfaces/package.xml
+COPY ros2_ws/src/patrolbot_bridge/package.xml patrolbot_bridge/package.xml
+COPY ros2_ws/src/patrolbot_dock_manager/package.xml patrolbot_dock_manager/package.xml
 
 RUN rosdep update \
     && apt-get update \
     && rosdep install \
-        --from-paths \
-            ros2_ws/src/patrolbot_interfaces \
-            ros2_ws/src/patrolbot_bridge \
-            ros2_ws/src/patrolbot_dock_manager \
+        --from-paths . \
         --ignore-src -r -y --rosdistro jazzy \
     && rm -rf /var/lib/apt/lists/*
+
+FROM ros-test-env AS ros-tests
+WORKDIR /opt/patrolbot
+COPY ros2_ws/src/patrolbot_interfaces ros2_ws/src/patrolbot_interfaces
+COPY ros2_ws/src/patrolbot_bridge ros2_ws/src/patrolbot_bridge
+COPY ros2_ws/src/patrolbot_dock_manager ros2_ws/src/patrolbot_dock_manager
+COPY ros2_ws/src/patrolbot_navigation ros2_ws/src/patrolbot_navigation
 
 RUN . /opt/ros/jazzy/setup.sh \
     && colcon build \
         --base-paths ros2_ws/src \
         --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation
 
-# Map data and helper scripts for the catalog/persistence suites.
-# Built so the ament index resolves its share dir; nothing imports it.
+# Static-contract fixtures only: these packages are not built or launched.
+COPY ros2_ws/src/patrolbot-launch ros2_ws/src/patrolbot-launch
+COPY ros2_ws/src/patrolbot_docking_plugins ros2_ws/src/patrolbot_docking_plugins
+COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server
+COPY docker/Dockerfile docker/docker-compose.yml docker/status.sh \
+     docker/source-tree-digest.sh docker/capture-nav-goal.sh docker/
 
 COPY docker/run-ros-tests.sh /usr/local/bin/run-ros-tests.sh
 

@@ -1,8 +1,4 @@
-from patrolbot_bridge.scan_timing import (
-    LaserAgeResult,
-    compute_scan_stamp_ns,
-    parse_laser_age,
-)
+from patrolbot_bridge.scan_timing import compute_scan_stamp_ns, LaserAgeResult, parse_laser_age
 
 
 def test_absent_age_is_explicit_legacy_result():
@@ -11,8 +7,7 @@ def test_absent_age_is_explicit_legacy_result():
 
 
 def test_valid_age_is_accepted_from_full_telemetry_sections():
-    result = parse_laser_age(
-        'ODOM:0,0,0,0,0|LASER:1,2,3|LASER_AGE_MS:120')
+    result = parse_laser_age('ODOM:0,0,0,0,0|LASER:1,2,3|LASER_AGE_MS:120')
     assert result == LaserAgeResult(True, False, 120, 'age-valid')
 
 
@@ -56,8 +51,7 @@ def test_corrected_stamp_rejects_negative_age_and_result():
 
 def test_oversized_wire_age_rejects_without_interrupting_telemetry():
     result = parse_laser_age('|LASER_AGE_MS:' + '9' * 5000)
-    assert result == LaserAgeResult(
-        False, False, None, 'age-exceeds-freshness-limit')
+    assert result == LaserAgeResult(False, False, None, 'age-exceeds-freshness-limit')
 
 
 def test_leading_zeroes_do_not_change_wire_age_semantics():

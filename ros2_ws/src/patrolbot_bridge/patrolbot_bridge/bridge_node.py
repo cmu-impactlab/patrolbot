@@ -9,51 +9,34 @@ from uuid import uuid4
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
-from patrolbot_bridge.control_protocol import (
-    COMMAND_CHARGE_RELEASE,
-    COMMAND_DOCK_RESET,
-    COMMAND_MOTOR_ENABLE, COMMAND_MOTOR_DISABLE,
-    COMMAND_LIDAR_ON, COMMAND_LIDAR_OFF,
-    ControlReply,
-    format_request,
-    motor_enable_allowed,
-    parse_reply,
-    valid_request_id,
-)
+from patrolbot_bridge.control_protocol import (COMMAND_CHARGE_RELEASE, COMMAND_DOCK_RESET,
+                                               COMMAND_LIDAR_OFF, COMMAND_LIDAR_ON,
+                                               COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE,
+                                               ControlReply, format_request, motor_enable_allowed,
+                                               parse_reply, valid_request_id)
 from patrolbot_bridge.epoch_runtime import EpochRuntime
 from patrolbot_bridge.lidar_state import LidarState
 from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
-from patrolbot_bridge.scan_timing import parse_laser_age, compute_scan_stamp_ns
-from rclpy.time import Time
-from patrolbot_bridge.safety_telemetry import (
-    battery_diagnostic,
-    BATTERY_MIN_OPERATING_VOLTS,
-    BATTERY_RECHARGE_VOLTS,
-    battery_supply_status,
-    decode_fault_flags,
-)
-from patrolbot_bridge.undock_protocol import (
-    CANCELED,
-    format_undock_cancel,
-    format_undock_request,
-    LINK_UNAVAILABLE,
-    parse_hello,
-    parse_undock_event,
-    parse_undock_result,
-    SESSION_CHANGED,
-    TIMEOUT,
-    UndockResult,
-)
+from patrolbot_bridge.safety_telemetry import (battery_diagnostic, BATTERY_MIN_OPERATING_VOLTS,
+                                               BATTERY_RECHARGE_VOLTS, battery_supply_status,
+                                               decode_fault_flags)
+from patrolbot_bridge.scan_timing import compute_scan_stamp_ns, parse_laser_age
+from patrolbot_bridge.undock_protocol import (CANCELED, format_undock_cancel,
+                                              format_undock_request, LINK_UNAVAILABLE, parse_hello,
+                                              parse_undock_event, parse_undock_result,
+                                              SESSION_CHANGED, TIMEOUT, UndockResult)
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.msg import BaseState
-from patrolbot_interfaces.srv import ChargeRelease, DockReset, MotorEnable, MotorDisable, SetLidarPower
+from patrolbot_interfaces.srv import (ChargeRelease, DockReset, MotorDisable, MotorEnable,
+                                      SetLidarPower)
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
 from sensor_msgs.msg import BatteryState, LaserScan, PointCloud2, PointField
 from tf2_ros import TransformBroadcaster
 
@@ -76,29 +59,24 @@ def get_quaternion_from_euler(yaw):
 
 class PatrolBotBridge(Node):
     def __init__(self, parameter_overrides=None):
-        super().__init__(
-            'patrolbot_bridge', parameter_overrides=parameter_overrides)
+        super().__init__('patrolbot_bridge', parameter_overrides=parameter_overrides)
 
         # Candidate near-field topic for a controlled sensor study. It is
         # disabled by default and deliberately not consumed by Nav2 or Collision
         # Monitor until self-occlusion and stopping behavior are measured.
         self.declare_parameter('publish_unfiltered_scan_candidate', False)
-        self.declare_parameter(
-            'unfiltered_scan_topic', '/scan_unfiltered_candidate')
+        self.declare_parameter('unfiltered_scan_topic', '/scan_unfiltered_candidate')
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         # LaserScan is high-rate, lossy sensor data. BEST_EFFORT prefers a fresh
         # sample over retransmitting an old one to a stalled DDS reader.
-        self.scan_pub = self.create_publisher(
-            LaserScan, '/scan', qos_profile_sensor_data)
+        self.scan_pub = self.create_publisher(LaserScan, '/scan', qos_profile_sensor_data)
         self.unfiltered_scan_pub = None
-        self.unfiltered_scan_topic = str(
-            self.get_parameter('unfiltered_scan_topic').value)
-        if bool(self.get_parameter(
-                'publish_unfiltered_scan_candidate').value):
+        self.unfiltered_scan_topic = str(self.get_parameter('unfiltered_scan_topic').value)
+        if bool(self.get_parameter('publish_unfiltered_scan_candidate').value):
             self.unfiltered_scan_pub = self.create_publisher(
-                LaserScan, self.unfiltered_scan_topic,
-                qos_profile_sensor_data)
+                LaserScan, self.unfiltered_scan_topic, qos_profile_sensor_data
+            )
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
@@ -108,30 +86,34 @@ class PatrolBotBridge(Node):
         # Sonar is also direct, high-churn sensor data. In particular, do not let
         # a remote RViz PointCloud2 display turn it into a reliable DDS writer
         # that can wait for acknowledgements over Wi-Fi.
-        self.sonar_pub = self.create_publisher(
-            PointCloud2, '/sonar', qos_profile_sensor_data)
+        self.sonar_pub = self.create_publisher(PointCloud2, '/sonar', qos_profile_sensor_data)
         self.battery_pub = self.create_publisher(BatteryState, '/battery', 10)
         self.diag_pub = self.create_publisher(DiagnosticArray, '/diagnostics', 10)
-        self.base_state_pub = self.create_publisher(
-            BaseState, '/patrolbot/base_state', 10)
+        self.base_state_pub = self.create_publisher(BaseState, '/patrolbot/base_state', 10)
 
         self.charge_release_srv = self.create_service(
-            ChargeRelease, '/patrolbot/charge_release',
-            self._charge_release_callback)
+            ChargeRelease, '/patrolbot/charge_release', self._charge_release_callback
+        )
         self.motor_enable_srv = self.create_service(
-            MotorEnable, '/patrolbot/motor_enable',
-            self._motor_enable_callback)
+            MotorEnable, '/patrolbot/motor_enable', self._motor_enable_callback
+        )
         self.motor_disable_srv = self.create_service(
-            MotorDisable, '/patrolbot/motor_disable',
-            self._motor_disable_callback, callback_group=ReentrantCallbackGroup())
+            MotorDisable,
+            '/patrolbot/motor_disable',
+            self._motor_disable_callback,
+            callback_group=ReentrantCallbackGroup(),
+        )
         # The only way out of the SBC's FAULT_STOPPED dock state. Without it a
         # failed undock leaves the robot unable to move with no recovery path.
         self.lidar_power_srv = self.create_service(
-            SetLidarPower, '/patrolbot/set_lidar_power',
-            self._set_lidar_power_callback, callback_group=ReentrantCallbackGroup())
+            SetLidarPower,
+            '/patrolbot/set_lidar_power',
+            self._set_lidar_power_callback,
+            callback_group=ReentrantCallbackGroup(),
+        )
         self.dock_reset_srv = self.create_service(
-            DockReset, '/patrolbot/dock_reset',
-            self._dock_reset_callback)
+            DockReset, '/patrolbot/dock_reset', self._dock_reset_callback
+        )
 
         self.declare_parameter('server_ip', '10.0.0.1')
         self.declare_parameter('server_port', 7272)
@@ -163,17 +145,14 @@ class PatrolBotBridge(Node):
         self.declare_parameter('odom_expected_period', 0.05)
         self.server_ip = str(self.get_parameter('server_ip').value)
         self.server_port = int(self.get_parameter('server_port').value)
-        self.CONNECT_TIMEOUT = float(
-            self.get_parameter('connect_timeout').value)
-        self.RECONNECT_DELAY = float(
-            self.get_parameter('reconnect_delay').value)
+        self.CONNECT_TIMEOUT = float(self.get_parameter('connect_timeout').value)
+        self.RECONNECT_DELAY = float(self.get_parameter('reconnect_delay').value)
 
         # The SBC streams telemetry at 20 Hz (every 50 ms). If no data arrives for
         # this long the link is dead — silent link loss can leave no FIN/RST, so
         # a blocking recv() would otherwise hang forever and never reconnect. A read
         # timeout converts that silent death into a socket.timeout we can recover from.
-        self.RECV_TIMEOUT = float(
-            self.get_parameter('receive_timeout').value)
+        self.RECV_TIMEOUT = float(self.get_parameter('receive_timeout').value)
 
         # Near-range measurement floor, not a robot-footprint filter. Passive
         # dock telemetry on 2026-10-10 contains real forward returns at 0.12-
@@ -227,7 +206,7 @@ class PatrolBotBridge(Node):
         self._lidar = LidarState()
         self._lidar_pending = False
         self._lidar_hold = False
-        self._lidar_cutoff = 0.
+        self._lidar_cutoff = 0.0
         self._hardware_operation_lock = threading.Lock()
         self._motor_disable_generation = 0
 
@@ -239,8 +218,7 @@ class PatrolBotBridge(Node):
 
         self._control_lock = threading.Lock()
         self._pending_controls = {}
-        self.CONTROL_TIMEOUT = float(
-            self.get_parameter('control_timeout').value)
+        self.CONTROL_TIMEOUT = float(self.get_parameter('control_timeout').value)
 
         # One hardware undock at a time, tracked separately from the zero-motion
         # controls because it is long-running and streams progress events.
@@ -255,11 +233,14 @@ class PatrolBotBridge(Node):
         self._undock_goal_reserved = False
         self._callbacks = ReentrantCallbackGroup()
         self._undock_server = ActionServer(
-            self, HardwareUndock, '/patrolbot/hardware_undock',
+            self,
+            HardwareUndock,
+            '/patrolbot/hardware_undock',
             goal_callback=self._undock_goal_callback,
             cancel_callback=self._undock_cancel_callback,
             execute_callback=self._undock_execute_callback,
-            callback_group=self._callbacks)
+            callback_group=self._callbacks,
+        )
 
         # Never publish ROS messages from the socket reader. DDS publish() can
         # wait behind a stalled reader; when that happened here, the Pi
@@ -278,29 +259,20 @@ class PatrolBotBridge(Node):
         self._vx, self._vth = 0.0, 0.0
         self._pose_received = False
         self._pose_at = 0.0
-        self._odom_tf_timeout = float(
-            self.get_parameter('odom_tf_timeout').value)
+        self._odom_tf_timeout = float(self.get_parameter('odom_tf_timeout').value)
         self._odom_covariance = OdomCovariance(
-            sigma_xy_per_m=float(
-                self.get_parameter('odom_sigma_xy_per_m').value),
-            sigma_yaw_per_rad=float(
-                self.get_parameter('odom_sigma_yaw_per_rad').value),
-            sigma_yaw_per_m=float(
-                self.get_parameter('odom_sigma_yaw_per_m').value),
+            sigma_xy_per_m=float(self.get_parameter('odom_sigma_xy_per_m').value),
+            sigma_yaw_per_rad=float(self.get_parameter('odom_sigma_yaw_per_rad').value),
+            sigma_yaw_per_m=float(self.get_parameter('odom_sigma_yaw_per_m').value),
             sigma_vx=float(self.get_parameter('odom_sigma_vx').value),
             sigma_vyaw=float(self.get_parameter('odom_sigma_vyaw').value),
-            min_variance=float(
-                self.get_parameter('odom_min_variance').value),
-            max_variance=float(
-                self.get_parameter('odom_max_variance').value),
+            min_variance=float(self.get_parameter('odom_min_variance').value),
+            max_variance=float(self.get_parameter('odom_max_variance').value),
         )
         self._odom_validator = OdomValidator(
-            max_linear_speed=float(
-                self.get_parameter('odom_max_linear_speed').value),
-            max_angular_speed=float(
-                self.get_parameter('odom_max_angular_speed').value),
-            expected_period=float(
-                self.get_parameter('odom_expected_period').value),
+            max_linear_speed=float(self.get_parameter('odom_max_linear_speed').value),
+            max_angular_speed=float(self.get_parameter('odom_max_angular_speed').value),
+            expected_period=float(self.get_parameter('odom_expected_period').value),
         )
         self._odom_rejections = {}
         self._last_odom_rejection_warning = 0.0
@@ -318,13 +290,14 @@ class PatrolBotBridge(Node):
         self.nav_publish_thread = threading.Thread(
             target=self._publish_loop,
             args=(self._nav_queue, self._parse_telemetry, 'navigation'),
-            daemon=True)
+            daemon=True,
+        )
         self.aux_publish_thread = threading.Thread(
             target=self._publish_loop,
             args=(self._aux_queue, self._parse_aux, 'auxiliary'),
-            daemon=True)
-        self.recv_thread = threading.Thread(
-            target=self._connect_loop, daemon=True)
+            daemon=True,
+        )
+        self.recv_thread = threading.Thread(target=self._connect_loop, daemon=True)
         self._worker_threads = (
             self.nav_publish_thread,
             self.aux_publish_thread,
@@ -334,12 +307,12 @@ class PatrolBotBridge(Node):
             thread.start()
 
         self.get_logger().info(
-            f'Bridge node started. Connecting to '
-            f'{self.server_ip}:{self.server_port}...')
+            f'Bridge node started. Connecting to ' f'{self.server_ip}:{self.server_port}...'
+        )
 
-    # ------------------------------------------------------------------
-    # TF timer — runs at 50 Hz in the spin thread
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # TF timer — runs at 50 Hz in the spin thread
+        # ------------------------------------------------------------------
 
     def _tf_timer(self):
         with self._epoch.lock:
@@ -374,12 +347,12 @@ class PatrolBotBridge(Node):
                 self.get_logger().warning(
                     f'odom->base_link withdrawn: no SBC pose for {age:.2f} s '
                     f'(limit {self._odom_tf_timeout:.2f} s). Consumers will '
-                    f'report TF lookup failures until telemetry resumes.')
+                    f'report TF lookup failures until telemetry resumes.'
+                )
             return
         if self._odom_tf_stale:
             self._odom_tf_stale = False
-            self.get_logger().info(
-                'odom->base_link resumed; SBC pose is fresh again.')
+            self.get_logger().info('odom->base_link resumed; SBC pose is fresh again.')
 
         self._broadcast_odom_tf(x, y, th)
 
@@ -411,12 +384,13 @@ class PatrolBotBridge(Node):
             t.header.stamp = self.get_clock().now().to_msg()
             self.tf_broadcaster.sendTransform(t)
             if self._epoch.first_tf_ns is None:
-                self._epoch.first_tf_ns = (t.header.stamp.sec * 1_000_000_000 +
-                                           t.header.stamp.nanosec)
+                self._epoch.first_tf_ns = (
+                    t.header.stamp.sec * 1_000_000_000 + t.header.stamp.nanosec
+                )
 
-    # ------------------------------------------------------------------
-    # Connection management — background thread
-    # ------------------------------------------------------------------
+                # ------------------------------------------------------------------
+                # Connection management — background thread
+                # ------------------------------------------------------------------
 
     def _connect_loop(self):
         while self.running:
@@ -426,7 +400,7 @@ class PatrolBotBridge(Node):
                 sock.connect((self.server_ip, self.server_port))
                 if not self.running:
                     break
-                # Detect a silently-dead peer at the OS level too (defence in depth).
+                    # Detect a silently-dead peer at the OS level too (defence in depth).
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                 # Read timeout (not blocking forever): recv() raises socket.timeout if
                 # the SBC stops streaming, so _receive_loop can break and reconnect.
@@ -448,17 +422,18 @@ class PatrolBotBridge(Node):
                     self._server_hello = None
                     self._lidar.reset()
                     session = self._session_generation
-                # TCP session identity is not an ARIA odometry epoch. Keep
-                # both the covariance and continuity reference across link
-                # reconnects; only explicit ODOM_EPOCH changes reset them.
-                # A disconnect must never manufacture renewed confidence.
+                    # TCP session identity is not an ARIA odometry epoch. Keep
+                    # both the covariance and continuity reference across link
+                    # reconnects; only explicit ODOM_EPOCH changes reset them.
+                    # A disconnect must never manufacture renewed confidence.
                 self.get_logger().info('Connected to SBC server.')
                 self._receive_loop(sock)
             except Exception as e:
                 if self.running:
                     self.get_logger().warn(
                         f'SBC connection failed: {e}. Retrying in '
-                        f'{self.RECONNECT_DELAY:g}s...')
+                        f'{self.RECONNECT_DELAY:g}s...'
+                    )
             finally:
                 with self.sock_lock:
                     if self.sock is sock:
@@ -468,8 +443,7 @@ class PatrolBotBridge(Node):
                     self._lidar.reset()
                     session = self._session_generation
                 self._epoch.disconnect(session)
-                self._fail_pending_controls(
-                    session, 'hardware session disconnected')
+                self._fail_pending_controls(session, 'hardware session disconnected')
                 self._fail_pending_undock(session)
                 try:
                     sock.close()
@@ -501,8 +475,8 @@ class PatrolBotBridge(Node):
                 received_at = time.monotonic()
                 if line.startswith('AUX:'):
                     self._queue_latest(
-                        self._aux_queue, (line, received_at, self._session_generation),
-                        'auxiliary')
+                        self._aux_queue, (line, received_at, self._session_generation), 'auxiliary'
+                    )
                 elif line.startswith('ACK:') or line.startswith('RESULT:'):
                     self._handle_control_reply(line)
                 elif line.startswith('UNDOCK_EVENT:'):
@@ -513,8 +487,10 @@ class PatrolBotBridge(Node):
                     self._handle_hello(line)
                 else:
                     self._queue_latest(
-                        self._nav_queue, (line, received_at, self._session_generation),
-                        'navigation')
+                        self._nav_queue,
+                        (line, received_at, self._session_generation),
+                        'navigation',
+                    )
 
     def _handle_control_reply(self, line):
         """Deliver an SBC ACK/RESULT without contaminating odometry parsing."""
@@ -531,7 +507,8 @@ class PatrolBotBridge(Node):
             if pending is None:
                 self.get_logger().warn(
                     f'Ignoring unmatched {reply.kind} for '
-                    f'{reply.command}:{reply.request_id}')
+                    f'{reply.command}:{reply.request_id}'
+                )
                 return
             if pending.session_generation != self._session_generation:
                 return
@@ -550,9 +527,14 @@ class PatrolBotBridge(Node):
             if operation.session_generation != session_generation:
                 continue
             operation.reply = ControlReply(
-                kind='RESULT', command=operation.command,
-                request_id=operation.request_id, accepted=operation.accepted,
-                success=False, code=6, message=message)
+                kind='RESULT',
+                command=operation.command,
+                request_id=operation.request_id,
+                accepted=operation.accepted,
+                success=False,
+                code=6,
+                message=message,
+            )
             operation.event.set()
 
     def _queue_latest(self, target_queue, item, path_name):
@@ -563,8 +545,8 @@ class PatrolBotBridge(Node):
         except queue.Full:
             pass
 
-        # A newer sensor sample supersedes an unprocessed one. This is bounded
-        # latest-value behavior, not an unbounded backlog of stale robot state.
+            # A newer sensor sample supersedes an unprocessed one. This is bounded
+            # latest-value behavior, not an unbounded backlog of stale robot state.
         try:
             target_queue.get_nowait()
         except queue.Empty:
@@ -578,11 +560,12 @@ class PatrolBotBridge(Node):
         self._queue_drops[path_name] += 1
         now = time.monotonic()
         if now - self._last_queue_warning >= 5.0:
+            nav_drops = self._queue_drops['navigation']
+            aux_drops = self._queue_drops['auxiliary']
             self.get_logger().warn(
                 f'ROS publish back-pressure: replaced queued {path_name} '
-                f'telemetry (navigation drops='
-                f'{self._queue_drops["navigation"]}, auxiliary drops='
-                f'{self._queue_drops["auxiliary"]}).')
+                f'telemetry (navigation drops={nav_drops}, auxiliary drops={aux_drops}).'
+            )
             self._last_queue_warning = now
 
     def _publish_loop(self, source_queue, parser, path_name):
@@ -599,15 +582,14 @@ class PatrolBotBridge(Node):
             age = time.monotonic() - received_at
             if age > 0.5:
                 self.get_logger().warn(
-                    f'Discarding {age:.3f} s old {path_name} telemetry after '
-                    'ROS publish stall.')
+                    f'Discarding {age:.3f} s old {path_name} telemetry after ' 'ROS publish stall.'
+                )
                 continue
             if path_name == 'navigation':
                 parser(line, received_at=received_at, session=item[2])
             else:
                 with self._epoch.lock:
-                    if (item[2] == self._epoch.guard.session and
-                            self._epoch.guard.ready):
+                    if item[2] == self._epoch.guard.session and self._epoch.guard.ready:
                         parser(line, received_at=received_at)
 
     def _publish_with_timing(self, publisher, message, topic):
@@ -617,27 +599,27 @@ class PatrolBotBridge(Node):
         elapsed = time.monotonic() - started_at
         if elapsed > 0.05:
             self.get_logger().warn(
-                f'DDS publish stall on {topic}: publish() blocked for '
-                f'{elapsed:.3f} s.')
+                f'DDS publish stall on {topic}: publish() blocked for ' f'{elapsed:.3f} s.'
+            )
 
-    # ------------------------------------------------------------------
-    # Telemetry parsing — called from the navigation publisher worker
-    # ------------------------------------------------------------------
+            # ------------------------------------------------------------------
+            # Telemetry parsing — called from the navigation publisher worker
+            # ------------------------------------------------------------------
 
     def _record_odom_rejection(self, reason, detail=''):
-        self._odom_rejections[reason] = (
-            self._odom_rejections.get(reason, 0) + 1)
+        self._odom_rejections[reason] = self._odom_rejections.get(reason, 0) + 1
         now = time.monotonic()
         if now - self._last_odom_rejection_warning < 5.0:
             return
         self._last_odom_rejection_warning = now
         counts = ', '.join(
-            f'{name}={count}'
-            for name, count in sorted(self._odom_rejections.items()))
+            f'{name}={count}' for name, count in sorted(self._odom_rejections.items())
+        )
         suffix = f' ({detail})' if detail else ''
         self.get_logger().error(
             f'Rejected SBC navigation frame: {reason}{suffix}; '
-            f'odometry rejection counts: {counts}.')
+            f'odometry rejection counts: {counts}.'
+        )
 
         status = DiagnosticStatus()
         status.name = 'patrolbot/odometry'
@@ -645,8 +627,7 @@ class PatrolBotBridge(Node):
         status.level = DiagnosticStatus.ERROR
         status.message = f'odometry frame rejected: {reason}'
         status.values = [
-            KeyValue(key='rejected_total',
-                     value=str(sum(self._odom_rejections.values()))),
+            KeyValue(key='rejected_total', value=str(sum(self._odom_rejections.values()))),
         ] + [
             KeyValue(key=f'rejected_{name}', value=str(count))
             for name, count in sorted(self._odom_rejections.items())
@@ -654,8 +635,7 @@ class PatrolBotBridge(Node):
         diagnostics = DiagnosticArray()
         diagnostics.header.stamp = self.get_clock().now().to_msg()
         diagnostics.status = [status]
-        self._publish_with_timing(
-            self.diag_pub, diagnostics, '/diagnostics')
+        self._publish_with_timing(self.diag_pub, diagnostics, '/diagnostics')
 
     def _parse_telemetry(self, line, received_at=None, session=None):
         with self._epoch.lock:
@@ -668,7 +648,7 @@ class PatrolBotBridge(Node):
     def _parse_telemetry_guarded(self, line, received_at=None):
         try:
             receipt_clock = self.get_clock().now()
-            queue_age = 0. if received_at is None else time.monotonic() - received_at
+            queue_age = 0.0 if received_at is None else time.monotonic() - received_at
             if not math.isfinite(queue_age) or not 0 <= queue_age <= self._odom_tf_timeout:
                 self._record_odom_rejection('stale-or-future-queued-odometry')
                 return
@@ -688,7 +668,8 @@ class PatrolBotBridge(Node):
 
             now = time.monotonic()
             validation = self._odom_validator.check_and_accept(
-                OdomSample(x, y, th, vx, vth), received_at if received_at is not None else now)
+                OdomSample(x, y, th, vx, vth), received_at if received_at is not None else now
+            )
             if not validation.accepted:
                 self._record_odom_rejection(validation.reason)
                 return
@@ -697,8 +678,8 @@ class PatrolBotBridge(Node):
                 # Was odom->base_link absent immediately before this pose --
                 # either never published, or withdrawn as stale?
                 tf_was_absent = (
-                    not self._pose_received or
-                    now - self._pose_at > self._odom_tf_timeout)
+                    not self._pose_received or now - self._pose_at > self._odom_tf_timeout
+                )
                 self._px, self._py, self._pth = x, y, th
                 self._vx, self._vth = vx, vth
                 self._pose_received = True
@@ -717,14 +698,14 @@ class PatrolBotBridge(Node):
                 # transform alive from here on; this only leads it back in.
                 if self._odom_tf_stale:
                     self._odom_tf_stale = False
-                    self.get_logger().info(
-                        'odom->base_link resumed; SBC pose is fresh again.')
+                    self.get_logger().info('odom->base_link resumed; SBC pose is fresh again.')
                 self._broadcast_odom_tf(x, y, th)
 
             q = get_quaternion_from_euler(th)
-            stamp = rclpy.time.Time(nanoseconds=receipt_clock.nanoseconds-queue_age_ns).to_msg()
+            stamp = rclpy.time.Time(nanoseconds=receipt_clock.nanoseconds - queue_age_ns).to_msg()
             self._epoch._odom_history.add(
-                stamp.sec*1_000_000_000+stamp.nanosec, (x, y, th), self._epoch.guard.epoch)
+                stamp.sec * 1_000_000_000 + stamp.nanosec, (x, y, th), self._epoch.guard.epoch
+            )
 
             # /odom — receipt-time estimate; acquisition time is not on the wire
             odom_msg = Odometry()
@@ -759,61 +740,59 @@ class PatrolBotBridge(Node):
                 r = r.strip()
                 try:
                     val = float(r)
-                    raw_ranges.append(
-                        val if math.isfinite(val) and val >= 0.0
-                        else float('inf'))
+                    raw_ranges.append(val if math.isfinite(val) and val >= 0.0 else float('inf'))
                     ranges.append(
-                        val if math.isfinite(val) and
-                        val >= self.SCAN_RANGE_MIN else float('inf'))
+                        val if math.isfinite(val) and val >= self.SCAN_RANGE_MIN else float('inf')
+                    )
                 except ValueError:
                     # Index is bearing; dropping this slot re-aims the rest
                     # of the scan, so keep it as an invalid return.
                     raw_ranges.append(float('inf'))
                     ranges.append(float('inf'))
 
-            # One beam has no honest angle_increment for the 180-degree sweep,
-            # while zero beams is the normal laser-down path and stays silent.
+                    # One beam has no honest angle_increment for the 180-degree sweep,
+                    # while zero beams is the normal laser-down path and stays silent.
             if len(ranges) >= 2:
                 age = parse_laser_age(line)
                 if not age.accepted:
                     self.get_logger().warning(
-                        f'Dropping laser scan: {age.reason}.',
-                        throttle_duration_sec=10.0)
+                        f'Dropping laser scan: {age .reason}.', throttle_duration_sec=10.0
+                    )
                     return
                 if age.legacy:
                     self.get_logger().warning(
                         'SBC scan has no acquisition age; legacy arrival-time '
                         'stamping is unverified for localization.',
-                        throttle_duration_sec=60.0)
+                        throttle_duration_sec=60.0,
+                    )
                 measured_age_ns = (age.age_ms or 0) * 1000000 + queue_age_ns
                 if measured_age_ns > 500000000:
                     self.get_logger().warning(
-                        'Dropping laser scan: acquisition plus queue age '
-                        'exceeds 0.5 s.', throttle_duration_sec=10.0)
+                        'Dropping laser scan: acquisition plus queue age ' 'exceeds 0.5 s.',
+                        throttle_duration_sec=10.0,
+                    )
                     return
-                scan_stamp = Time(nanoseconds=compute_scan_stamp_ns(
-                    receipt_clock.nanoseconds, measured_age_ns)).to_msg()
-                scan_msg = self._laser_scan_message(
-                    scan_stamp, ranges, self.SCAN_RANGE_MIN)
+                scan_stamp = Time(
+                    nanoseconds=compute_scan_stamp_ns(receipt_clock.nanoseconds, measured_age_ns)
+                ).to_msg()
+                scan_msg = self._laser_scan_message(scan_stamp, ranges, self.SCAN_RANGE_MIN)
                 self._publish_with_timing(self.scan_pub, scan_msg, '/scan')
                 if self.unfiltered_scan_pub is not None:
-                    candidate = self._laser_scan_message(
-                        scan_stamp, raw_ranges, 0.0)
+                    candidate = self._laser_scan_message(scan_stamp, raw_ranges, 0.0)
                     self._publish_with_timing(
-                        self.unfiltered_scan_pub, candidate,
-                        self.unfiltered_scan_topic)
+                        self.unfiltered_scan_pub, candidate, self.unfiltered_scan_topic
+                    )
             elif ranges:
                 self.get_logger().warning(
                     f'Dropping laser scan with {len(ranges)} range: no honest '
                     'angle_increment exists for a single beam.',
-                    throttle_duration_sec=10.0)
+                    throttle_duration_sec=10.0,
+                )
 
         except (IndexError, ValueError) as exc:
-            self._record_odom_rejection(
-                'malformed-telemetry', type(exc).__name__)
+            self._record_odom_rejection('malformed-telemetry', type(exc).__name__)
         except Exception as exc:
-            self._record_odom_rejection(
-                'navigation-frame-error', type(exc).__name__)
+            self._record_odom_rejection('navigation-frame-error', type(exc).__name__)
 
     @staticmethod
     def _laser_scan_message(stamp, ranges, range_min):
@@ -830,9 +809,9 @@ class PatrolBotBridge(Node):
         msg.ranges = ranges
         return msg
 
-    # ------------------------------------------------------------------
-    # Auxiliary telemetry parsing (sonar / battery / flags)
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Auxiliary telemetry parsing (sonar / battery / flags)
+        # ------------------------------------------------------------------
 
     def _parse_aux(self, line, received_at=None):
         # AUX:SONAR=x,y;x,y;...|BATT=v,soc,cs,temp|FLAGS=flags,fault,stall,motors,estop
@@ -849,17 +828,19 @@ class PatrolBotBridge(Node):
                 sections[key] = val
         stamp = self.get_clock().now().to_msg()
         lidar_sections = [p[6:] for p in line[4:].split('|') if p.startswith('LIDAR=')]
-        self._record_lidar_section(lidar_sections[0] if len(lidar_sections) == 1 else '', received_at)
+        self._record_lidar_section(
+            lidar_sections[0] if len(lidar_sections) == 1 else '', received_at
+        )
 
         if 'SONAR' in sections:
             try:
                 self._publish_sonar(sections['SONAR'], stamp)
             except Exception:
                 pass
-        # Record DOCK before publishing BATT even though BATT appears first on
-        # the wire. This makes one AUX frame internally consistent: battery
-        # charging status is derived from the dock observer in that same frame,
-        # never the previous frame or raw charge state alone.
+                # Record DOCK before publishing BATT even though BATT appears first on
+                # the wire. This makes one AUX frame internally consistent: battery
+                # charging status is derived from the dock observer in that same frame,
+                # never the previous frame or raw charge state alone.
         if 'DOCK' in sections:
             try:
                 self._record_dock_section(sections['DOCK'])
@@ -889,8 +870,12 @@ class PatrolBotBridge(Node):
     def _lidar_ready(self):
         # Callers serialize admission/hold changes through the epoch lock.
         with self._state_lock:
-            return (self._link_connected and not self._lidar_pending and
-                    not self._lidar_hold and self._lidar.ready(time.monotonic()))
+            return (
+                self._link_connected
+                and not self._lidar_pending
+                and not self._lidar_hold
+                and self._lidar.ready(time.monotonic())
+            )
 
     def _record_dock_section(self, data):
         """Mirror the SBC's dock observer; the bridge holds no dock policy."""
@@ -944,7 +929,7 @@ class PatrolBotBridge(Node):
         msg.row_step = 12 * len(points)
         msg.is_dense = True
         buf = bytearray()
-        for (x, y, z) in points:
+        for x, y, z in points:
             buf += struct.pack('<fff', x, y, z)
         msg.data = bytes(buf)
         self._publish_with_timing(self.sonar_pub, msg, '/sonar')
@@ -960,11 +945,8 @@ class PatrolBotBridge(Node):
             self._charge_state = charge_state
             self._charge_state_at = time.monotonic()
             dock_state = self._dock_state
-            dock_age = (
-                time.monotonic() - self._dock_state_at
-                if self._dock_state_at else math.inf)
-            dock_state_valid = bool(
-                self._link_connected and dock_state and dock_age <= 1.0)
+            dock_age = time.monotonic() - self._dock_state_at if self._dock_state_at else math.inf
+            dock_state_valid = bool(self._link_connected and dock_state and dock_age <= 1.0)
 
         msg = BatteryState()
         msg.header.stamp = stamp
@@ -974,12 +956,10 @@ class PatrolBotBridge(Node):
         msg.present = True
         # Raw charge state 3 can re-latch after a proven departure. The fresh
         # SBC dock observer is authoritative for physical charger contact.
-        msg.power_supply_status = battery_supply_status(
-            charge_state, dock_state, dock_state_valid)
+        msg.power_supply_status = battery_supply_status(charge_state, dock_state, dock_state_valid)
         self._publish_with_timing(self.battery_pub, msg, '/battery')
 
-        level, message = battery_diagnostic(
-            volt, charge_state, dock_state, dock_state_valid)
+        level, message = battery_diagnostic(volt, charge_state, dock_state, dock_state_valid)
         status = DiagnosticStatus()
         status.name = 'patrolbot/battery'
         status.hardware_id = 'pioneer_patrolbot'
@@ -992,23 +972,15 @@ class PatrolBotBridge(Node):
         status.values = [
             KeyValue(key='voltage', value=f'{volt:.3f}'),
             KeyValue(key='charge_state', value=str(charge_state)),
-            KeyValue(key='dock_state', value=(
-                dock_state if dock_state_valid else 'UNKNOWN')),
-            KeyValue(
-                key='power_supply_status',
-                value=str(msg.power_supply_status)),
-            KeyValue(
-                key='recharge_threshold_volts',
-                value=str(BATTERY_RECHARGE_VOLTS)),
-            KeyValue(
-                key='minimum_operating_volts',
-                value=str(BATTERY_MIN_OPERATING_VOLTS)),
+            KeyValue(key='dock_state', value=(dock_state if dock_state_valid else 'UNKNOWN')),
+            KeyValue(key='power_supply_status', value=str(msg.power_supply_status)),
+            KeyValue(key='recharge_threshold_volts', value=str(BATTERY_RECHARGE_VOLTS)),
+            KeyValue(key='minimum_operating_volts', value=str(BATTERY_MIN_OPERATING_VOLTS)),
         ]
         diagnostics = DiagnosticArray()
         diagnostics.header.stamp = stamp
         diagnostics.status = [status]
-        self._publish_with_timing(
-            self.diag_pub, diagnostics, '/diagnostics')
+        self._publish_with_timing(self.diag_pub, diagnostics, '/diagnostics')
 
     def _publish_flags(self, data, stamp):
         f = data.split(',')
@@ -1027,11 +999,11 @@ class PatrolBotBridge(Node):
             self._estop_pressed = bool(estop)
             self._flags_at = time.monotonic()
 
-        # ARIA stall value: high byte = left wheel, low byte = right wheel.
-        # bit 0 of each byte = motor stall (reliable). The remaining bits nominally
-        # carry bumper segments, but on this PatrolBot-SH a constant high bit shows
-        # even when idle/healthy (no bumpers wired / reserved bit), so they are
-        # reported raw for reference only — they do NOT drive the alarm level.
+            # ARIA stall value: high byte = left wheel, low byte = right wheel.
+            # bit 0 of each byte = motor stall (reliable). The remaining bits nominally
+            # carry bumper segments, but on this PatrolBot-SH a constant high bit shows
+            # even when idle/healthy (no bumpers wired / reserved bit), so they are
+            # reported raw for reference only — they do NOT drive the alarm level.
         left_stall = bool(stall & 0x0100)
         right_stall = bool(stall & 0x0001)
         left_bumper_bits = (stall >> 9) & 0x7F
@@ -1064,11 +1036,10 @@ class PatrolBotBridge(Node):
             KeyValue(key='motors_enabled', value=str(bool(motors))),
             KeyValue(key='flags', value=str(flags)),
             KeyValue(key='fault_flags', value=str(fault)),
+            KeyValue(key='fault_flags_hex', value=f'0x{fault & 0xFFFF:04x}'),
             KeyValue(
-                key='fault_flags_hex', value=f'0x{fault & 0xFFFF:04x}'),
-            KeyValue(
-                key='active_faults',
-                value=','.join(active_faults) if active_faults else 'none'),
+                key='active_faults', value=','.join(active_faults) if active_faults else 'none'
+            ),
             KeyValue(key='stall_value', value=str(stall)),
             KeyValue(key='left_motor_stall', value=str(left_stall)),
             KeyValue(key='right_motor_stall', value=str(right_stall)),
@@ -1091,9 +1062,7 @@ class PatrolBotBridge(Node):
             generation = self._session_generation
             connected = self._link_connected
             charge_state = self._charge_state
-            charge_age = (
-                now - self._charge_state_at
-                if self._charge_state_at else math.inf)
+            charge_age = now - self._charge_state_at if self._charge_state_at else math.inf
             flags_age = now - self._flags_at if self._flags_at else math.inf
             motors = self._motors_enabled
             estop = self._estop_pressed
@@ -1101,8 +1070,7 @@ class PatrolBotBridge(Node):
             fault_flags = self._fault_flags
             stall_value = self._stall_value
             dock_state = self._dock_state
-            dock_age = (
-                now - self._dock_state_at if self._dock_state_at else math.inf)
+            dock_age = now - self._dock_state_at if self._dock_state_at else math.inf
             dock_phase = self._dock_phase
             dock_phase_name = self._dock_phase_name
             undock_active = self._undock_active
@@ -1115,12 +1083,10 @@ class PatrolBotBridge(Node):
 
         telemetry_age = max(charge_age, flags_age)
         state_valid = connected and telemetry_age <= 0.5
-        bumpers_mapped = bool(
-            self.get_parameter('bumpers_mapped').value)
+        bumpers_mapped = bool(self.get_parameter('bumpers_mapped').value)
         front_mask = int(self.get_parameter('front_bumper_mask').value)
         rear_mask = int(self.get_parameter('rear_bumper_mask').value)
-        bumpers_valid = (
-            state_valid and bumpers_mapped and front_mask != 0 and rear_mask != 0)
+        bumpers_valid = state_valid and bumpers_mapped and front_mask != 0 and rear_mask != 0
 
         with self._epoch.lock:
             origin = self._epoch.guard.epoch or ''
@@ -1145,14 +1111,19 @@ class PatrolBotBridge(Node):
         msg.header.frame_id = 'base_link'
         msg.session_generation = generation
         msg.link_connected = connected
-        msg.telemetry_age = float(
-            telemetry_age if math.isfinite(telemetry_age) else 1e6)
+        msg.telemetry_age = float(telemetry_age if math.isfinite(telemetry_age) else 1e6)
         msg.hardware_state_valid = state_valid
         with self._state_lock:
             lidar_state, supported, scan_age = self._lidar.snapshot(now)
             msg.lidar_state = (
-                "STARTING" if self._lidar_pending else
-                "FAULT" if self._lidar_hold else lidar_state) if connected else "UNKNOWN"
+                (
+                    'STARTING'
+                    if self._lidar_pending
+                    else 'FAULT' if self._lidar_hold else lidar_state
+                )
+                if connected
+                else 'UNKNOWN'
+            )
             msg.lidar_power_supported = supported and connected
             msg.lidar_scan_age = float(scan_age)
         msg.charge_state = charge_state
@@ -1163,10 +1134,8 @@ class PatrolBotBridge(Node):
         msg.fault_flags = fault_flags
         msg.stall_value = stall_value
         msg.bumpers_valid = bumpers_valid
-        msg.front_bumper_pressed = (
-            bool(stall_value & front_mask) if bumpers_valid else False)
-        msg.rear_bumper_pressed = (
-            bool(stall_value & rear_mask) if bumpers_valid else False)
+        msg.front_bumper_pressed = bool(stall_value & front_mask) if bumpers_valid else False
+        msg.rear_bumper_pressed = bool(stall_value & rear_mask) if bumpers_valid else False
         # A stale or absent DOCK section is never reported as a dock state: an
         # older SBC does not emit one, and its absence must not read as CLEAR.
         dock_valid = bool(connected and dock_state and dock_age <= 1.0)
@@ -1182,44 +1151,41 @@ class PatrolBotBridge(Node):
         # and the profile as uncommissioned.
         msg.redock_inhibited = bool(redock_inhibited) if dock_valid else True
         msg.redock_inhibit_remaining = float(redock_remaining)
-        msg.undock_profile_commissioned = (
-            bool(profile_commissioned) if dock_valid else False)
-        self._publish_with_timing(
-            self.base_state_pub, msg, '/patrolbot/base_state')
+        msg.undock_profile_commissioned = bool(profile_commissioned) if dock_valid else False
+        self._publish_with_timing(self.base_state_pub, msg, '/patrolbot/base_state')
 
-    # ------------------------------------------------------------------
-    # Idempotent, zero-motion hardware-control services
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Idempotent, zero-motion hardware-control services
+        # ------------------------------------------------------------------
 
     def _charge_release_callback(self, request, response):
-        return self._control_service(
-            COMMAND_CHARGE_RELEASE, request.request_id, response)
+        return self._control_service(COMMAND_CHARGE_RELEASE, request.request_id, response)
 
     def _motor_enable_callback(self, request, response):
-        return self._control_service(
-            COMMAND_MOTOR_ENABLE, request.request_id, response)
+        return self._control_service(COMMAND_MOTOR_ENABLE, request.request_id, response)
 
     def _motor_disable_callback(self, request, response):
         if valid_request_id(request.request_id):
             with self._epoch.lock, self.sock_lock:
                 self._motor_disable_generation = getattr(self, '_motor_disable_generation', 0) + 1
-        return self._control_service_guarded(
-            COMMAND_MOTOR_DISABLE, request.request_id, response)
+        return self._control_service_guarded(COMMAND_MOTOR_DISABLE, request.request_id, response)
 
     def _dock_reset_callback(self, request, response):
-        return self._control_service(
-            COMMAND_DOCK_RESET, request.request_id, response)
+        return self._control_service(COMMAND_DOCK_RESET, request.request_id, response)
 
     def _set_lidar_power_callback(self, request, response):
         return self._control_service(
             COMMAND_LIDAR_ON if request.enabled else COMMAND_LIDAR_OFF,
-            request.request_id, response)
+            request.request_id,
+            response,
+        )
 
     def _control_service(self, command, request_id, response):
         response.request_id = request_id
         if not self._hardware_operation_lock.acquire(blocking=False):
             return self._fill_control_response(
-                response, None, 3, 'another hardware operation is pending', time.monotonic())
+                response, None, 3, 'another hardware operation is pending', time.monotonic()
+            )
         power = command in (COMMAND_LIDAR_ON, COMMAND_LIDAR_OFF)
         try:
             return self._control_service_guarded(command, request_id, response)
@@ -1235,21 +1201,24 @@ class PatrolBotBridge(Node):
         response.request_id = request_id
         with self._epoch.lock:
             motor_generation = getattr(self, '_motor_disable_generation', 0)
-            if command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE) and self._epoch.maps and self._epoch.maps.hold:
-                return self._fill_control_response(response, None, 3, 'map localization owns the robot', started)
+            if (
+                command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE)
+                and self._epoch.maps
+                and self._epoch.maps.hold
+            ):
+                return self._fill_control_response(
+                    response, None, 3, 'map localization owns the robot', started
+                )
         if not valid_request_id(request_id):
             return self._fill_control_response(
-                response, None, 1, 'request_id must be a canonical UUID',
-                started)
+                response, None, 1, 'request_id must be a canonical UUID', started
+            )
 
         with self._state_lock:
             generation = self._session_generation
             connected = self._link_connected
-            charge_age = (
-                started - self._charge_state_at
-                if self._charge_state_at else math.inf)
-            flags_age = (
-                started - self._flags_at if self._flags_at else math.inf)
+            charge_age = started - self._charge_state_at if self._charge_state_at else math.inf
+            flags_age = started - self._flags_at if self._flags_at else math.inf
             charge_state = self._charge_state
             motors = self._motors_enabled
             estop = self._estop_pressed
@@ -1263,54 +1232,67 @@ class PatrolBotBridge(Node):
 
         if not connected:
             return self._fill_control_response(
-                response, None, 2, 'hardware link unavailable', started)
+                response, None, 2, 'hardware link unavailable', started
+            )
         if command == COMMAND_MOTOR_ENABLE and not motor_enable_allowed(dock_state, estop):
             return self._fill_control_response(
-                response, None, 3, 'motor enable refused while E-stop asserted', started)
+                response, None, 3, 'motor enable refused while E-stop asserted', started
+            )
         if command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE):
-            if not all(0 <= age <= .5 for age in (charge_age, flags_age)):
+            if not all(0 <= age <= 0.5 for age in (charge_age, flags_age)):
                 return self._fill_control_response(
-                    response, None, 3, 'hardware telemetry is stale', started)
-            if not 0 <= odom_age <= .5:
+                    response, None, 3, 'hardware telemetry is stale', started
+                )
+            if not 0 <= odom_age <= 0.5:
+                return self._fill_control_response(response, None, 3, 'odometry is stale', started)
+            if (
+                not all(math.isfinite(v) for v in (linear, angular))
+                or abs(linear) > 0.005
+                or abs(angular) > 0.01
+            ):
                 return self._fill_control_response(
-                    response, None, 3, 'odometry is stale', started)
-            if (not all(math.isfinite(v) for v in (linear, angular)) or
-                    abs(linear) > 0.005 or abs(angular) > 0.01):
-                return self._fill_control_response(
-                    response, None, 3, 'robot must be stationary', started)
+                    response, None, 3, 'robot must be stationary', started
+                )
             if fault_flags:
                 return self._fill_control_response(
-                    response, None, 3, 'hardware fault flags are nonzero', started)
+                    response, None, 3, 'hardware fault flags are nonzero', started
+                )
             if undock_active:
                 return self._fill_control_response(
-                    response, None, 3, 'the undock state machine owns motion',
-                    started)
+                    response, None, 3, 'the undock state machine owns motion', started
+                )
             if command == COMMAND_DOCK_RESET and estop:
                 return self._fill_control_response(
-                    response, None, 3, 'dock reset refused while E-stop asserted',
-                    started)
+                    response, None, 3, 'dock reset refused while E-stop asserted', started
+                )
             if command == COMMAND_CHARGE_RELEASE:
                 if charge_state < 0:
                     return self._fill_control_response(
-                        response, None, 3, 'charge state is invalid', started)
-                # Manual dock charging can leave the motor-enabled flag set. The
-                # SBC release operation owns a zero-motion disable-confirm-release
-                # sequence in that state. Already-released enabled motors remain a
-                # precondition failure and are never changed by an idempotent call.
+                        response, None, 3, 'charge state is invalid', started
+                    )
+                    # Manual dock charging can leave the motor-enabled flag set. The
+                    # SBC release operation owns a zero-motion disable-confirm-release
+                    # sequence in that state. Already-released enabled motors remain a
+                    # precondition failure and are never changed by an idempotent call.
                 if motors and charge_state == 0:
                     return self._fill_control_response(
-                        response, None, 3,
-                        'motors enabled while charge is already released', started)
+                        response,
+                        None,
+                        3,
+                        'motors enabled while charge is already released',
+                        started,
+                    )
             if not power and not self._lidar_ready():
                 return self._fill_control_response(
-                    response, None, 3, 'fresh ready LiDAR is required', started)
+                    response, None, 3, 'fresh ready LiDAR is required', started
+                )
         key = (command, request_id)
         pending = PendingControl(command, request_id, generation)
         with self._control_lock:
             if key in self._pending_controls:
                 return self._fill_control_response(
-                    response, None, 1, 'duplicate request already in progress',
-                    started)
+                    response, None, 1, 'duplicate request already in progress', started
+                )
             self._pending_controls[key] = pending
 
         try:
@@ -1319,28 +1301,43 @@ class PatrolBotBridge(Node):
                 if self._session_generation != generation:
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
-                        response, None, 6, 'hardware session changed', started)
-                if command == COMMAND_MOTOR_ENABLE and motor_generation != getattr(self, '_motor_disable_generation', 0):
+                        response, None, 6, 'hardware session changed', started
+                    )
+                if command == COMMAND_MOTOR_ENABLE and motor_generation != getattr(
+                    self, '_motor_disable_generation', 0
+                ):
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
-                        response, None, 3, 'canceled by motor disable', started)
+                        response, None, 3, 'canceled by motor disable', started
+                    )
                 if power:
                     with self._state_lock, self._undock_goal_lock:
                         state, supported, _ = self._lidar.snapshot(time.monotonic())
                         hello = self._server_hello
                         busy = self._undock_goal_reserved or self._undock_active
                     idle_at = self._epoch._navigation_idle_at
-                    if (hello is None or 'LIDAR_POWER' not in hello.features or
-                            not supported or state in ('UNKNOWN', 'STARTING') or busy or
-                            (self._epoch.maps and self._epoch.maps.hold) or
-                            self._epoch._map_goal is not None or
-                            self._epoch._future is not None or self._epoch._map_future is not None or
-                            self._epoch._navigation_status or idle_at is None or
-                            not 0 <= time.monotonic() - idle_at <= .5):
+                    if (
+                        hello is None
+                        or 'LIDAR_POWER' not in hello.features
+                        or not supported
+                        or state in ('UNKNOWN', 'STARTING')
+                        or busy
+                        or (self._epoch.maps and self._epoch.maps.hold)
+                        or self._epoch._map_goal is not None
+                        or self._epoch._future is not None
+                        or self._epoch._map_future is not None
+                        or self._epoch._navigation_status
+                        or idle_at is None
+                        or not 0 <= time.monotonic() - idle_at <= 0.5
+                    ):
                         self._discard_pending_control(key, pending)
                         return self._fill_control_response(
-                            response, None, 3,
-                            'power control requires commissioned fresh LiDAR state and idle robot', started)
+                            response,
+                            None,
+                            3,
+                            'power control requires commissioned fresh LiDAR state and idle robot',
+                            started,
+                        )
                     with self._state_lock:
                         self._lidar_pending = True
                         self._lidar_hold = True
@@ -1349,60 +1346,70 @@ class PatrolBotBridge(Node):
                     if self.sock is not None:
                         self.sock.sendall(b'DRIVE:0.0:0.0\n')
                 elif command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE) and (
-                        not self._lidar_ready() or
-                        not self._epoch.commands_allowed):
+                    not self._lidar_ready() or not self._epoch.commands_allowed
+                ):
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
-                        response, None, 3, 'odometry origin recovery required', started)
+                        response, None, 3, 'odometry origin recovery required', started
+                    )
                 if self.sock is None:
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
-                        response, None, 2, 'hardware link unavailable', started)
+                        response, None, 2, 'hardware link unavailable', started
+                    )
                 self.sock.sendall(payload)
             self.get_logger().info(
                 f'Sent zero-motion {command} request {request_id} '
-                f'on hardware session {generation}.')
+                f'on hardware session {generation}.'
+            )
         except Exception as exc:
             self._discard_pending_control(key, pending)
             return self._fill_control_response(
-                response, None, 2, f'hardware send failed: {exc}', started)
+                response, None, 2, f'hardware send failed: {exc}', started
+            )
 
         if not pending.event.wait(self.CONTROL_TIMEOUT):
             self._discard_pending_control(key, pending)
             return self._fill_control_response(
-                response, None, 5, 'hardware operation timed out', started,
-                accepted=pending.accepted)
+                response,
+                None,
+                5,
+                'hardware operation timed out',
+                started,
+                accepted=pending.accepted,
+            )
         reply = pending.reply
         self._discard_pending_control(key, pending)
         if reply is None:
             return self._fill_control_response(
-                response, None, 7, 'missing terminal result', started,
-                accepted=pending.accepted)
+                response, None, 7, 'missing terminal result', started, accepted=pending.accepted
+            )
         if reply.code == 6:
             return self._fill_control_response(
-                response, reply, 6, reply.message, started,
-                accepted=reply.accepted)
+                response, reply, 6, reply.message, started, accepted=reply.accepted
+            )
         if power and reply.success and pending.session_generation == self._session_generation:
             with self._epoch.lock, self._state_lock:
                 self._lidar_cutoff = time.monotonic()
                 self._lidar.update(
                     ('STARTING' if command == COMMAND_LIDAR_ON else 'OFF') + ',1,-1',
-                    self._lidar_cutoff)
+                    self._lidar_cutoff,
+                )
                 self._lidar_hold = False
         self.get_logger().info(
             f'{command} request {request_id} completed: '
-            f'success={reply.success}, code={reply.code}, message={reply.message}.')
+            f'success={reply.success}, code={reply.code}, message={reply.message}.'
+        )
         return self._fill_control_response(
-            response, reply, reply.code, reply.message, started,
-            accepted=reply.accepted)
+            response, reply, reply.code, reply.message, started, accepted=reply.accepted
+        )
 
     def _discard_pending_control(self, key, pending):
         with self._control_lock:
             if self._pending_controls.get(key) is pending:
                 self._pending_controls.pop(key, None)
 
-    def _fill_control_response(
-            self, response, reply, code, message, started, accepted=False):
+    def _fill_control_response(self, response, reply, code, message, started, accepted=False):
         """Populate either generated service response with the same contract."""
         with self._state_lock:
             generation = self._session_generation
@@ -1413,24 +1420,22 @@ class PatrolBotBridge(Node):
         response.success = bool(reply and reply.success)
         response.code = int(code)
         response.message = message
-        response.charge_state = (
-            reply.charge_state if reply is not None else charge_state)
-        response.motors_enabled = (
-            reply.motors_enabled if reply is not None else motors)
-        response.estop_pressed = (
-            reply.estop_pressed if reply is not None else estop)
+        response.charge_state = reply.charge_state if reply is not None else charge_state
+        response.motors_enabled = reply.motors_enabled if reply is not None else motors
+        response.estop_pressed = reply.estop_pressed if reply is not None else estop
         response.session_generation = generation
         response.elapsed_seconds = float(time.monotonic() - started)
         if hasattr(response, 'state'):
             with self._state_lock:
-                response.state = ('FAULT' if self._lidar_hold else
-                                  self._lidar.snapshot(time.monotonic())[0])
-        # request_id is initialized by _control_service before any return.
+                response.state = (
+                    'FAULT' if self._lidar_hold else self._lidar.snapshot(time.monotonic())[0]
+                )
+                # request_id is initialized by _control_service before any return.
         return response
 
-    # ------------------------------------------------------------------
-    # Hardware undock action
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Hardware undock action
+        # ------------------------------------------------------------------
 
     def _handle_hello(self, line):
         """Record the SBC capability banner for this session."""
@@ -1446,9 +1451,8 @@ class PatrolBotBridge(Node):
         self._epoch.announce(self._session_generation, hello.odom_epoch)
         with self._state_lock:
             self._server_hello = hello
-        self.get_logger().info(
-            f'SBC protocol {hello.protocol}, features '
-            f'{sorted(hello.features) or ["none"]}.')
+        features = sorted(hello.features) or ['none']
+        self.get_logger().info(f'SBC protocol {hello.protocol}, features {features}.')
 
     def _handle_undock_event(self, line):
         """Record an undock progress frame for the executing goal."""
@@ -1477,7 +1481,8 @@ class PatrolBotBridge(Node):
         with self._undock_lock:
             if result.request_id != self._undock_request_id:
                 self.get_logger().warn(
-                    f'Ignoring unmatched UNDOCK_RESULT for {result.request_id}')
+                    f'Ignoring unmatched UNDOCK_RESULT for {result.request_id}'
+                )
                 return
             self._undock_result = result
         self._undock_event.set()
@@ -1492,13 +1497,23 @@ class PatrolBotBridge(Node):
             if self._undock_result is not None:
                 return
             self._undock_result = UndockResult(
-                request_id=self._undock_request_id, success=False,
-                code=SESSION_CHANGED, message='hardware session disconnected',
-                phase=0, phase_name='IDLE', distance_traveled=0.0,
-                lateral_error=0.0, heading_error=0.0, charge_state=-1,
-                motors_enabled=False, estop_pressed=True,
-                minimum_rear_range=0.0, release_attempts=0,
-                dock_state='UNKNOWN', physically_clear=False)
+                request_id=self._undock_request_id,
+                success=False,
+                code=SESSION_CHANGED,
+                message='hardware session disconnected',
+                phase=0,
+                phase_name='IDLE',
+                distance_traveled=0.0,
+                lateral_error=0.0,
+                heading_error=0.0,
+                charge_state=-1,
+                motors_enabled=False,
+                estop_pressed=True,
+                minimum_rear_range=0.0,
+                release_attempts=0,
+                dock_state='UNKNOWN',
+                physically_clear=False,
+            )
         self._undock_event.set()
 
     def _undock_goal_callback(self, request):
@@ -1507,32 +1522,31 @@ class PatrolBotBridge(Node):
         # the SBC. Epoch, LiDAR, TF and navigation state must not refuse
         # acceptance here; post-reverse motion stays gated elsewhere.
         for name, value in (
-                ('clearance_distance', request.clearance_distance),
-                ('reverse_speed', request.reverse_speed),
-                ('maximum_duration', request.maximum_duration)):
+            ('clearance_distance', request.clearance_distance),
+            ('reverse_speed', request.reverse_speed),
+            ('maximum_duration', request.maximum_duration),
+        ):
             if not math.isfinite(value) or value <= 0.0:
                 self.get_logger().error(
-                    f'Hardware undock rejected: {name} must be finite and '
-                    f'positive.')
+                    f'Hardware undock rejected: {name} must be finite and ' f'positive.'
+                )
                 return GoalResponse.REJECT
         with self._state_lock:
             connected = self._link_connected
             hello = self._server_hello
         if not connected:
-            self.get_logger().error(
-                'Hardware undock rejected: no SBC link.')
+            self.get_logger().error('Hardware undock rejected: no SBC link.')
             return GoalResponse.REJECT
         if hello is None or not hello.supports_undock():
             # Fail closed rather than sending a command this server will never
             # answer and then waiting out the whole timeout.
             self.get_logger().error(
-                'Hardware undock rejected: this SBC does not advertise '
-                'FEATURES=UNDOCK.')
+                'Hardware undock rejected: this SBC does not advertise ' 'FEATURES=UNDOCK.'
+            )
             return GoalResponse.REJECT
         with self._undock_goal_lock:
             if self._undock_goal_reserved:
-                self.get_logger().error(
-                    'Hardware undock rejected: another goal is active.')
+                self.get_logger().error('Hardware undock rejected: another goal is active.')
                 return GoalResponse.REJECT
             self._undock_goal_reserved = True
         return GoalResponse.ACCEPT
@@ -1555,31 +1569,39 @@ class PatrolBotBridge(Node):
         self._undock_event.clear()
         try:
             payload = format_undock_request(
-                request_id, float(goal_handle.request.clearance_distance),
+                request_id,
+                float(goal_handle.request.clearance_distance),
                 float(goal_handle.request.reverse_speed),
                 float(goal_handle.request.maximum_duration),
-                bool(goal_handle.request.validation_mode))
+                bool(goal_handle.request.validation_mode),
+            )
             with self._epoch.lock, self.sock_lock:
                 if self._session_generation != session:
                     return self._undock_abort(
-                        goal_handle, SESSION_CHANGED,
-                        'hardware session changed', started, session)
+                        goal_handle, SESSION_CHANGED, 'hardware session changed', started, session
+                    )
                 if not self._epoch.commands_allowed or not self._lidar_ready():
                     return self._undock_abort(
-                        goal_handle, LINK_UNAVAILABLE,
-                        'odometry origin recovery required', started, session)
+                        goal_handle,
+                        LINK_UNAVAILABLE,
+                        'odometry origin recovery required',
+                        started,
+                        session,
+                    )
                 if self.sock is None:
                     return self._undock_abort(
-                        goal_handle, LINK_UNAVAILABLE,
-                        'hardware link unavailable', started, session)
+                        goal_handle,
+                        LINK_UNAVAILABLE,
+                        'hardware link unavailable',
+                        started,
+                        session,
+                    )
                 self.sock.sendall(payload)
-            self.get_logger().info(
-                f'Sent UNDOCK {request_id} on hardware session {session}.')
+            self.get_logger().info(f'Sent UNDOCK {request_id} on hardware session {session}.')
 
             # The SBC owns the operation timeout; this is only a backstop so a
             # lost terminal frame cannot block the goal forever.
-            deadline = started + float(
-                goal_handle.request.maximum_duration) + 15.0
+            deadline = started + float(goal_handle.request.maximum_duration) + 15.0
             cancel_sent = False
             while time.monotonic() < deadline:
                 if self._undock_event.wait(0.05):
@@ -1597,8 +1619,8 @@ class PatrolBotBridge(Node):
                 result = self._undock_result
             if result is None:
                 return self._undock_abort(
-                    goal_handle, TIMEOUT,
-                    'no terminal result from the SBC', started, session)
+                    goal_handle, TIMEOUT, 'no terminal result from the SBC', started, session
+                )
             return self._undock_finish(goal_handle, result, started, session)
         finally:
             with self._undock_lock:
@@ -1664,7 +1686,8 @@ class PatrolBotBridge(Node):
             f'code={reply.code} message={reply.message} '
             f'distance={reply.distance_traveled:.3f} '
             f'attempts={reply.release_attempts} '
-            f'dock_state={reply.dock_state} motors={reply.motors_enabled}')
+            f'dock_state={reply.dock_state} motors={reply.motors_enabled}'
+        )
         return result
 
     def _undock_abort(self, goal_handle, code, message, started, session):
@@ -1679,9 +1702,9 @@ class PatrolBotBridge(Node):
         self.get_logger().error(f'Hardware undock aborted: {message}')
         return result
 
-    # ------------------------------------------------------------------
-    # Velocity forwarding
-    # ------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Velocity forwarding
+        # ------------------------------------------------------------------
 
     def cmd_vel_callback(self, msg):
         # Defence in depth. The SBC refuses every nonzero DRIVE while its undock
@@ -1694,19 +1717,19 @@ class PatrolBotBridge(Node):
             # Serialize all writes so DRIVE bytes can never interleave with an
             # idempotent hardware-control request on the TCP stream.
             with self._epoch.lock, self.sock_lock:
-                if ((not self._epoch.commands_allowed or not self._lidar_ready()) and
-                        (msg.linear.x != 0.0 or msg.angular.z != 0.0)):
+                if (not self._epoch.commands_allowed or not self._lidar_ready()) and (
+                    msg.linear.x != 0.0 or msg.angular.z != 0.0
+                ):
                     return
                 if self.sock is None:
                     return
-                self.sock.sendall(
-                    f'DRIVE:{msg.linear.x}:{msg.angular.z}\n'.encode('utf-8'))
+                self.sock.sendall(f'DRIVE:{msg .linear .x}:{msg .angular .z}\n'.encode('utf-8'))
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
+            # ------------------------------------------------------------------
+            # Cleanup
+            # ------------------------------------------------------------------
 
     def destroy_node(self):
         if self._workers_stopped:
@@ -1727,19 +1750,16 @@ class PatrolBotBridge(Node):
                     self.sock.close()
                 except Exception:
                     pass
-        # Publishers, loggers, and queues remain valid until every worker has
-        # exited. This prevents a shutdown/restart race where a background
-        # publisher enters rclpy after Node.destroy_node() frees its handle.
-        deadline = time.monotonic() + max(
-            self.CONNECT_TIMEOUT, self.RECV_TIMEOUT, 0.5) + 1.0
+                    # Publishers, loggers, and queues remain valid until every worker has
+                    # exited. This prevents a shutdown/restart race where a background
+                    # publisher enters rclpy after Node.destroy_node() frees its handle.
+        deadline = time.monotonic() + max(self.CONNECT_TIMEOUT, self.RECV_TIMEOUT, 0.5) + 1.0
         for thread in self._worker_threads:
             remaining = max(0.0, deadline - time.monotonic())
             thread.join(timeout=remaining)
-        alive = [thread.name for thread in self._worker_threads
-                 if thread.is_alive()]
+        alive = [thread.name for thread in self._worker_threads if thread.is_alive()]
         if alive:
-            self.get_logger().error(
-                'Bridge worker shutdown timed out: ' + ', '.join(alive))
+            self.get_logger().error('Bridge worker shutdown timed out: ' + ', '.join(alive))
         self._workers_stopped = True
         return super().destroy_node()
 

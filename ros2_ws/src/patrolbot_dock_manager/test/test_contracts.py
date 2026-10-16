@@ -8,29 +8,16 @@ may take control afterwards, and whether a mission may dock again.
 
 from dataclasses import replace
 
-from patrolbot_dock_manager.contracts import (
-    automatic_docking_allowed,
-    DOCK_CLEAR_CONFIRMED,
-    DOCK_DEPARTING,
-    DOCK_DOCKED_CONFIRMED,
-    DOCK_FAULT_STOPPED,
-    dock_pose_initialization_failures,
-    DOCK_UNKNOWN,
-    HAPPY_PATH,
-    HARD_MAX_DISTANCE,
-    HARD_MAX_SPEED,
-    localization_position_limit,
-    odometry_values_finite,
-    planar_covariance_usable,
-    precheck_failures,
-    resume_failures,
-    SafetySnapshot,
-    TERMINAL_STATES,
-    transition_allowed,
-    validate_goal,
-)
+from patrolbot_dock_manager.contracts import (automatic_docking_allowed, DOCK_CLEAR_CONFIRMED,
+                                              DOCK_DEPARTING, DOCK_DOCKED_CONFIRMED,
+                                              DOCK_FAULT_STOPPED,
+                                              dock_pose_initialization_failures, DOCK_UNKNOWN,
+                                              HAPPY_PATH, HARD_MAX_DISTANCE, HARD_MAX_SPEED,
+                                              localization_position_limit, odometry_values_finite,
+                                              planar_covariance_usable, precheck_failures,
+                                              resume_failures, SafetySnapshot, TERMINAL_STATES,
+                                              transition_allowed, validate_goal)
 import pytest
-
 
 SAFE_DOCKED = SafetySnapshot(
     link_connected=True,
@@ -73,6 +60,7 @@ SAFE_HANDOFF = replace(
 # Precheck
 # ---------------------------------------------------------------------------
 
+
 def test_docked_precheck_passes_with_motors_unresolved_but_requires_no_estop():
     """Undock admission requires E-stop clear and charging contact.
 
@@ -107,16 +95,15 @@ def test_every_precheck_input_fails_closed(field, value):
 
 
 @pytest.mark.parametrize(
-    'dock_state',
-    [DOCK_UNKNOWN, DOCK_DEPARTING, DOCK_CLEAR_CONFIRMED, DOCK_FAULT_STOPPED])
+    'dock_state', [DOCK_UNKNOWN, DOCK_DEPARTING, DOCK_CLEAR_CONFIRMED, DOCK_FAULT_STOPPED]
+)
 def test_precheck_requires_the_sbc_to_report_the_robot_docked(dock_state):
     failures = precheck_failures(replace(SAFE_DOCKED, dock_state=dock_state))
     assert failures != []
 
 
 def test_fault_stopped_names_the_reset_it_needs():
-    failures = precheck_failures(
-        replace(SAFE_DOCKED, dock_state=DOCK_FAULT_STOPPED))
+    failures = precheck_failures(replace(SAFE_DOCKED, dock_state=DOCK_FAULT_STOPPED))
     assert any('reset' in failure for failure in failures)
 
 
@@ -135,6 +122,7 @@ def test_redock_inhibition_never_blocks_undocking():
 # Handoff back to Nav2
 # ---------------------------------------------------------------------------
 
+
 def test_handoff_requires_clearance_and_live_motors():
     assert resume_failures(SAFE_HANDOFF, 7) == []
 
@@ -147,8 +135,8 @@ def test_handoff_refuses_when_the_sbc_left_the_motors_down():
 
 
 @pytest.mark.parametrize(
-    'dock_state',
-    [DOCK_UNKNOWN, DOCK_DOCKED_CONFIRMED, DOCK_DEPARTING, DOCK_FAULT_STOPPED])
+    'dock_state', [DOCK_UNKNOWN, DOCK_DOCKED_CONFIRMED, DOCK_DEPARTING, DOCK_FAULT_STOPPED]
+)
 def test_handoff_requires_confirmed_physical_clearance(dock_state):
     assert resume_failures(replace(SAFE_HANDOFF, dock_state=dock_state), 7) != []
 
@@ -178,25 +166,28 @@ def test_every_handoff_input_fails_closed(field, value):
 # Redock inhibition
 # ---------------------------------------------------------------------------
 
+
 def test_docking_is_inhibited_immediately_after_an_undock():
     assert not automatic_docking_allowed(SAFE_HANDOFF)
-    assert automatic_docking_allowed(
-        replace(SAFE_HANDOFF, redock_inhibited=False))
+    assert automatic_docking_allowed(replace(SAFE_HANDOFF, redock_inhibited=False))
 
 
 def test_docking_is_refused_without_a_valid_dock_state():
     assert not automatic_docking_allowed(
-        replace(SAFE_HANDOFF, redock_inhibited=False, dock_state_valid=False))
+        replace(SAFE_HANDOFF, redock_inhibited=False, dock_state_valid=False)
+    )
 
 
 def test_docking_is_refused_while_an_undock_runs():
     assert not automatic_docking_allowed(
-        replace(SAFE_HANDOFF, redock_inhibited=False, undock_active=True))
+        replace(SAFE_HANDOFF, redock_inhibited=False, undock_active=True)
+    )
 
 
 # ---------------------------------------------------------------------------
 # State machine and goal bounds
 # ---------------------------------------------------------------------------
+
 
 def test_happy_path_is_strictly_ordered():
     for current, target in zip(HAPPY_PATH, HAPPY_PATH[1:]):
@@ -218,16 +209,22 @@ def test_every_state_may_fail_closed_to_a_terminal_state():
 
 def test_contact_separation_is_no_longer_a_pi_state():
     """The six states that used to command and monitor motion are gone."""
-    for removed in ('REQUEST_DOCK_RELEASE', 'WAIT_FOR_CHARGE_RELEASE',
-                    'VERIFY_ESTOP_AND_MOTOR', 'GUARDED_REVERSE',
-                    'CLEAR_CHARGE_LATCH', 'CLEAR_OF_DOCK', 'ENABLE_TURN',
-                    'FINALIZE_CHARGE_LATCH'):
+    for removed in (
+        'REQUEST_DOCK_RELEASE',
+        'WAIT_FOR_CHARGE_RELEASE',
+        'VERIFY_ESTOP_AND_MOTOR',
+        'GUARDED_REVERSE',
+        'CLEAR_CHARGE_LATCH',
+        'CLEAR_OF_DOCK',
+        'ENABLE_TURN',
+        'FINALIZE_CHARGE_LATCH',
+    ):
         assert removed not in HAPPY_PATH
 
 
 @pytest.mark.parametrize(
-    ('distance', 'speed'),
-    [(0.0, 0.10), (-0.1, 0.10), (0.71, 0.10), (0.53, 0.0), (0.53, 0.11)])
+    ('distance', 'speed'), [(0.0, 0.10), (-0.1, 0.10), (0.71, 0.10), (0.53, 0.0), (0.53, 0.11)]
+)
 def test_out_of_range_goals_are_rejected_not_clamped(distance, speed):
     assert validate_goal(distance, speed, False) != []
 
@@ -245,34 +242,31 @@ def test_validation_mode_has_tighter_caps():
 # Dock-pose initialization
 # ---------------------------------------------------------------------------
 
+
 def test_dock_pose_initialization_requires_charging_and_stillness():
     assert dock_pose_initialization_failures(SAFE_DOCKED) == []
-    assert dock_pose_initialization_failures(
-        replace(SAFE_DOCKED, charge_state=0)) != []
-    assert dock_pose_initialization_failures(
-        replace(SAFE_DOCKED, stationary=False)) != []
+    assert dock_pose_initialization_failures(replace(SAFE_DOCKED, charge_state=0)) != []
+    assert dock_pose_initialization_failures(replace(SAFE_DOCKED, stationary=False)) != []
 
 
 def test_dock_pose_initialization_rejects_stale_charge_while_clear():
-    failures = dock_pose_initialization_failures(replace(
-        SAFE_DOCKED,
-        charge_state=3,
-        dock_state=DOCK_CLEAR_CONFIRMED,
-        physically_clear=True,
-    ))
-    assert failures == [
-        'SBC does not report the robot docked '
-        '(dock_state=CLEAR_CONFIRMED)']
+    failures = dock_pose_initialization_failures(
+        replace(
+            SAFE_DOCKED,
+            charge_state=3,
+            dock_state=DOCK_CLEAR_CONFIRMED,
+            physically_clear=True,
+        )
+    )
+    assert failures == ['SBC does not report the robot docked ' '(dock_state=CLEAR_CONFIRMED)']
 
 
 def test_dock_pose_initialization_requires_fresh_dock_observer():
-    assert dock_pose_initialization_failures(replace(
-        SAFE_DOCKED, dock_state_valid=False)) != []
+    assert dock_pose_initialization_failures(replace(SAFE_DOCKED, dock_state_valid=False)) != []
 
 
 def test_dock_pose_initialization_ignores_motor_state():
-    assert dock_pose_initialization_failures(
-        replace(SAFE_DOCKED, motors_enabled=True)) == []
+    assert dock_pose_initialization_failures(replace(SAFE_DOCKED, motors_enabled=True)) == []
 
 
 # ---------------------------------------------------------------------------
@@ -287,37 +281,33 @@ DOCKED_LIMIT = 1.0
 
 
 def test_general_limit_applies_away_from_the_dock():
-    assert localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, False, False) == GENERAL_LIMIT
+    assert localization_position_limit(GENERAL_LIMIT, DOCKED_LIMIT, False, False) == GENERAL_LIMIT
     assert DOCKED_X_VARIANCE > localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, False, False)
+        GENERAL_LIMIT, DOCKED_LIMIT, False, False
+    )
 
 
 def test_docked_allowance_needs_both_pieces_of_evidence():
     # Mated plates but a pose that has drifted off the dock: no allowance.
-    assert localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, True, False) == GENERAL_LIMIT
+    assert localization_position_limit(GENERAL_LIMIT, DOCKED_LIMIT, True, False) == GENERAL_LIMIT
     # A pose at the dock but no dock contact — the robot may have left.
-    assert localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, False, True) == GENERAL_LIMIT
-    assert localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, True, True) == DOCKED_LIMIT
+    assert localization_position_limit(GENERAL_LIMIT, DOCKED_LIMIT, False, True) == GENERAL_LIMIT
+    assert localization_position_limit(GENERAL_LIMIT, DOCKED_LIMIT, True, True) == DOCKED_LIMIT
 
 
 def test_measured_docked_variance_passes_only_the_docked_limit():
     assert DOCKED_X_VARIANCE <= localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, True, True)
+        GENERAL_LIMIT, DOCKED_LIMIT, True, True
+    )
 
 
 def test_docked_allowance_never_tightens_the_general_limit():
-    assert localization_position_limit(
-        GENERAL_LIMIT, 0.01, True, True) == GENERAL_LIMIT
+    assert localization_position_limit(GENERAL_LIMIT, 0.01, True, True) == GENERAL_LIMIT
 
 
 def test_docked_allowance_still_refuses_a_diverged_estimate():
     # Particle spread after a genuine loss of localization, at the dock.
-    assert 4.0 > localization_position_limit(
-        GENERAL_LIMIT, DOCKED_LIMIT, True, True)
+    assert 4.0 > localization_position_limit(GENERAL_LIMIT, DOCKED_LIMIT, True, True)
 
 
 # Two independent planar diagonals captured from the live docked robot, three
@@ -341,10 +331,7 @@ def test_a_negative_variance_is_not_a_covariance(xx, yy, yaw):
 
 
 def test_every_planar_entry_is_checked_independently():
-    for xx, yy, yaw in (
-            (-1e-9, 0.01, 0.01),
-            (0.01, -1e-9, 0.01),
-            (0.01, 0.01, -1e-9)):
+    for xx, yy, yaw in ((-1e-9, 0.01, 0.01), (0.01, -1e-9, 0.01), (0.01, 0.01, -1e-9)):
         assert not planar_covariance_usable(xx, yy, yaw)
 
 
@@ -380,33 +367,30 @@ def test_undock_precheck_does_not_consult_localization():
     gates, not by admission.
     """
     for snapshot in (
-            replace(SAFE_DOCKED, localization_fresh=False,
-                    localization_valid=True),
-            replace(SAFE_DOCKED, localization_valid=False),
-            replace(SAFE_DOCKED, localization_valid=False,
-                    localization_fresh=False)):
+        replace(SAFE_DOCKED, localization_fresh=False, localization_valid=True),
+        replace(SAFE_DOCKED, localization_valid=False),
+        replace(SAFE_DOCKED, localization_valid=False, localization_fresh=False),
+    ):
         assert precheck_failures(snapshot) == []
 
 
 def test_the_handoff_gate_checks_stillness_not_localization():
     """resume_failures pins a stationary handoff, not pose freshness."""
     assert resume_failures(SAFE_HANDOFF, 7) == []
-    assert resume_failures(
-        replace(SAFE_HANDOFF, localization_fresh=False,
-                localization_valid=True), 7) == []
-    assert resume_failures(
-        replace(SAFE_HANDOFF, localization_valid=False), 7) == []
+    assert (
+        resume_failures(
+            replace(SAFE_HANDOFF, localization_fresh=False, localization_valid=True), 7
+        )
+        == []
+    )
+    assert resume_failures(replace(SAFE_HANDOFF, localization_valid=False), 7) == []
     failures = resume_failures(replace(SAFE_HANDOFF, stationary=False), 7)
     assert any('stationary' in failure for failure in failures)
 
 
 def test_non_finite_odometry_cannot_satisfy_dock_freshness():
-    assert odometry_values_finite(
-        1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
+    assert odometry_values_finite(1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
     for bad in (float('nan'), float('inf'), -float('inf')):
-        assert not odometry_values_finite(
-            bad, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
-        assert not odometry_values_finite(
-            1.0, 2.0, (0.0, bad, 0.0, 1.0), 0.1, 0.2)
-        assert not odometry_values_finite(
-            1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, bad)
+        assert not odometry_values_finite(bad, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, 0.2)
+        assert not odometry_values_finite(1.0, 2.0, (0.0, bad, 0.0, 1.0), 0.1, 0.2)
+        assert not odometry_values_finite(1.0, 2.0, (0.0, 0.0, 0.0, 1.0), 0.1, bad)

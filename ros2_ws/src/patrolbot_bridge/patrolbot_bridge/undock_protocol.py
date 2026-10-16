@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 from uuid import UUID
 
-
 COMMAND_UNDOCK = 'UNDOCK'
 COMMAND_UNDOCK_CANCEL = 'UNDOCK_CANCEL'
 COMMAND_DOCK_RESET = 'DOCK_RESET'
@@ -45,14 +44,27 @@ SAFETY_FAULT = 12
 CANCELED = 13
 HARDWARE_PROFILE_UNCOMMISSIONED = 14
 
-DOCK_STATES = frozenset((
-    'UNKNOWN', 'DOCKED_CONFIRMED', 'DEPARTING', 'CLEAR_CONFIRMED',
-    'FAULT_STOPPED',
-))
-UNDOCK_PHASES = frozenset((
-    'IDLE', 'PREPARING_UNDOCK', 'RELEASING', 'ENABLING_MOTORS', 'BACKING_OUT',
-    'VERIFYING_CLEARANCE', 'HANDOFF_READY', 'STOPPING',
-))
+DOCK_STATES = frozenset(
+    (
+        'UNKNOWN',
+        'DOCKED_CONFIRMED',
+        'DEPARTING',
+        'CLEAR_CONFIRMED',
+        'FAULT_STOPPED',
+    )
+)
+UNDOCK_PHASES = frozenset(
+    (
+        'IDLE',
+        'PREPARING_UNDOCK',
+        'RELEASING',
+        'ENABLING_MOTORS',
+        'BACKING_OUT',
+        'VERIFYING_CLEARANCE',
+        'HANDOFF_READY',
+        'STOPPING',
+    )
+)
 
 # Feature advertised in the HELLO banner. Without it the bridge refuses undock
 # goals rather than sending a command the SBC will never answer.
@@ -120,8 +132,8 @@ def valid_request_id(value: str) -> bool:
 
 
 def format_undock_request(
-        request_id: str, clearance_m: float, speed_mps: float,
-        timeout_s: float, validation_mode: bool) -> bytes:
+    request_id: str, clearance_m: float, speed_mps: float, timeout_s: float, validation_mode: bool
+) -> bytes:
     """
     Format an idempotent UNDOCK request.
 
@@ -131,8 +143,7 @@ def format_undock_request(
     """
     if not valid_request_id(request_id):
         raise ValueError('request_id must be a canonical UUID')
-    for name, value in (('clearance', clearance_m), ('speed', speed_mps),
-                        ('timeout', timeout_s)):
+    for name, value in (('clearance', clearance_m), ('speed', speed_mps), ('timeout', timeout_s)):
         if value != value or value in (float('inf'), float('-inf')):
             raise ValueError(f'{name} must be finite')
         if value <= 0.0:
@@ -186,8 +197,7 @@ def parse_hello(line: str) -> Optional[ServerHello]:
             odom_epoch = value
         elif key == 'FEATURES':
             features = {token for token in value.split(',') if token}
-    return ServerHello(protocol=protocol, features=frozenset(features),
-                       odom_epoch=odom_epoch)
+    return ServerHello(protocol=protocol, features=frozenset(features), odom_epoch=odom_epoch)
 
 
 def _float(value: str, name: str) -> float:

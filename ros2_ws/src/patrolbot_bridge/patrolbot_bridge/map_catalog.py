@@ -1,4 +1,5 @@
 """Content-addressed local maps; no ROS dependency and no arbitrary map URLs."""
+
 from __future__ import annotations
 
 import hashlib
@@ -23,14 +24,21 @@ def describe_map(path: Path) -> dict:
     if image.parent != path.parent.resolve():
         raise ValueError('map image must be beside its YAML')
     origin = json.loads(fields['origin'])
-    meta = dict(resolution=float(fields['resolution']), origin=origin,
-                negate=int(fields['negate']),
-                occupied_thresh=float(fields['occupied_thresh']),
-                free_thresh=float(fields['free_thresh']))
-    if (len(origin) != 3 or not all(math.isfinite(v) for v in origin)
-            or not math.isfinite(meta['resolution']) or meta['resolution'] <= 0
-            or meta['negate'] not in (0, 1)
-            or not 0 <= meta['free_thresh'] < meta['occupied_thresh'] <= 1):
+    meta = {
+        'resolution': float(fields['resolution']),
+        'origin': origin,
+        'negate': int(fields['negate']),
+        'occupied_thresh': float(fields['occupied_thresh']),
+        'free_thresh': float(fields['free_thresh']),
+    }
+    if (
+        len(origin) != 3
+        or not all(math.isfinite(v) for v in origin)
+        or not math.isfinite(meta['resolution'])
+        or meta['resolution'] <= 0
+        or meta['negate'] not in (0, 1)
+        or not 0 <= meta['free_thresh'] < meta['occupied_thresh'] <= 1
+    ):
         raise ValueError('invalid map geometry or thresholds')
     data = image.read_bytes()
     position, tokens = 0, []
@@ -38,16 +46,26 @@ def describe_map(path: Path) -> dict:
         match = re.compile(rb'\s*(?:#[^\n]*\n\s*)*(\S+)').match(data, position)
         if match is None:
             raise ValueError('invalid PGM header')
-        tokens.append(match.group(1)); position = match.end()
+        tokens.append(match.group(1))
+        position = match.end()
     width, height = int(tokens[1]), int(tokens[2])
-    if (tokens[0] != b'P5' or tokens[3] != b'255' or width <= 0 or height <= 0
-            or len(data[position + 1:]) != width * height):
+    if (
+        tokens[0] != b'P5'
+        or tokens[3] != b'255'
+        or width <= 0
+        or height <= 0
+        or len(data[position + 1:]) != width * height
+    ):
         raise ValueError('invalid PGM raster')
     meta.update(width=width, height=height)
     digest = hashlib.sha256(json.dumps(meta, sort_keys=True, separators=(',', ':')).encode())
-    digest.update(b'\0'); digest.update(data[position + 1:])
-    return dict(meta, revision='sha256:' + digest.hexdigest(),
-                image_sha256=hashlib.sha256(data).hexdigest())
+    digest.update(b'\0')
+    digest.update(data[position + 1:])
+    return dict(
+        meta,
+        revision='sha256:' + digest.hexdigest(),
+        image_sha256=hashlib.sha256(data).hexdigest(),
+    )
 
 
 class MapCatalog:
@@ -82,16 +100,20 @@ class MapCatalog:
         dx, dy = x - ox, y - oy
         mx = math.cos(yaw) * dx + math.sin(yaw) * dy
         my = -math.sin(yaw) * dx + math.cos(yaw) * dy
-        return (0 <= mx < entry['width'] * entry['resolution'] and
-                0 <= my < entry['height'] * entry['resolution'])
+        return (
+            0 <= mx < entry['width'] * entry['resolution']
+            and 0 <= my < entry['height'] * entry['resolution']
+        )
 
 
 class ActiveMapStore:
-    """Only a missing file in an available durable directory is first install.
+    """
+    Only a missing file in an available durable directory is first install.
 
     The caller persists only after map_server AND AMCL acknowledgement. A read
     or write error must keep the motion hold, never silently choose Floor 2.
     """
+
     def __init__(self, directory, catalog):
         self.directory = Path(directory)
         self.catalog = catalog
@@ -113,14 +135,16 @@ class ActiveMapStore:
 
     def save(self, map_id, revision):
         self.catalog.require(map_id, revision)
-        data = dict(schema_version=1, map_id=map_id, revision=revision)
+        data = {'schema_version': 1, 'map_id': map_id, 'revision': revision}
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(mode='w', dir=self.directory,
-                                             prefix='.active-map-', delete=False) as stream:
+            with tempfile.NamedTemporaryFile(
+                mode='w', dir=self.directory, prefix='.active-map-', delete=False
+            ) as stream:
                 temporary = stream.name
                 json.dump(data, stream, sort_keys=True)
-                stream.flush(); os.fsync(stream.fileno())
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(temporary, self.path)
             fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY)
             try:

@@ -10,6 +10,50 @@ The Compose stack runs the three active Raspberry Pi services:
 The legacy `rosaria2` package is versioned in the monorepo but is not built or
 run. Never run it alongside `patrolbot_bridge`.
 
+## Local ROS tests (not a deployment image)
+
+From the repository root, build the test environment once:
+
+```bash
+docker build -f docker/Dockerfile.ros-tests -t patrolbot-ros-tests .
+docker run --rm --network=none patrolbot-ros-tests
+```
+
+The final image builds generated interfaces and runs bridge/dock-manager
+fake-peer integration tests, their lint gates, and offline navigation tests.
+It never connects to the robot. Physical acceptance, the real Nav2 stack and
+`test_collision_monitor_integration.py` are outside this test environment.
+
+For rapid iteration, reuse one container with a read-only source mount and
+incremental build output inside the container (no image rebuild per edit):
+
+```bash
+docker run -d --name patrolbot-ros-dev --network=none \
+  --mount "type=bind,src=$PWD,dst=/source,readonly" \
+  --entrypoint sleep patrolbot-ros-tests infinity
+docker exec patrolbot-ros-dev bash -c '
+  set -e
+  source /opt/ros/jazzy/setup.bash
+  cd /opt/patrolbot
+  colcon build --base-paths /source/ros2_ws/src/patrolbot_interfaces \
+    /source/ros2_ws/src/patrolbot_bridge /source/ros2_ws/src/patrolbot_dock_manager \
+    /source/ros2_ws/src/patrolbot_navigation \
+    --build-base /opt/dev-build --install-base /opt/dev-install \
+    --cmake-args -DBUILD_TESTING=OFF
+  PATROLBOT_TEST_WORKSPACE=/source PATROLBOT_TEST_INSTALL=/opt/dev-install \
+    bash /source/docker/run-ros-tests.sh
+'
+```
+
+Repeat only `docker exec` after edits. Use normal installation, not
+`--symlink-install`: the map catalog deliberately rejects files resolving
+outside its catalog directory. The `ros-test-env` Dockerfile target contains
+only the reusable toolchain/dependencies; the final `ros-tests` target is
+suitable for a later CI build-and-run job. Both return nonzero on failure.
+Each pytest invocation is capped at 300 seconds (override with
+`PATROLBOT_TEST_TIMEOUT`). Lint runs use one worker: forking a linter after
+loading ROS/DDS threads can crash or hang the test process.
+
 ## Configure and build
 
 ```bash

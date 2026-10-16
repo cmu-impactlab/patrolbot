@@ -12,7 +12,6 @@ from dataclasses import dataclass
 import math
 from typing import List
 
-
 HARD_MAX_DISTANCE = 0.70
 # DO NOT RAISE. This mirrors the SBC's own hard cap; the SBC rejects anything
 # larger outright rather than clamping it, so raising this only changes which
@@ -31,8 +30,7 @@ VALIDATION_MAX_SPEED = 0.05
 FLOAT32_BOUNDARY_EPSILON = 1e-6
 
 
-def odometry_values_finite(
-        position_x, position_y, orientation, linear_x, angular_z):
+def odometry_values_finite(position_x, position_y, orientation, linear_x, angular_z):
     """Reject numeric poison before odometry can satisfy a freshness gate."""
     values = (
         float(position_x),
@@ -42,6 +40,7 @@ def odometry_values_finite(
         float(angular_z),
     )
     return all(math.isfinite(value) for value in values)
+
 
 # Nine states, down from sixteen: the six that used to command and monitor
 # contact separation now live inside one SBC operation.
@@ -117,25 +116,20 @@ def transition_allowed(current: str, target: str) -> bool:
 def validate_goal(distance: float, speed: float, validation_mode: bool) -> List[str]:
     """Return hard-cap violations without silently clamping a motion request."""
     failures = []
-    if (distance <= 0.0 or
-            distance > HARD_MAX_DISTANCE + FLOAT32_BOUNDARY_EPSILON):
-        failures.append(
-            f'reverse distance outside (0.0, {HARD_MAX_DISTANCE:.2f}] m')
+    if distance <= 0.0 or distance > HARD_MAX_DISTANCE + FLOAT32_BOUNDARY_EPSILON:
+        failures.append(f'reverse distance outside (0.0, {HARD_MAX_DISTANCE:.2f}] m')
     if speed <= 0.0 or speed > HARD_MAX_SPEED + FLOAT32_BOUNDARY_EPSILON:
-        failures.append(
-            f'reverse speed outside (0.0, {HARD_MAX_SPEED:.2f}] m/s')
-    if (validation_mode and
-            distance > VALIDATION_MAX_DISTANCE + FLOAT32_BOUNDARY_EPSILON):
+        failures.append(f'reverse speed outside (0.0, {HARD_MAX_SPEED:.2f}] m/s')
+    if validation_mode and distance > VALIDATION_MAX_DISTANCE + FLOAT32_BOUNDARY_EPSILON:
         failures.append('validation reverse distance exceeds 0.10 m')
-    if (validation_mode and
-            speed > VALIDATION_MAX_SPEED + FLOAT32_BOUNDARY_EPSILON):
+    if validation_mode and speed > VALIDATION_MAX_SPEED + FLOAT32_BOUNDARY_EPSILON:
         failures.append('validation reverse speed exceeds 0.05 m/s')
     return failures
 
 
 def localization_position_limit(
-        limit: float, docked_limit: float,
-        dock_contact_confirmed: bool, at_dock_pose: bool) -> float:
+    limit: float, docked_limit: float, dock_contact_confirmed: bool, at_dock_pose: bool
+) -> float:
     """
     Which AMCL position-variance limit applies to the current pose.
 
@@ -211,8 +205,7 @@ def planar_covariance_usable(xx: float, yy: float, yaw_yaw: float) -> bool:
     return True
 
 
-def precheck_failures(
-        state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
+def precheck_failures(state: SafetySnapshot, validation_mode: bool = False) -> List[str]:
     """
     Validate the Pi-side gates before asking the SBC to undock.
 
@@ -231,12 +224,11 @@ def precheck_failures(
     if not state.dock_state_valid:
         failures.append('SBC dock state is stale or unavailable')
     elif state.dock_state == DOCK_FAULT_STOPPED:
-        failures.append(
-            'SBC dock state is FAULT_STOPPED; an explicit reset is required')
+        failures.append('SBC dock state is FAULT_STOPPED; an explicit reset is required')
     elif state.dock_state != DOCK_DOCKED_CONFIRMED:
         failures.append(
-            f'SBC does not report the robot docked '
-            f'(dock_state={state.dock_state})')
+            f'SBC does not report the robot docked ' f'(dock_state={state.dock_state})'
+        )
     if state.undock_active:
         failures.append('an undock operation is already running')
     if not validation_mode and not state.undock_profile_commissioned:
@@ -266,8 +258,8 @@ def resume_failures(state: SafetySnapshot, expected_session: int) -> List[str]:
         failures.append('hardware session changed')
     if not state.dock_state_valid or state.dock_state != DOCK_CLEAR_CONFIRMED:
         failures.append(
-            f'SBC has not confirmed physical clearance '
-            f'(dock_state={state.dock_state})')
+            f'SBC has not confirmed physical clearance ' f'(dock_state={state.dock_state})'
+        )
     if not state.motors_enabled:
         failures.append('motors are not live for the Nav2 handoff')
     if state.estop_pressed:
@@ -318,8 +310,8 @@ def dock_pose_initialization_failures(state: SafetySnapshot) -> List[str]:
         failures.append('SBC dock state is stale or unavailable')
     elif state.dock_state != DOCK_DOCKED_CONFIRMED:
         failures.append(
-            f'SBC does not report the robot docked '
-            f'(dock_state={state.dock_state})')
+            f'SBC does not report the robot docked ' f'(dock_state={state.dock_state})'
+        )
     if not state.charge_state_valid or state.charge_state <= 0:
         failures.append('robot is not confirmed charging at the dock')
     # Motor state is deliberately NOT required here. This operation publishes a

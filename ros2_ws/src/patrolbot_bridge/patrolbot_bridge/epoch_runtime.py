@@ -6,7 +6,6 @@ import threading
 import time
 
 from action_msgs.srv import CancelGoal
-
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import ChangeState, GetState
 from nav2_msgs.srv import ManageLifecycleNodes
@@ -15,9 +14,9 @@ from rclpy.parameter import Parameter
 from std_srvs.srv import Trigger
 
 from .epoch_recovery import EpochRecovery
-from .odom_epoch import OdomEpochGuard
 from .map_runtime import MapRuntimeMixin
-from .pose_innovation import OdomHistory, innovation, propagate, valid_planar_covariance
+from .odom_epoch import OdomEpochGuard
+from .pose_innovation import innovation, OdomHistory, propagate, valid_planar_covariance
 
 
 class EpochRuntime(MapRuntimeMixin):
@@ -28,7 +27,7 @@ class EpochRuntime(MapRuntimeMixin):
         self.recovery = EpochRecovery()
         self._odom_history = OdomHistory()
         self._pose_anchor = None
-        self._localization_fault = ""
+        self._localization_fault = ''
         self._token = None
         self.first_tf_ns = None
         self._tf_generation = 0
@@ -42,32 +41,40 @@ class EpochRuntime(MapRuntimeMixin):
         self._tf_last_query = float('-inf')
         self._tf_readiness = node.create_client(Trigger, '/amcl/initial_pose_tf_ready')
         self._localization_active = node.create_client(
-            Trigger, '/lifecycle_manager_localization/is_active')
+            Trigger, '/lifecycle_manager_localization/is_active'
+        )
         self._phase = 'wait-localization-manager'
         self._future = None
         self._deadline = None
         self._failed = False
         self._navigation_ready = False
         self._lidar_reseed = False
-        self._lidar_cancel = [node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
-                              for name in ('navigate_to_pose', 'navigate_through_poses')]
+        self._lidar_cancel = [
+            node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
+            for name in ('navigate_to_pose', 'navigate_through_poses')
+        ]
         self._navigation = node.create_client(
-            ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes')
+            ManageLifecycleNodes, '/lifecycle_manager_navigation/manage_nodes'
+        )
         self._accepted_seed_stamp = None
         self._pending_pose = None
         self._pending_pose_received_at = None
         self._parameters = node.create_client(
-            SetParametersAtomically, '/amcl/set_parameters_atomically')
+            SetParametersAtomically, '/amcl/set_parameters_atomically'
+        )
         self._get = node.create_client(GetState, '/amcl/get_state')
         self._change = node.create_client(ChangeState, '/amcl/change_state')
         self._seed_sub = node.create_subscription(
-            PoseWithCovarianceStamped, '/initialpose', self.seed, 10)
+            PoseWithCovarianceStamped, '/initialpose', self.seed, 10
+        )
         self._ack_sub = node.create_subscription(
-            PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', self.seed_accepted, 10)
+            PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', self.seed_accepted, 10
+        )
         self._pose_sub = node.create_subscription(
-            PoseWithCovarianceStamped, '/amcl_pose', self.pose, 10)
+            PoseWithCovarianceStamped, '/amcl_pose', self.pose, 10
+        )
         self.init_maps()
-        self._timer = node.create_timer(.05, self.tick)
+        self._timer = node.create_timer(0.05, self.tick)
 
     def begin_session(self):
         with self.lock:
@@ -121,8 +128,10 @@ class EpochRuntime(MapRuntimeMixin):
     @property
     def streams_allowed(self):
         return self.guard.ready and self.recovery.stage in (
-            EpochRecovery.WAIT_SEED, EpochRecovery.WAIT_POSE,
-            EpochRecovery.READY)
+            EpochRecovery.WAIT_SEED,
+            EpochRecovery.WAIT_POSE,
+            EpochRecovery.READY,
+        )
 
     @property
     def commands_allowed(self):
@@ -131,20 +140,31 @@ class EpochRuntime(MapRuntimeMixin):
                 return False
             if self.map_hold:
                 return False
-            if not (self.guard.ready and not self.recovery.required
-                    and self._navigation_ready and self.first_tf_ns is not None):
+            if not (
+                self.guard.ready
+                and not self.recovery.required
+                and self._navigation_ready
+                and self.first_tf_ns is not None
+            ):
                 return False
-            # A valid origin does not make old odometry current. Apply the same
-            # receipt-age limit as TF, even if AUX traffic keeps TCP alive.
+                # A valid origin does not make old odometry current. Apply the same
+                # receipt-age limit as TF, even if AUX traffic keeps TCP alive.
             with self.node._pose_lock:
                 age = time.monotonic() - self.node._pose_at
-                return (self.node._pose_received and math.isfinite(age)
-                        and 0.0 <= age <= self.node._odom_tf_timeout)
+                return (
+                    self.node._pose_received
+                    and math.isfinite(age)
+                    and 0.0 <= age <= self.node._odom_tf_timeout
+                )
 
     @property
     def seed_tf_ready(self):
-        if (not self.streams_allowed or self.first_tf_ns is None or
-                self._tf_ready_at is None or self._tf_ready_token != self.recovery.token):
+        if (
+            not self.streams_allowed
+            or self.first_tf_ns is None
+            or self._tf_ready_at is None
+            or self._tf_ready_token != self.recovery.token
+        ):
             return False
         age = time.monotonic() - self._tf_ready_at
         return 0.0 <= age <= self.node._odom_tf_timeout
@@ -156,9 +176,11 @@ class EpochRuntime(MapRuntimeMixin):
         if self._tf_probe is not None:
             age = now - self._tf_probe_started
             if self._tf_probe.done():
-                valid = (self._tf_probe_generation == self._tf_generation and
-                         self._tf_probe_token == self.recovery.token and
-                         0.0 <= age <= self.node._odom_tf_timeout)
+                valid = (
+                    self._tf_probe_generation == self._tf_generation
+                    and self._tf_probe_token == self.recovery.token
+                    and 0.0 <= age <= self.node._odom_tf_timeout
+                )
                 try:
                     result = self._tf_probe.result()
                     valid = valid and result.success is True
@@ -179,12 +201,15 @@ class EpochRuntime(MapRuntimeMixin):
                 self._tf_probe = None
                 self._tf_ready_at = None
                 self._tf_ready_since_ns = None
-        if (not self.streams_allowed or self.first_tf_ns is None):
+        if not self.streams_allowed or self.first_tf_ns is None:
             self._tf_ready_at = None
             self._tf_ready_since_ns = None
             return
-        if (self._tf_probe is None and now - self._tf_last_query >= .1 and
-                self._tf_readiness.service_is_ready()):
+        if (
+            self._tf_probe is None
+            and now - self._tf_last_query >= 0.1
+            and self._tf_readiness.service_is_ready()
+        ):
             self._tf_last_query = now
             self._tf_probe_started = now
             self._tf_probe_generation = self._tf_generation
@@ -198,13 +223,12 @@ class EpochRuntime(MapRuntimeMixin):
     @property
     def status_stage(self):
         if self._localization_fault:
-            return "failed:localization-innovation"
+            return 'failed:localization-innovation'
         if self._map_error:
-            return "failed:map-state"
+            return 'failed:map-state'
         if self.maps and self.maps.hold:
-            return "map:" + self.maps.stage
-        if (self.recovery.stage == EpochRecovery.WAIT_SEED and
-                self.first_tf_ns is None):
+            return 'map:' + self.maps.stage
+        if self.recovery.stage == EpochRecovery.WAIT_SEED and self.first_tf_ns is None:
             return 'wait-first-odometry'
         if self.recovery.stage == EpochRecovery.WAIT_SEED and not self.seed_tf_ready:
             return 'wait-amcl-tf'
@@ -232,34 +256,54 @@ class EpochRuntime(MapRuntimeMixin):
         with self.lock:
             if not self.node._lidar_ready():
                 return
-            if self._lidar_reseed and (self._navigation_status or
-                    self._navigation_idle_at is None or
-                    not 0 <= time.monotonic() - self._navigation_idle_at <= .5):
+            if self._lidar_reseed and (
+                self._navigation_status
+                or self._navigation_idle_at is None
+                or not 0 <= time.monotonic() - self._navigation_idle_at <= 0.5
+            ):
                 return
-            if self.maps and self.maps.hold and (
-                    self.maps.stage != 'wait-localization' or
-                    self.stamp_ns(message) != self.maps.seed_stamp):
+            if (
+                self.maps
+                and self.maps.hold
+                and (
+                    self.maps.stage != 'wait-localization'
+                    or self.stamp_ns(message) != self.maps.seed_stamp
+                )
+            ):
                 return
             pose = message.pose.pose
             q = pose.orientation
-            values = (pose.position.x, pose.position.y, pose.position.z,
-                      q.x, q.y, q.z, q.w, *message.pose.covariance)
-            if (not self.seed_tf_ready or self._tf_ready_since_ns is None
-                    or self.stamp_ns(message) < self._tf_ready_since_ns
-                    or self.stamp_ns(message) < self.first_tf_ns
-                    or message.header.frame_id != 'map'
-                    or not all(math.isfinite(v) for v in values)
-                    or sum(v * v for v in (q.x, q.y, q.z, q.w)) == 0
-                    or any(message.pose.covariance[i] <= 0 for i in (0, 7, 35))):
+            values = (
+                pose.position.x,
+                pose.position.y,
+                pose.position.z,
+                q.x,
+                q.y,
+                q.z,
+                q.w,
+                *message.pose.covariance,
+            )
+            if (
+                not self.seed_tf_ready
+                or self._tf_ready_since_ns is None
+                or self.stamp_ns(message) < self._tf_ready_since_ns
+                or self.stamp_ns(message) < self.first_tf_ns
+                or message.header.frame_id != 'map'
+                or not all(math.isfinite(v) for v in values)
+                or sum(v * v for v in (q.x, q.y, q.z, q.w)) == 0
+                or any(message.pose.covariance[i] <= 0 for i in (0, 7, 35))
+            ):
                 return
             if self.recovery.operator_seed(
-                    self.recovery.token, self.stamp_ns(message),
-                    self.node.get_clock().now().nanoseconds):
+                self.recovery.token,
+                self.stamp_ns(message),
+                self.node.get_clock().now().nanoseconds,
+            ):
                 self._pending_pose = None
                 self._navigation_ready = False
                 self._lidar_reseed = False
                 self._pose_anchor = None
-                self._localization_fault = ""
+                self._localization_fault = ''
 
     def require_lidar_seed(self):
         """Power changes invalidate localization, while odometry keeps flowing."""
@@ -285,19 +329,31 @@ class EpochRuntime(MapRuntimeMixin):
 
     def pose(self, message):
         with self.lock:
-            if (not self.node._lidar_ready() or not self.streams_allowed or
-                    message.header.frame_id != 'map'):
+            if (
+                not self.node._lidar_ready()
+                or not self.streams_allowed
+                or message.header.frame_id != 'map'
+            ):
                 return
             p = message.pose.pose
-            if not all(math.isfinite(v) for v in (
-                    p.position.x, p.position.y, p.position.z,
-                    p.orientation.x, p.orientation.y, p.orientation.z,
-                    p.orientation.w, *message.pose.covariance)):
+            if not all(
+                math.isfinite(v)
+                for v in (
+                    p.position.x,
+                    p.position.y,
+                    p.position.z,
+                    p.orientation.x,
+                    p.orientation.y,
+                    p.orientation.z,
+                    p.orientation.w,
+                    *message.pose.covariance,
+                )
+            ):
                 if self._pose_anchor is not None:
                     self._reject_localization('non-finite AMCL pose or covariance')
                 return
             q = p.orientation
-            if abs(sum(v*v for v in (q.x,q.y,q.z,q.w))-1.) > 1e-3:
+            if abs(sum(v * v for v in (q.x, q.y, q.z, q.w)) - 1.0) > 1e-3:
                 if self._pose_anchor is not None:
                     self._reject_localization('invalid AMCL quaternion')
                 return
@@ -306,27 +362,40 @@ class EpochRuntime(MapRuntimeMixin):
                 if self.stamp_ns(message) <= stamp:
                     return
                 try:
-                    if (not valid_planar_covariance(message.pose.covariance) or
-                            any(message.pose.covariance[i] > .25 for i in (0, 7, 35))):
+                    if not valid_planar_covariance(message.pose.covariance) or any(
+                        message.pose.covariance[i] > 0.25 for i in (0, 7, 35)
+                    ):
                         raise ValueError('invalid localization covariance')
-                    if not 0 <= (self.node.get_clock().now().nanoseconds-self.stamp_ns(message))/1e9 <= 1.:
+                    if (
+                        not 0
+                        <= (self.node.get_clock().now().nanoseconds - self.stamp_ns(message)) / 1e9
+                        <= 1.0
+                    ):
                         raise ValueError('localization scan is stale or future dated')
                     if origin != self.guard.epoch:
-                        raise ValueError("odometry origin mismatch")
+                        raise ValueError('odometry origin mismatch')
                     end = self._odom_history.at(self.stamp_ns(message), self.guard.epoch)
                     predicted = propagate(anchor, start, end)
                     with self.node._pose_lock:
-                        stationary = abs(self.node._vx) <= .005 and abs(self.node._vth) <= .01
-                    problem = innovation(predicted, self.planar_pose(message),
-                                         .1 if stationary else .2,
-                                         math.radians(3 if stationary else 5))
+                        stationary = abs(self.node._vx) <= 0.005 and abs(self.node._vth) <= 0.01
+                    problem = innovation(
+                        predicted,
+                        self.planar_pose(message),
+                        0.1 if stationary else 0.2,
+                        math.radians(3 if stationary else 5),
+                    )
                 except ValueError as exc:
                     problem = str(exc)
                 if problem:
                     self._reject_localization(problem)
                     return
                 if not stationary:
-                    self._pose_anchor = (self.planar_pose(message), self.stamp_ns(message), self.guard.epoch, end)
+                    self._pose_anchor = (
+                        self.planar_pose(message),
+                        self.stamp_ns(message),
+                        self.guard.epoch,
+                        end,
+                    )
             self._pending_pose = message
             self._pending_pose_received_at = time.monotonic()
             self._accept_pending_pose()
@@ -346,29 +415,35 @@ class EpochRuntime(MapRuntimeMixin):
     def planar_pose(message):
         p = message.pose.pose
         q = p.orientation
-        return (p.position.x, p.position.y,
-                math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
+        return (
+            p.position.x,
+            p.position.y,
+            math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
+        )
 
     def seed_accepted(self, message):
         with self.lock:
             if not self.node._lidar_ready():
                 return
             stamp = self.stamp_ns(message)
-            if (message.header.frame_id != 'map' or not self.streams_allowed
-                    or self.recovery._reset_ns is None
-                    or stamp <= self.recovery._reset_ns):
+            if (
+                message.header.frame_id != 'map'
+                or not self.streams_allowed
+                or self.recovery._reset_ns is None
+                or stamp <= self.recovery._reset_ns
+            ):
                 return
             self._accepted_seed_stamp = stamp
             self._accept_pending_pose()
 
     def _accept_pending_pose(self):
-        if (self._pending_pose is None or
-                self._accepted_seed_stamp != self.recovery._seed_ns):
+        if self._pending_pose is None or self._accepted_seed_stamp != self.recovery._seed_ns:
             return
         self.recovery.amcl_pose(
-            self.recovery.token, self.stamp_ns(self._pending_pose),
-            self.node.get_clock().now().nanoseconds)
-
+            self.recovery.token,
+            self.stamp_ns(self._pending_pose),
+            self.node.get_clock().now().nanoseconds,
+        )
 
     def _request(self, phase):
         if phase == 'wait-localization-manager':
@@ -383,8 +458,7 @@ class EpochRuntime(MapRuntimeMixin):
             if not self._navigation.service_is_ready():
                 return
             request = ManageLifecycleNodes.Request()
-            request.command = (request.PAUSE if phase == 'pause-navigation'
-                               else request.RESUME)
+            request.command = request.PAUSE if phase == 'pause-navigation' else request.RESUME
             self._future = self._navigation.call_async(request)
         elif phase == 'reset-parameters':
             if not self._parameters.service_is_ready():
@@ -392,15 +466,16 @@ class EpochRuntime(MapRuntimeMixin):
             request = SetParametersAtomically.Request()
             request.parameters = [
                 Parameter('set_initial_pose', value=False).to_parameter_msg(),
-                Parameter('always_reset_initial_pose', value=True).to_parameter_msg()]
+                Parameter('always_reset_initial_pose', value=True).to_parameter_msg(),
+            ]
             self._future = self._parameters.call_async(request)
         else:
             if not self._change.service_is_ready():
                 return
             request = ChangeState.Request()
-            request.transition.id = {
-                'deactivate': 4, 'cleanup': 2,
-                'configure': 1, 'activate': 3}[phase]
+            request.transition.id = {'deactivate': 4, 'cleanup': 2, 'configure': 1, 'activate': 3}[
+                phase
+            ]
             self._future = self._change.call_async(request)
         self._deadline = time.monotonic() + (2.0 if phase == 'wait-localization-manager' else 10.0)
 
@@ -415,20 +490,27 @@ class EpochRuntime(MapRuntimeMixin):
             self.tick_startup_map()
             if self._future is not None:
                 if not self._future.done():
-                    if (self._phase == 'wait-localization-manager' and
-                            self._deadline is not None and time.monotonic() > self._deadline):
+                    if (
+                        self._phase == 'wait-localization-manager'
+                        and self._deadline is not None
+                        and time.monotonic() > self._deadline
+                    ):
                         # Read-only readiness can be retried; lifecycle mutations cannot.
                         self._localization_active.remove_pending_request(self._future)
                         self._future.cancel()
                         self._future = None
                         return
-                    if (self._deadline is not None and
-                            time.monotonic() > self._deadline and not self._failed):
+                    if (
+                        self._deadline is not None
+                        and time.monotonic() > self._deadline
+                        and not self._failed
+                    ):
                         self._failed = True
                         self.node.get_logger().error(
-                            'AMCL epoch reset timed out; recovery remains held.')
-                    # A timeout is not proof the server stopped executing. Do
-                    # not start overlapping transitions or cancel-and-retry.
+                            'AMCL epoch reset timed out; recovery remains held.'
+                        )
+                        # A timeout is not proof the server stopped executing. Do
+                        # not start overlapping transitions or cancel-and-retry.
                     return
                 future, self._future = self._future, None
                 if token != self._token:
@@ -441,9 +523,9 @@ class EpochRuntime(MapRuntimeMixin):
                             if result.success:
                                 self._phase = 'inspect'
                         elif self._phase == 'inspect':
-                            self._phase = {
-                                1: 'reset-parameters', 2: 'cleanup',
-                                3: 'deactivate'}[result.current_state.id]
+                            self._phase = {1: 'reset-parameters', 2: 'cleanup', 3: 'deactivate'}[
+                                result.current_state.id
+                            ]
                         elif self._phase == 'reset-parameters':
                             if not result.result.successful:
                                 raise RuntimeError('AMCL reset parameters refused')
@@ -459,17 +541,21 @@ class EpochRuntime(MapRuntimeMixin):
                             return
                         elif self._phase == 'activate':
                             self.recovery.reset_complete(
-                                token, self.node.get_clock().now().nanoseconds)
+                                token, self.node.get_clock().now().nanoseconds
+                            )
                             self._failed = False
                             return
                         else:
                             self._phase = {
-                                'deactivate': 'cleanup', 'cleanup': 'reset-parameters',
-                                'configure': 'activate'}[self._phase]
+                                'deactivate': 'cleanup',
+                                'cleanup': 'reset-parameters',
+                                'configure': 'activate',
+                            }[self._phase]
                     except Exception as exc:
                         self._failed = True
                         self.node.get_logger().error(
-                            f'AMCL epoch reset failed; recovery held: {exc}')
+                            f'AMCL epoch reset failed; recovery held: {exc}'
+                        )
             if not self.guard.ready or token is None:
                 return
             if token != self._token:
@@ -482,8 +568,11 @@ class EpochRuntime(MapRuntimeMixin):
                 self.withdraw()
             if self.recovery.stage == EpochRecovery.WAIT_RESET and not self._failed:
                 self._request(self._phase)
-            elif (self.recovery.stage == EpochRecovery.READY and
-                    not self._navigation_ready and not self._failed):
+            elif (
+                self.recovery.stage == EpochRecovery.READY
+                and not self._navigation_ready
+                and not self._failed
+            ):
                 if self._phase not in ('pause-navigation', 'resume-navigation'):
                     self._phase = 'pause-navigation'
                 self._request(self._phase)

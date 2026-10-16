@@ -1,4 +1,5 @@
 """Origin/transport interleaving contracts; no ROS or hardware required."""
+
 import unittest
 
 from patrolbot_bridge.odom_epoch import OdomEpochGuard, parse_frame_epoch
@@ -47,8 +48,12 @@ class EpochTests(unittest.TestCase):
         self.assertFalse(guard.announce(session, A).accepted)
 
     def test_bad_frame_latches_transport_invalid_without_changing_origin(self):
-        for bad in [frame(B), 'ODOM:0,0,0,0,0|LASER:1',
-                    frame() + '|ODOM_EPOCH:' + A, frame('9' * 5000)]:
+        for bad in [
+            frame(B),
+            'ODOM:0,0,0,0,0|LASER:1',
+            frame() + '|ODOM_EPOCH:' + A,
+            frame('9' * 5000),
+        ]:
             with self.subTest(bad=bad[:80]):
                 guard = OdomEpochGuard()
                 session = guard.begin_session()

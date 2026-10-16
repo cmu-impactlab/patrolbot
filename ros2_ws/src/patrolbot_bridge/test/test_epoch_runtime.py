@@ -1,12 +1,12 @@
 """Exercise asynchronous recovery with actual ROS message/service classes."""
-from types import SimpleNamespace as NS
+
 import threading
 import time
+from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
-from geometry_msgs.msg import PoseWithCovarianceStamped
 from builtin_interfaces.msg import Time
-
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from patrolbot_bridge.epoch_recovery import EpochRecovery
 from patrolbot_bridge.epoch_runtime import EpochRuntime
 
@@ -65,8 +65,8 @@ class Node:
         self.sock = Mock()
         self._pose_received = True
         self._pose_at = time.monotonic()
-        self._odom_tf_timeout = .5
-        self._vx = self._vth = 0.
+        self._odom_tf_timeout = 0.5
+        self._vx = self._vth = 0.0
         self.cmd_vel_callback = Mock()
         self._odom_validator = Mock()
         self._odom_covariance = Mock()
@@ -85,10 +85,16 @@ class Node:
         return args
 
     def get_clock(self):
-        if hasattr(self, "runtime") and self.runtime.guard.epoch:
-            self.runtime._odom_history.add(self.now, (0.,0.,0.), self.runtime.guard.epoch)
-        return NS(now=lambda: NS(nanoseconds=self.now,
-            to_msg=lambda: Time(sec=self.now // 1_000_000_000, nanosec=self.now % 1_000_000_000)))
+        if hasattr(self, 'runtime') and self.runtime.guard.epoch:
+            self.runtime._odom_history.add(self.now, (0.0, 0.0, 0.0), self.runtime.guard.epoch)
+        return NS(
+            now=lambda: NS(
+                nanoseconds=self.now,
+                to_msg=lambda: Time(
+                    sec=self.now // 1_000_000_000, nanosec=self.now % 1_000_000_000
+                ),
+            )
+        )
 
     def get_logger(self):
         return self.logger
@@ -98,7 +104,9 @@ def setup_runtime():
     node = Node()
     # These tests isolate odometry recovery; map transactions have their own
     # real-ROS-type coordinator tests in test_map_runtime.py.
-    with patch.object(EpochRuntime, 'init_maps'), patch.object(EpochRuntime, 'poll_navigation_idle'):
+    with patch.object(EpochRuntime, 'init_maps'), patch.object(
+        EpochRuntime, 'poll_navigation_idle'
+    ):
         runtime = EpochRuntime(node)
     node.runtime = runtime
     runtime._map_error = ''
@@ -131,7 +139,7 @@ def pose(stamp):
     msg.header.stamp.nanosec = stamp
     msg.pose.pose.orientation.w = 1.0
     for i in (0, 7, 35):
-        msg.pose.covariance[i] = .1
+        msg.pose.covariance[i] = 0.1
     return msg
 
 
@@ -189,9 +197,13 @@ def test_power_barrier_drops_cached_localization_preserves_estimators():
     node, runtime, _ = setup_runtime()
     reset(runtime)
     old = runtime.recovery.token
-    node.now = 110; runtime.seed(pose(110))
-    node.now = 120; runtime.seed_accepted(pose(110)); runtime.pose(pose(120))
-    node.now = 200; runtime.require_lidar_seed()
+    node.now = 110
+    runtime.seed(pose(110))
+    node.now = 120
+    runtime.seed_accepted(pose(110))
+    runtime.pose(pose(120))
+    node.now = 200
+    runtime.require_lidar_seed()
     assert runtime.recovery.token != old
     assert runtime.streams_allowed and not runtime.commands_allowed
     assert node._pose_received
@@ -200,7 +212,8 @@ def test_power_barrier_drops_cached_localization_preserves_estimators():
     assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
     assert all(client.calls[-1].goal_info.stamp.nanosec == 200 for client in runtime._lidar_cancel)
     runtime._navigation_status = True
-    node.now = 210; runtime.seed(pose(210))
+    node.now = 210
+    runtime.seed(pose(210))
     assert runtime.recovery.stage == EpochRecovery.WAIT_SEED
 
 

@@ -13,7 +13,6 @@ import math
 from patrolbot_bridge.odom_covariance import OdomCovariance, UNOBSERVED_VARIANCE
 import pytest
 
-
 # Row-major 6x6 diagonal indices, in the order sensor_msgs/Odometry uses:
 # x, y, z, roll, pitch, yaw.
 X, Y, Z, ROLL, PITCH, YAW = 0, 7, 14, 21, 28, 35
@@ -137,7 +136,7 @@ def test_distance_growth_is_linear_in_path_length():
     acc = make(min_variance=0.0)
     end = drive_straight(acc, 1.0)
     one_metre = acc.pose_covariance()[X]
-    drive_straight(acc, 3.0, start=end)   # four metres total
+    drive_straight(acc, 3.0, start=end)  # four metres total
     four_metres = acc.pose_covariance()[X]
 
     assert four_metres == pytest.approx(4.0 * one_metre, rel=1e-6)
@@ -163,8 +162,7 @@ def test_path_length_counts_distance_not_displacement():
     straight = make(min_variance=0.0)
     drive_straight(straight, 2.0, step=0.25)
 
-    assert there_and_back == pytest.approx(straight.pose_covariance()[X],
-                                           rel=1e-6)
+    assert there_and_back == pytest.approx(straight.pose_covariance()[X], rel=1e-6)
 
 
 def test_yaw_uncertainty_grows_with_rotation():
@@ -228,8 +226,7 @@ def test_growth_is_capped_so_the_matrix_stays_conditioned():
     # Deliberately enormous sigmas so the cap is reached in a few metres --
     # stepping 5 km at 0.4 m a sample to prove the same point would only be
     # testing that Python can add.
-    acc = make(max_variance=0.5, sigma_xy_per_m=1.0,
-               sigma_yaw_per_rad=1.0, sigma_yaw_per_m=1.0)
+    acc = make(max_variance=0.5, sigma_xy_per_m=1.0, sigma_yaw_per_rad=1.0, sigma_yaw_per_m=1.0)
     end = drive_straight(acc, 2.0)
     turn_in_place(acc, math.pi, start=0.0, position=(end, 0.0))
     pose = acc.pose_covariance()
@@ -250,7 +247,7 @@ def test_a_pose_discontinuity_is_not_charged_as_distance():
     drive_straight(acc, 1.0)
     honest = acc.pose_covariance()[X]
 
-    acc.update(250.0, -400.0, 3.0)   # nothing physical moves this far in 44 ms
+    acc.update(250.0, -400.0, 3.0)  # nothing physical moves this far in 44 ms
     assert acc.pose_covariance()[X] == pytest.approx(honest, rel=1e-6)
 
 

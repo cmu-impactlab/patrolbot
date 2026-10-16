@@ -1,4 +1,5 @@
-"""ROS-free identity checks for odometry origins and asynchronous wire frames.
+"""
+ROS-free identity checks for odometry origins and asynchronous wire frames.
 
 The caller must serialize these operations with pose mutation and publication.
 This helper does not acknowledge localization recovery, publish TF, or reset an
@@ -21,8 +22,7 @@ def valid_epoch(value):
 
 def parse_frame_epoch(line):
     """Return exactly one canonical origin ID; missing metadata is unknown."""
-    fields = [part for part in line.split('|')
-              if part.startswith('ODOM_EPOCH')]
+    fields = [part for part in line.split('|') if part.startswith('ODOM_EPOCH')]
     if len(fields) != 1 or not fields[0].startswith('ODOM_EPOCH:'):
         raise ValueError('missing, duplicate or malformed odometry epoch')
     value = fields[0][len('ODOM_EPOCH:'):]
@@ -39,7 +39,8 @@ class EpochDecision:
 
 
 class OdomEpochGuard:
-    """Keep transport generations distinct from origin identity.
+    """
+    Keep transport generations distinct from origin identity.
 
     No caller-supplied numeric pose can establish a new epoch. Each transport
     must first announce an identity. Prior-transport queued frames are rejected

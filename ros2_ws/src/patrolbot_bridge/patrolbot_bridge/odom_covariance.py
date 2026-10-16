@@ -15,7 +15,6 @@ rather than being invented.
 
 import math
 
-
 # Conventional "this axis is not observed" marker. A planar differential base
 # senses nothing about height, roll or pitch, and saying so with a huge
 # variance is what stops a 3D consumer from fusing an axis that carries no
@@ -36,9 +35,18 @@ class OdomCovariance:
     """Track how far the wheel odometry has had to guess since its last reset."""
 
     def __init__(
-            self, *, sigma_xy_per_m, sigma_yaw_per_rad, sigma_yaw_per_m,
-            sigma_vx, sigma_vyaw, min_variance, max_variance,
-            max_step_m=0.5, max_step_rad=1.0):
+        self,
+        *,
+        sigma_xy_per_m,
+        sigma_yaw_per_rad,
+        sigma_yaw_per_m,
+        sigma_vx,
+        sigma_vyaw,
+        min_variance,
+        max_variance,
+        max_step_m=0.5,
+        max_step_rad=1.0,
+    ):
         """
         Configure growth rates, the variance clamp, and jump rejection.
 
@@ -104,11 +112,11 @@ class OdomCovariance:
 
     def pose_covariance(self):
         """Return a fresh row-major 6x6 covariance for the integrated pose."""
-        variance_xy = self._clamped(
-            self._sigma_xy_per_m ** 2 * self._path_length)
+        variance_xy = self._clamped(self._sigma_xy_per_m**2 * self._path_length)
         variance_yaw = self._clamped(
-            self._sigma_yaw_per_rad ** 2 * self._rotation_length +
-            self._sigma_yaw_per_m ** 2 * self._path_length)
+            self._sigma_yaw_per_rad**2 * self._rotation_length
+            + self._sigma_yaw_per_m**2 * self._path_length
+        )
 
         covariance = [0.0] * 36
         covariance[_X] = variance_xy
@@ -128,7 +136,7 @@ class OdomCovariance:
         it would be modelling a process that is not happening.
         """
         covariance = [0.0] * 36
-        covariance[_X] = self._sigma_vx ** 2
+        covariance[_X] = self._sigma_vx**2
         # vy is not unobserved -- it is constrained. A differential base has no
         # mechanism for sideways translation, so the honest statement is "zero,
         # to within the floor", not the sentinel used for the axes this robot
@@ -138,7 +146,7 @@ class OdomCovariance:
         covariance[_Z] = UNOBSERVED_VARIANCE
         covariance[_ROLL] = UNOBSERVED_VARIANCE
         covariance[_PITCH] = UNOBSERVED_VARIANCE
-        covariance[_YAW] = self._sigma_vyaw ** 2
+        covariance[_YAW] = self._sigma_vyaw**2
         return covariance
 
     def reset(self):

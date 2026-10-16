@@ -14,14 +14,18 @@ import pytest
 def admission():
     source = Path(__file__).parents[1] / 'patrolbot_bridge' / 'bridge_node.py'
     tree = ast.parse(source.read_text())
-    bridge = next(node for node in tree.body
-                  if isinstance(node, ast.ClassDef) and node.name == 'PatrolBotBridge')
-    method = next(node for node in bridge.body
-                  if isinstance(node, ast.FunctionDef)
-                  and node.name == '_undock_goal_callback')
+    bridge = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == 'PatrolBotBridge'
+    )
+    method = next(
+        node
+        for node in bridge.body
+        if isinstance(node, ast.FunctionDef) and node.name == '_undock_goal_callback'
+    )
     namespace = {'math': math, 'GoalResponse': NS(ACCEPT='accept', REJECT='reject')}
-    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'),
-         namespace)
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), namespace)
     return namespace['_undock_goal_callback']
 
 
@@ -29,20 +33,26 @@ def admission():
 def bridge():
     return NS(
         _epoch=NS(lock=threading.RLock(), commands_allowed=True),
-        _state_lock=threading.Lock(), _undock_goal_lock=threading.Lock(),
-        _link_connected=True, _server_hello=NS(supports_undock=lambda: True),
-        _lidar_ready=Mock(return_value=True), _undock_goal_reserved=False,
-        get_logger=Mock(return_value=Mock()), sock=Mock())
+        _state_lock=threading.Lock(),
+        _undock_goal_lock=threading.Lock(),
+        _link_connected=True,
+        _server_hello=NS(supports_undock=lambda: True),
+        _lidar_ready=Mock(return_value=True),
+        _undock_goal_reserved=False,
+        get_logger=Mock(return_value=Mock()),
+        sock=Mock(),
+    )
 
 
 @pytest.mark.parametrize('condition', ['epoch_down', 'lidar_down', 'both_down'])
-def test_epoch_and_lidar_state_do_not_gate_undock_admission(
-        admission, bridge, condition):
-    """Authorized 2026-10-16: admission lives at the dock manager (E-stop
-    plus charging) and the SBC.
+def test_epoch_and_lidar_state_do_not_gate_undock_admission(admission, bridge, condition):
+    """
+    Undock admission ignores epoch and LiDAR state.
 
-    Epoch recovery, TF/nav readiness and scan freshness must not refuse
-    an undock goal here; post-reverse motion stays gated elsewhere.
+    Authorized 2026-10-16: admission lives at the dock manager (E-stop
+    plus charging) and the SBC. Epoch recovery, TF/nav readiness and
+    scan freshness must not refuse an undock goal here; post-reverse
+    motion stays gated elsewhere.
     """
     if condition in ('epoch_down', 'both_down'):
         bridge._epoch.commands_allowed = False
@@ -55,20 +65,20 @@ def test_epoch_and_lidar_state_do_not_gate_undock_admission(
     bridge.sock.sendall.assert_not_called()
 
 
-@pytest.mark.parametrize('setup,expected', [
-    ('bad_params', 'must be finite and positive'),
-    ('no_link', 'no SBC link'),
-    ('no_features', 'FEATURES=UNDOCK'),
-    ('reserved', 'another goal is active'),
-])
-def test_transport_and_identity_gates_still_refuse(
-        admission, bridge, setup, expected):
+@pytest.mark.parametrize(
+    'setup,expected',
+    [
+        ('bad_params', 'must be finite and positive'),
+        ('no_link', 'no SBC link'),
+        ('no_features', 'FEATURES=UNDOCK'),
+        ('reserved', 'another goal is active'),
+    ],
+)
+def test_transport_and_identity_gates_still_refuse(admission, bridge, setup, expected):
     if setup == 'bad_params':
-        request = NS(clearance_distance=float('nan'), reverse_speed=0.1,
-                     maximum_duration=30.0)
+        request = NS(clearance_distance=float('nan'), reverse_speed=0.1, maximum_duration=30.0)
     else:
-        request = NS(clearance_distance=0.53, reverse_speed=0.1,
-                     maximum_duration=30.0)
+        request = NS(clearance_distance=0.53, reverse_speed=0.1, maximum_duration=30.0)
     reserved_before = bridge._undock_goal_reserved
     if setup == 'no_link':
         bridge._link_connected = False

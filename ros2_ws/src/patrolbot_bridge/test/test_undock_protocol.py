@@ -7,23 +7,14 @@ asserts the same strings from the C++ side, so the two ends cannot drift apart
 without one of the two suites failing.
 """
 
-from patrolbot_bridge.undock_protocol import (
-    format_dock_reset,
-    format_undock_cancel,
-    format_undock_request,
-    parse_hello,
-    parse_undock_event,
-    parse_undock_result,
-    SENSOR_BLOCKED,
-)
+from patrolbot_bridge.undock_protocol import (format_dock_reset, format_undock_cancel,
+                                              format_undock_request, parse_hello,
+                                              parse_undock_event, parse_undock_result,
+                                              SENSOR_BLOCKED)
 import pytest
 
-
 REQUEST_ID = '123e4567-e89b-12d3-a456-426614174000'
-EVENT = (
-    f'UNDOCK_EVENT:{REQUEST_ID}:4:BACKING_OUT:0.1234:0.0056:0.0102:3:1:'
-    f'1.5000:2:DEPARTING'
-)
+EVENT = f'UNDOCK_EVENT:{REQUEST_ID}:4:BACKING_OUT:0.1234:0.0056:0.0102:3:1:' f'1.5000:2:DEPARTING'
 RESULT = (
     f'UNDOCK_RESULT:{REQUEST_ID}:OK:0:undocked:6:HANDOFF_READY:0.5300:0.0010:'
     f'0.0020:3:1:0:99.0000:1:CLEAR_CONFIRMED:1'
@@ -32,8 +23,7 @@ RESULT = (
 
 def test_undock_request_is_one_parameterised_line():
     payload = format_undock_request(REQUEST_ID, 0.53, 0.10, 30.0, False)
-    assert payload == (
-        f'UNDOCK:{REQUEST_ID}:0.5300:0.1000:30.000:0\n').encode('ascii')
+    assert payload == (f'UNDOCK:{REQUEST_ID}:0.5300:0.1000:30.000:0\n').encode('ascii')
     assert b'DRIVE' not in payload
 
 
@@ -44,9 +34,15 @@ def test_validation_mode_is_explicit_on_the_wire():
 
 @pytest.mark.parametrize(
     'clearance,speed,timeout',
-    [(0.0, 0.10, 30.0), (0.53, 0.0, 30.0), (0.53, 0.10, 0.0),
-     (-0.1, 0.10, 30.0), (float('nan'), 0.10, 30.0),
-     (float('inf'), 0.10, 30.0)])
+    [
+        (0.0, 0.10, 30.0),
+        (0.53, 0.0, 30.0),
+        (0.53, 0.10, 0.0),
+        (-0.1, 0.10, 30.0),
+        (float('nan'), 0.10, 30.0),
+        (float('inf'), 0.10, 30.0),
+    ],
+)
 def test_nonsense_goals_never_reach_the_wire(clearance, speed, timeout):
     with pytest.raises(ValueError):
         format_undock_request(REQUEST_ID, clearance, speed, timeout, False)
@@ -56,15 +52,13 @@ def test_cancel_names_the_target_operation():
     # The payload is the id of the operation being cancelled, not a new request
     # id: the SBC dispatches it outside its request tracker for exactly that
     # reason.
-    assert format_undock_cancel(REQUEST_ID) == (
-        f'UNDOCK_CANCEL:{REQUEST_ID}\n').encode('ascii')
+    assert format_undock_cancel(REQUEST_ID) == (f'UNDOCK_CANCEL:{REQUEST_ID}\n').encode('ascii')
     with pytest.raises(ValueError):
         format_undock_cancel('not-a-uuid')
 
 
 def test_dock_reset_is_a_bare_request_id():
-    assert format_dock_reset(REQUEST_ID) == (
-        f'DOCK_RESET:{REQUEST_ID}\n').encode('ascii')
+    assert format_dock_reset(REQUEST_ID) == (f'DOCK_RESET:{REQUEST_ID}\n').encode('ascii')
 
 
 def test_event_round_trip():
@@ -99,7 +93,8 @@ def test_successful_result_round_trip():
 def test_failed_result_reports_disabled_motors_and_a_readable_message():
     line = (
         f'UNDOCK_RESULT:{REQUEST_ID}:ERROR:11:rear_path_blocked:7:STOPPING:'
-        f'0.1200:0.0000:0.0000:0:0:0:0.1000:3:FAULT_STOPPED:0')
+        f'0.1200:0.0000:0.0000:0:0:0:0.1000:3:FAULT_STOPPED:0'
+    )
     result = parse_undock_result(line)
     assert not result.success
     assert result.code == SENSOR_BLOCKED
@@ -110,7 +105,8 @@ def test_failed_result_reports_disabled_motors_and_a_readable_message():
 
 
 @pytest.mark.parametrize(
-    'line', [
+    'line',
+    [
         EVENT + ':extra',
         EVENT.replace(':BACKING_OUT:', ':FLYING:'),
         EVENT.replace(':DEPARTING', ':SOMEWHERE'),
@@ -125,7 +121,8 @@ def test_malformed_events_fail_closed(line):
 
 
 @pytest.mark.parametrize(
-    'line', [
+    'line',
+    [
         RESULT + ':extra',
         RESULT.replace(':OK:', ':MAYBE:'),
         RESULT.replace(':HANDOFF_READY:', ':PARKED:'),
@@ -165,11 +162,16 @@ def test_epoch_identity_in_hello_is_explicit_and_optional():
     assert hello.odom_epoch == epoch
 
 
-@pytest.mark.parametrize('value', [
-    '', '123', 'none', '123E4567-e89b-12d3-a456-426614174000',
-    '123e4567-e89b-12d3-a456-426614174000:ODOM_EPOCH='
-    '123e4567-e89b-12d3-a456-426614174000',
-])
+@pytest.mark.parametrize(
+    'value',
+    [
+        '',
+        '123',
+        'none',
+        '123E4567-e89b-12d3-a456-426614174000',
+        '123e4567-e89b-12d3-a456-426614174000:ODOM_EPOCH=' '123e4567-e89b-12d3-a456-426614174000',
+    ],
+)
 def test_malformed_or_duplicate_epoch_is_rejected(value):
     with pytest.raises(ValueError):
         parse_hello('HELLO:PROTOCOL=2:FEATURES=UNDOCK:ODOM_EPOCH=' + value)

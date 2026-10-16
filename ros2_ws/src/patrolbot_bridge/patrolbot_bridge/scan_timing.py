@@ -1,4 +1,5 @@
-"""Validation helpers for acquisition age carried by the SBC scan frame.
+"""
+Validation helpers for acquisition age carried by the SBC scan frame.
 
 The age is an elapsed duration measured by the SBC's monotonic ARIA clock.  It
 is deliberately not an SBC wall-clock timestamp: the two machines need not
@@ -10,14 +11,14 @@ time, not an exact timestamp.
 from dataclasses import dataclass
 from typing import Optional
 
-
 MAX_SCAN_AGE_MS = 500
 _AGE_FIELD = 'LASER_AGE_MS'
 
 
 @dataclass(frozen=True)
 class LaserAgeResult:
-    """Result of inspecting the optional laser age section.
+    """
+    Result of inspecting the optional laser age section.
 
     ``legacy`` distinguishes a valid old server frame from a new frame with
     invalid metadata.  Callers can warn for legacy frames while rejecting a
@@ -31,18 +32,17 @@ class LaserAgeResult:
 
 
 def parse_laser_age(line: str) -> LaserAgeResult:
-    """Parse ``LASER_AGE_MS:<integer>`` from a complete telemetry line.
+    """
+    Parse ``LASER_AGE_MS:<integer>`` from a complete telemetry line.
 
     Absence is an explicitly accepted legacy frame.  Once the field is
     present, its value must be exactly decimal digits in the inclusive range
     0..500; duplicate or malformed fields are rejected.
     """
-
     if not isinstance(line, str):
         return LaserAgeResult(False, False, None, 'non-text-frame')
 
-    fields = [field for field in line.split('|')
-              if field.startswith(_AGE_FIELD)]
+    fields = [field for field in line.split('|') if field.startswith(_AGE_FIELD)]
     if not fields:
         return LaserAgeResult(True, True, None, 'legacy-no-age')
     if len(fields) != 1:
@@ -68,7 +68,6 @@ def parse_laser_age(line: str) -> LaserAgeResult:
 
 def compute_scan_stamp_ns(receipt_ns: int, age_ns: int) -> int:
     """Return a receive-clock stamp corrected by a nonnegative elapsed age."""
-
     if isinstance(receipt_ns, bool) or not isinstance(receipt_ns, int):
         raise ValueError('receipt timestamp must be an integer nanosecond value')
     if isinstance(age_ns, bool) or not isinstance(age_ns, int):

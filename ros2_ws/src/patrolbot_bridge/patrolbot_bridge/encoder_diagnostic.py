@@ -1,4 +1,5 @@
-"""Bounded, offline raw-wheel versus firmware-fused SIP comparisons.
+"""
+Bounded, offline raw-wheel versus firmware-fused SIP comparisons.
 
 No ROS, ARIA connection, motor commands, or inferred wheel calibration.
 Capture timestamps must be from one SBC monotonic clock and origin must identify
@@ -32,9 +33,13 @@ class EncoderDelta:
 
 class EncoderDiagnostic:
     def __init__(self, *, counter_modulus, max_samples):
-        if (type(counter_modulus) is not int or counter_modulus < 2 or
-                counter_modulus % 2 or type(max_samples) is not int or
-                max_samples < 2):
+        if (
+            type(counter_modulus) is not int
+            or counter_modulus < 2
+            or counter_modulus % 2
+            or type(max_samples) is not int
+            or max_samples < 2
+        ):
             raise ValueError('even counter modulus and sample budget >= 2 required')
         self._modulus = counter_modulus
         self._max_samples = max_samples
@@ -44,12 +49,23 @@ class EncoderDiagnostic:
     def observe(self, sample):
         if self._samples >= self._max_samples:
             raise StopIteration('diagnostic sample budget exhausted')
-        if (not isinstance(sample.origin, str) or not sample.origin or
-                not all(math.isfinite(value) for value in (
-                    sample.captured_at, sample.sip_x_m,
-                    sample.sip_y_m, sample.sip_yaw_rad)) or
-                any(type(value) is not int or not 0 <= value < self._modulus
-                    for value in (sample.left_counts, sample.right_counts))):
+        if (
+            not isinstance(sample.origin, str)
+            or not sample.origin
+            or not all(
+                math.isfinite(value)
+                for value in (
+                    sample.captured_at,
+                    sample.sip_x_m,
+                    sample.sip_y_m,
+                    sample.sip_yaw_rad,
+                )
+            )
+            or any(
+                type(value) is not int or not 0 <= value < self._modulus
+                for value in (sample.left_counts, sample.right_counts)
+            )
+        ):
             raise ValueError('invalid encoder/SIP sample')
         previous = self._previous
         delta = None
@@ -60,11 +76,12 @@ class EncoderDiagnostic:
             left = self._counter_delta(sample.left_counts - previous.left_counts)
             right = self._counter_delta(sample.right_counts - previous.right_counts)
             delta = EncoderDelta(
-                elapsed, left, right,
-                math.hypot(sample.sip_x_m - previous.sip_x_m,
-                           sample.sip_y_m - previous.sip_y_m),
-                (sample.sip_yaw_rad - previous.sip_yaw_rad + math.pi) %
-                (2 * math.pi) - math.pi)
+                elapsed,
+                left,
+                right,
+                math.hypot(sample.sip_x_m - previous.sip_x_m, sample.sip_y_m - previous.sip_y_m),
+                (sample.sip_yaw_rad - previous.sip_yaw_rad + math.pi) % (2 * math.pi) - math.pi,
+            )
         self._previous = sample
         self._samples += 1
         return delta

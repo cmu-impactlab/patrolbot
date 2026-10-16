@@ -15,21 +15,14 @@ import time
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
-from patrolbot_dock_manager.dock_manager import (
-    DockManager,
-    STATIONARY_ANGULAR_LIMIT,
-    STATIONARY_LINEAR_LIMIT,
-)
+from patrolbot_dock_manager.dock_manager import (DockManager, STATIONARY_ANGULAR_LIMIT,
+                                                 STATIONARY_LINEAR_LIMIT)
 from patrolbot_interfaces.action import HardwareUndock, Undock
 from patrolbot_interfaces.msg import BaseState, DockReadiness
 from patrolbot_interfaces.srv import InitializeDockPose
 import pytest
 import rclpy
-from rclpy.action import (
-    ActionClient,
-    ActionServer,
-    CancelResponse,
-)
+from rclpy.action import ActionClient, ActionServer, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -37,20 +30,22 @@ from rclpy.parameter import Parameter
 from sensor_msgs.msg import PointCloud2, PointField
 from std_srvs.srv import Empty
 
-
 pytestmark = pytest.mark.skipif(
     os.environ.get('PATROLBOT_RUN_INTEGRATION') != '1',
-    reason='set PATROLBOT_RUN_INTEGRATION=1 in an isolated ROS domain')
+    reason='set PATROLBOT_RUN_INTEGRATION=1 in an isolated ROS domain',
+)
 
 
 class PathNode(Node):
     def __init__(self, name, publish_topics=(), subscribe_topics=()):
         super().__init__(name)
         self._path_publishers = [
-            self.create_publisher(Twist, topic, 10) for topic in publish_topics]
+            self.create_publisher(Twist, topic, 10) for topic in publish_topics
+        ]
         self._path_subscriptions = [
             self.create_subscription(Twist, topic, lambda _message: None, 10)
-            for topic in subscribe_topics]
+            for topic in subscribe_topics
+        ]
 
 
 class PassiveGoal:
@@ -131,28 +126,31 @@ class FakeWorld(Node):
         self.pose_x = 0.0
         self.pose_y = 0.0
 
-        self.behavior_pub = self.create_publisher(
-            Twist, '/input/nav_behavior', 10)
-        self.base_pub = self.create_publisher(
-            BaseState, '/patrolbot/base_state', 10)
+        self.behavior_pub = self.create_publisher(Twist, '/input/nav_behavior', 10)
+        self.base_pub = self.create_publisher(BaseState, '/patrolbot/base_state', 10)
         self.sonar_pub = self.create_publisher(PointCloud2, '/sonar', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.pose_pub = self.create_publisher(
-            PoseWithCovarianceStamped, '/amcl_pose', 10)
+        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, '/amcl_pose', 10)
         self.undock_server = ActionServer(
-            self, HardwareUndock, '/patrolbot/hardware_undock',
+            self,
+            HardwareUndock,
+            '/patrolbot/hardware_undock',
             execute_callback=self._hardware_undock,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
-            callback_group=self.callbacks)
+            callback_group=self.callbacks,
+        )
         self.spin_server = ActionServer(
-            self, Spin, '/spin', execute_callback=self._spin,
+            self,
+            Spin,
+            '/spin',
+            execute_callback=self._spin,
             cancel_callback=lambda _goal: CancelResponse.ACCEPT,
-            callback_group=self.callbacks)
+            callback_group=self.callbacks,
+        )
         self.nomotion_service = self.create_service(
-            Empty, '/request_nomotion_update', self._nomotion_update,
-            callback_group=self.callbacks)
-        self.timer = self.create_timer(
-            0.04, self._publish_state, callback_group=self.callbacks)
+            Empty, '/request_nomotion_update', self._nomotion_update, callback_group=self.callbacks
+        )
+        self.timer = self.create_timer(0.04, self._publish_state, callback_group=self.callbacks)
 
     def _nomotion_update(self, _request, response):
         self.nomotion_update_calls += 1
@@ -194,18 +192,15 @@ class FakeWorld(Node):
         success = self.undock_should_succeed
         self._settle(success=success)
         result.success = success
-        result.code = (
-            HardwareUndock.Result.OK if success else self.undock_failure_code)
+        result.code = HardwareUndock.Result.OK if success else self.undock_failure_code
         result.message = 'undocked' if success else self.undock_failure_message
         result.distance_traveled = 0.53 if success else 0.12
         result.release_attempts = 1
         result.final_charge_state = 3
         # Success hands off with the motors live; failure leaves them down.
-        result.motors_enabled = bool(
-            success and self.undock_leaves_motors_enabled)
+        result.motors_enabled = bool(success and self.undock_leaves_motors_enabled)
         result.physically_clear = bool(success and self.undock_reports_clear)
-        result.final_dock_state = (
-            'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED')
+        result.final_dock_state = 'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED'
         self.hardware_completed_at = time.monotonic()
         if success:
             goal_handle.succeed()
@@ -219,8 +214,7 @@ class FakeWorld(Node):
             if self.handoff_telemetry_delay is None:
                 self._dock_state_clear_at = 0.0
             elif self.handoff_telemetry_delay > 0.0:
-                self._dock_state_clear_at = (
-                    time.monotonic() + self.handoff_telemetry_delay)
+                self._dock_state_clear_at = time.monotonic() + self.handoff_telemetry_delay
             else:
                 self.dock_state = 'CLEAR_CONFIRMED'
             self.motors_enabled = bool(self.undock_leaves_motors_enabled)
@@ -230,9 +224,10 @@ class FakeWorld(Node):
                     self._localization_resume_at = 0.0
                 else:
                     self._localization_resume_at = (
-                        time.monotonic() + self.localization_restore_delay)
-            # The base re-latches a stale charge state after the robot is
-            # physically clear. It must not block anything any more.
+                        time.monotonic() + self.localization_restore_delay
+                    )
+                    # The base re-latches a stale charge state after the robot is
+                    # physically clear. It must not block anything any more.
             self.charge_state = 3
         else:
             self.dock_state = 'FAULT_STOPPED'
@@ -249,19 +244,17 @@ class FakeWorld(Node):
 
     def _publish_state(self):
         monotonic_now = time.monotonic()
-        if (self._dock_state_clear_at and
-                monotonic_now >= self._dock_state_clear_at):
+        if self._dock_state_clear_at and monotonic_now >= self._dock_state_clear_at:
             self.dock_state = 'CLEAR_CONFIRMED'
             self._dock_state_clear_at = 0.0
-        if (self._localization_resume_at and
-                monotonic_now >= self._localization_resume_at):
+        if self._localization_resume_at and monotonic_now >= self._localization_resume_at:
             self.localization_enabled = True
             self.localization_resumed_at = monotonic_now
             self._localization_resume_at = 0.0
         now = self.get_clock().now().to_msg()
         state = BaseState()
-        state.map_id = "cmuq-floor2"
-        state.map_revision = "test-floor2"
+        state.map_id = 'cmuq-floor2'
+        state.map_revision = 'test-floor2'
         state.header.stamp = now
         state.header.frame_id = 'base_link'
         state.session_generation = 7
@@ -300,12 +293,9 @@ class FakeWorld(Node):
             cloud.height = 1
             cloud.width = 0
             cloud.fields = [
-                PointField(
-                    name='x', offset=0, datatype=PointField.FLOAT32, count=1),
-                PointField(
-                    name='y', offset=4, datatype=PointField.FLOAT32, count=1),
-                PointField(
-                    name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+                PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+                PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+                PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
             ]
             cloud.point_step = 12
             cloud.row_step = 0
@@ -324,8 +314,9 @@ class FakeWorld(Node):
         publish_pose = self.localization_enabled
         if publish_pose and self.localization_needs_a_request:
             moving = (
-                abs(self.odom_linear_x) > STATIONARY_LINEAR_LIMIT or
-                abs(self.odom_angular_z) > STATIONARY_ANGULAR_LIMIT)
+                abs(self.odom_linear_x) > STATIONARY_LINEAR_LIMIT
+                or abs(self.odom_angular_z) > STATIONARY_ANGULAR_LIMIT
+            )
             if not moving:
                 # One pose per request, then silence again -- update_min_d and
                 # update_min_a keep a real stationary AMCL quiet otherwise.
@@ -360,8 +351,10 @@ def wait_until(predicate, timeout=5.0):
 
 
 def _build_harness(
-        extra_parameter_overrides=(), localization_needs_a_request=False,
-        wait_for_initial_localization=True):
+    extra_parameter_overrides=(),
+    localization_needs_a_request=False,
+    wait_for_initial_localization=True,
+):
     rclpy.init()
     parameter_overrides = [
         Parameter('dock_pose_configured', value=True),
@@ -380,28 +373,31 @@ def _build_harness(
     ]
     parameter_overrides.extend(extra_parameter_overrides)
     manager = DockManager(parameter_overrides=parameter_overrides)
-    world = FakeWorld(
-        localization_needs_a_request=localization_needs_a_request)
+    world = FakeWorld(localization_needs_a_request=localization_needs_a_request)
     nodes = [
         world,
         PathNode('controller_server', publish_topics=['/input/nav_controller']),
         PathNode(
-            'nav_command_mux', publish_topics=['/cmd_vel_nav'],
-            subscribe_topics=[
-                '/input/nav_controller', '/input/nav_behavior',
-                '/input/docking']),
+            'nav_command_mux',
+            publish_topics=['/cmd_vel_nav'],
+            subscribe_topics=['/input/nav_controller', '/input/nav_behavior', '/input/docking'],
+        ),
         PathNode(
-            'velocity_smoother', publish_topics=['/cmd_vel_smoothed'],
-            subscribe_topics=['/cmd_vel_nav']),
+            'velocity_smoother',
+            publish_topics=['/cmd_vel_smoothed'],
+            subscribe_topics=['/cmd_vel_nav'],
+        ),
         PathNode(
-            'collision_monitor', publish_topics=['/input/navi'],
-            subscribe_topics=['/cmd_vel_smoothed']),
+            'collision_monitor',
+            publish_topics=['/input/navi'],
+            subscribe_topics=['/cmd_vel_smoothed'],
+        ),
+        PathNode('cmd_vel_mux', publish_topics=['/cmd_vel_out'], subscribe_topics=['/input/navi']),
         PathNode(
-            'cmd_vel_mux', publish_topics=['/cmd_vel_out'],
-            subscribe_topics=['/input/navi']),
-        PathNode(
-            'teleop_velocity_smoother', publish_topics=['/cmd_vel'],
-            subscribe_topics=['/cmd_vel_out']),
+            'teleop_velocity_smoother',
+            publish_topics=['/cmd_vel'],
+            subscribe_topics=['/cmd_vel_out'],
+        ),
         PathNode('patrolbot_bridge', subscribe_topics=['/cmd_vel']),
         PathNode('patrolbot_safety_watchdog'),
         Node('dock_manager_integration_client'),
@@ -415,8 +411,7 @@ def _build_harness(
     if wait_for_initial_localization:
         assert wait_until(lambda: manager._snapshot().dock_pose_valid)
     else:
-        assert wait_until(
-            lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+        assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().command_path_valid)
     yield manager, world, nodes[-1]
     # Stop callback workers and the spin thread before destroying ROS handles.
@@ -441,16 +436,18 @@ def harness():
 def no_pose_harness():
     """Start with an AMCL that stays silent until an explicit request."""
     yield from _build_harness(
-        localization_needs_a_request=True,
-        wait_for_initial_localization=False)
+        localization_needs_a_request=True, wait_for_initial_localization=False
+    )
 
 
 @pytest.fixture
 def harness_with_degenerate_override():
     """Run the same fake world with the supervised override enabled."""
-    yield from _build_harness([
-        Parameter('allow_degenerate_localization', value=True),
-    ])
+    yield from _build_harness(
+        [
+            Parameter('allow_degenerate_localization', value=True),
+        ]
+    )
 
 
 def wait_future(future, timeout=6.0):
@@ -473,8 +470,7 @@ def send_undock(client_node, validation_mode=True):
 def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     _manager, world, client_node = harness
     requests_before_initialization = world.nomotion_update_calls
-    initialize = client_node.create_client(
-        InitializeDockPose, '/patrolbot/initialize_dock_pose')
+    initialize = client_node.create_client(InitializeDockPose, '/patrolbot/initialize_dock_pose')
     assert initialize.wait_for_service(timeout_sec=1.0)
     request = InitializeDockPose.Request()
     request.dock_id = 'main_charger'
@@ -482,13 +478,13 @@ def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     response = wait_future(initialize.call_async(request), timeout=3.0)
     assert response.success
     assert response.code == InitializeDockPose.Response.OK
-    assert wait_until(
-        lambda: world.nomotion_update_calls > requests_before_initialization)
+    assert wait_until(lambda: world.nomotion_update_calls > requests_before_initialization)
     requests_after_initialization = world.nomotion_update_calls
     time.sleep(0.4)
     assert requests_after_initialization == requests_before_initialization + 1
-    assert world.nomotion_update_calls == requests_after_initialization, (
-        'the guarded initializer duplicated its /initialpose-triggered update')
+    assert (
+        world.nomotion_update_calls == requests_after_initialization
+    ), 'the guarded initializer duplicated its /initialpose-triggered update'
 
     goal_handle = send_undock(client_node)
     assert goal_handle.accepted
@@ -626,8 +622,7 @@ def test_cancel_is_forwarded_to_the_hardware_operation(harness):
 
 def test_readiness_separates_undock_readiness_from_docking_inhibition(harness):
     manager, world, _client_node = harness
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     snapshot = manager._snapshot()
     assert precheck_ready(manager)
     assert not snapshot.redock_inhibited
@@ -641,8 +636,7 @@ def test_readiness_separates_undock_readiness_from_docking_inhibition(harness):
     assert manager._snapshot().redock_inhibited
 
 
-def test_docked_state_never_triggers_background_localization_requests(
-        no_pose_harness):
+def test_docked_state_never_triggers_background_localization_requests(no_pose_harness):
     """No telemetry condition may autonomously restart AMCL resampling."""
     manager, world, _client_node = no_pose_harness
     assert manager._localization is None
@@ -669,11 +663,11 @@ def test_docked_state_never_triggers_background_localization_requests(
     # Authorized 2026-10-16: admission no longer consults AMCL, so the
     # precheck passes on a silent filter without requesting updates. The
     # localization step and the handoff pose sync still do.
-    (('precheck', True, 0),
-     ('localization', False, 5),
-     ('handoff', False, 5)))
+    (('precheck', True, 0), ('localization', False, 5), ('handoff', False, 5)),
+)
 def test_explicit_phases_request_updates_only_where_a_pose_is_needed(
-        no_pose_harness, phase, expect_ok, expect_updates):
+    no_pose_harness, phase, expect_ok, expect_updates
+):
     manager, world, _client_node = no_pose_harness
     world.localization_enabled = False
     assert wait_until(manager._localization_update_client.service_is_ready)
@@ -690,8 +684,7 @@ def test_explicit_phases_request_updates_only_where_a_pose_is_needed(
     assert world.nomotion_update_calls == expect_updates
 
 
-def test_explicit_precheck_never_requests_a_pose_update(
-        no_pose_harness):
+def test_explicit_precheck_never_requests_a_pose_update(no_pose_harness):
     # Admission does not consult AMCL, so the precheck must not poke it:
     # no requests even while the filter stays silent, and success follows
     # from E-stop plus charging contact alone.
@@ -707,8 +700,7 @@ def test_explicit_precheck_never_requests_a_pose_update(
 def test_one_initialpose_event_dispatches_at_most_one_update(no_pose_harness):
     manager, world, client_node = no_pose_harness
     world.localization_enabled = False
-    publisher = client_node.create_publisher(
-        PoseWithCovarianceStamped, '/initialpose', 10)
+    publisher = client_node.create_publisher(PoseWithCovarianceStamped, '/initialpose', 10)
     assert wait_until(lambda: publisher.get_subscription_count() >= 1)
     publisher.publish(PoseWithCovarianceStamped())
 
@@ -722,8 +714,7 @@ def test_spin_never_forces_a_no_motion_update(harness):
     manager, world, _client_node = harness
     world.dock_state = 'CLEAR_CONFIRMED'
     world.motors_enabled = True
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'CLEAR_CONFIRMED')
     requests_before_spin = world.nomotion_update_calls
 
     ok, reason = manager._run_spin(PassiveGoal(), 7, 0.25, 'test')
@@ -740,14 +731,12 @@ def test_parked_freshness_neither_grants_nor_blocks_motion_precheck(harness):
     manager, world, client_node = harness
     seen = []
     client_node.create_subscription(
-        DockReadiness, '/patrolbot/dock_readiness',
-        lambda message: seen.append(message), 10)
+        DockReadiness, '/patrolbot/dock_readiness', lambda message: seen.append(message), 10
+    )
     world.localization_enabled = False
     timeout = manager.get_parameter('sensor_timeout').value
 
-    assert wait_until(
-        lambda: bool(seen) and seen[-1].localization_age > timeout,
-        timeout=2.0)
+    assert wait_until(lambda: bool(seen) and seen[-1].localization_age > timeout, timeout=2.0)
     assert seen[-1].localization_valid
     assert not seen[-1].localization_fresh
     assert seen[-1].ready_for_undock
@@ -760,8 +749,7 @@ def test_parked_freshness_neither_grants_nor_blocks_motion_precheck(harness):
 def test_docked_variance_allowance_needs_the_pose_to_match_the_dock(harness):
     """The wider docked limit is evidence-gated, not a blanket relaxation."""
     manager, world, _client_node = harness
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     # The measured docked approach-axis variance: refused by the general limit,
     # admitted only because the plates are mated and the pose is at the dock.
     world.position_variance = 0.63
@@ -782,8 +770,7 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
     updating. The robot would have been cleared to reverse off the charger.
     """
     manager, world, _client_node = harness
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().localization_valid)
 
     world.position_variance = -7.861393e-10
@@ -804,18 +791,19 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
 
 def precheck_ready(manager):
     from patrolbot_dock_manager.contracts import precheck_failures
+
     return precheck_failures(manager._snapshot()) == []
 
+    # The live degenerate diagonal, captured from the docked robot 2026-08-14 and
+    # already pinned by test_a_frozen_filter_is_refused_however_small_its_variance.
 
-# The live degenerate diagonal, captured from the docked robot 2026-08-14 and
-# already pinned by test_a_frozen_filter_is_refused_however_small_its_variance.
+
 DEGENERATE = (-7.861393e-10, 1.860600e-07, 4.660659e-07)
 
 
 def _drive_degenerate(world):
     """Put the fake AMCL into the exact live degenerate state."""
-    world.position_variance, world.cross_variance, world.yaw_variance = (
-        DEGENERATE)
+    world.position_variance, world.cross_variance, world.yaw_variance = DEGENERATE
 
 
 def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
@@ -827,8 +815,7 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
     would silently undo the whole guard on every robot that never sets it.
     """
     manager, world, client_node = harness
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().localization_valid)
 
     _drive_degenerate(world)
@@ -846,7 +833,8 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
 
 
 def test_the_override_admits_a_degenerate_covariance_when_enabled(
-        harness_with_degenerate_override):
+    harness_with_degenerate_override,
+):
     """
     With the override on, the live degenerate diagonal no longer blocks undock.
 
@@ -855,8 +843,7 @@ def test_the_override_admits_a_degenerate_covariance_when_enabled(
     is not meant to: it converts a hard refusal into a supervised decision.
     """
     manager, world, _client_node = harness_with_degenerate_override
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().localization_valid)
 
     _drive_degenerate(world)
@@ -868,14 +855,16 @@ def test_the_override_admits_a_degenerate_covariance_when_enabled(
     # snapshot going invalid well inside this window.
     time.sleep(0.6)
     for _ in range(10):
-        assert manager._snapshot().localization_valid, (
-            'override did not admit the degenerate covariance')
+        assert (
+            manager._snapshot().localization_valid
+        ), 'override did not admit the degenerate covariance'
         time.sleep(0.05)
     assert precheck_ready(manager)
 
 
 def test_the_override_still_refuses_a_covariance_that_is_not_a_number(
-        harness_with_degenerate_override):
+    harness_with_degenerate_override,
+):
     """
     Overriding "degenerate" must not also override "garbage".
 
@@ -886,8 +875,7 @@ def test_the_override_still_refuses_a_covariance_that_is_not_a_number(
     fail-closed no matter what the override says.
     """
     manager, world, _client_node = harness_with_degenerate_override
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().localization_valid)
 
     for bad in (float('nan'), float('inf'), float('-inf')):
@@ -895,14 +883,15 @@ def test_the_override_still_refuses_a_covariance_that_is_not_a_number(
         world.cross_variance = 0.01
         world.yaw_variance = 0.01
         assert wait_until(
-            lambda: not manager._snapshot().localization_valid), (
-            f'a {bad} variance was admitted by the override')
+            lambda: not manager._snapshot().localization_valid
+        ), f'a {bad} variance was admitted by the override'
         world.position_variance = 0.01
         assert wait_until(lambda: manager._snapshot().localization_valid)
 
 
 def test_an_engaged_override_is_visible_in_the_published_readiness(
-        harness_with_degenerate_override):
+    harness_with_degenerate_override,
+):
     """
     The operator has to be able to see that the gate was overridden.
 
@@ -913,18 +902,17 @@ def test_an_engaged_override_is_visible_in_the_published_readiness(
     DockReadiness interface hash and detach the dashboard (PB-AUDIT-025).
     """
     manager, world, client_node = harness_with_degenerate_override
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
 
     seen = []
     client_node.create_subscription(
-        DockReadiness, '/patrolbot/dock_readiness',
-        lambda msg: seen.append(msg), 10)
+        DockReadiness, '/patrolbot/dock_readiness', lambda msg: seen.append(msg), 10
+    )
 
     _drive_degenerate(world)
     assert wait_until(
-        lambda: bool(seen) and 'override' in seen[-1].blocking_reason.lower()), (
-        'an engaged override left no trace in the published readiness')
+        lambda: bool(seen) and 'override' in seen[-1].blocking_reason.lower()
+    ), 'an engaged override left no trace in the published readiness'
 
 
 def test_a_parked_robot_keeps_a_usable_pose_past_the_freshness_timeout(harness):
@@ -948,21 +936,20 @@ def test_a_parked_robot_keeps_a_usable_pose_past_the_freshness_timeout(harness):
     # The measured age lives on the published message, not on the snapshot.
     seen = []
     client_node.create_subscription(
-        DockReadiness, '/patrolbot/dock_readiness',
-        lambda msg: seen.append(msg), 10)
+        DockReadiness, '/patrolbot/dock_readiness', lambda msg: seen.append(msg), 10
+    )
 
     # AMCL goes quiet, exactly as it does when the robot is not moving.
     world.localization_enabled = False
     time.sleep(timeout * 3)
 
-    assert manager._snapshot().stationary, (
-        'precondition: the fake robot is not moving')
+    assert manager._snapshot().stationary, 'precondition: the fake robot is not moving'
     assert wait_until(
-        lambda: bool(seen) and seen[-1].localization_age > timeout), (
-        'precondition: the pose must actually be older than the timeout')
+        lambda: bool(seen) and seen[-1].localization_age > timeout
+    ), 'precondition: the pose must actually be older than the timeout'
     assert seen[-1].localization_valid, (
-        'a parked robot was declared unlocalized purely because AMCL had '
-        'nothing new to say')
+        'a parked robot was declared unlocalized purely because AMCL had ' 'nothing new to say'
+    )
 
 
 def test_a_moving_robot_still_needs_a_fresh_pose(harness):
@@ -983,8 +970,7 @@ def test_a_moving_robot_still_needs_a_fresh_pose(harness):
 
     snapshot = manager._snapshot()
     assert not snapshot.stationary, 'precondition: the fake robot is moving'
-    assert not snapshot.localization_valid, (
-        'a moving robot kept a stale pose')
+    assert not snapshot.localization_valid, 'a moving robot kept a stale pose'
 
 
 def test_dead_odometry_cannot_make_a_robot_look_parked(harness):
@@ -1008,8 +994,9 @@ def test_dead_odometry_cannot_make_a_robot_look_parked(harness):
 
     snapshot = manager._snapshot()
     assert not snapshot.odom_fresh, 'precondition: odometry is stale'
-    assert not snapshot.localization_valid, (
-        'a stale pose was held valid on the strength of stale odometry')
+    assert (
+        not snapshot.localization_valid
+    ), 'a stale pose was held valid on the strength of stale odometry'
 
 
 def test_the_published_age_still_reports_the_real_number(harness):
@@ -1026,8 +1013,8 @@ def test_the_published_age_still_reports_the_real_number(harness):
 
     seen = []
     client_node.create_subscription(
-        DockReadiness, '/patrolbot/dock_readiness',
-        lambda msg: seen.append(msg), 10)
+        DockReadiness, '/patrolbot/dock_readiness', lambda msg: seen.append(msg), 10
+    )
 
     world.localization_enabled = False
     time.sleep(timeout * 3)
@@ -1036,8 +1023,7 @@ def test_the_published_age_still_reports_the_real_number(harness):
     assert seen[-1].localization_valid, 'precondition: still usable'
 
 
-def test_movement_after_a_pose_does_not_revalidate_it_once_the_robot_stops(
-        harness):
+def test_movement_after_a_pose_does_not_revalidate_it_once_the_robot_stops(harness):
     """
     Zero velocity now is not evidence that an old pose still fits.
 
@@ -1056,8 +1042,9 @@ def test_movement_after_a_pose_does_not_revalidate_it_once_the_robot_stops(
     world.localization_enabled = False
     world.odom_linear_x = 0.25
     time.sleep(timeout * 3)
-    assert not manager._snapshot().localization_valid, (
-        'precondition: a moving robot with a stale pose is already invalid')
+    assert (
+        not manager._snapshot().localization_valid
+    ), 'precondition: a moving robot with a stale pose is already invalid'
 
     # It parks. The newest sample now reads zero, but the pose predates the
     # drive and no longer describes where the robot is.
@@ -1066,8 +1053,8 @@ def test_movement_after_a_pose_does_not_revalidate_it_once_the_robot_stops(
 
     assert manager._snapshot().stationary, 'precondition: it really did stop'
     assert not manager._snapshot().localization_valid, (
-        'a pose from before the robot drove away was revalidated by it '
-        'stopping')
+        'a pose from before the robot drove away was revalidated by it ' 'stopping'
+    )
 
 
 def test_localization_fresh_stays_a_statement_about_age(harness):
@@ -1089,10 +1076,10 @@ def test_localization_fresh_stays_a_statement_about_age(harness):
     time.sleep(timeout * 3)
 
     snapshot = manager._snapshot()
-    assert snapshot.localization_valid, (
-        'precondition: the parked allowance is in effect')
-    assert not snapshot.localization_fresh, (
-        'precondition: the pose message went stale while parked')
+    assert snapshot.localization_valid, 'precondition: the parked allowance is in effect'
+    assert (
+        not snapshot.localization_fresh
+    ), 'precondition: the pose message went stale while parked'
     # Authorized 2026-10-16: admission no longer reads localization_fresh,
     # so a stale pose neither grants nor blocks the precheck. Freshness
     # stays enforced by the VERIFY/RESTORE localization flow steps.
@@ -1108,16 +1095,16 @@ def test_the_undock_precheck_ignores_pose_freshness_by_authorization(harness):
     enforced by the VERIFY/RESTORE localization flow steps, not admission.
     """
     manager, world, _client_node = harness
-    assert wait_until(
-        lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+    assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: precheck_ready(manager))
     timeout = manager.get_parameter('sensor_timeout').value
 
     world.localization_enabled = False
     time.sleep(timeout * 3)
 
-    assert manager._snapshot().localization_valid, (
-        'precondition: the parked allowance is in effect')
+    assert (
+        manager._snapshot().localization_valid
+    ), 'precondition: the parked allowance is in effect'
     assert precheck_ready(manager)
 
 
@@ -1137,17 +1124,20 @@ def test_an_encoder_fault_voids_the_parked_allowance(harness):
 
     world.localization_enabled = False
     time.sleep(timeout * 3)
-    assert manager._snapshot().localization_valid, (
-        'precondition: the parked allowance is in effect')
+    assert (
+        manager._snapshot().localization_valid
+    ), 'precondition: the parked allowance is in effect'
 
-    world.fault_flags = 1 << 8      # encoder_failure
-    assert wait_until(lambda: not manager._snapshot().localization_valid), (
-        'a failed encoder still propped up the parked allowance')
+    world.fault_flags = 1 << 8  # encoder_failure
+    assert wait_until(
+        lambda: not manager._snapshot().localization_valid
+    ), 'a failed encoder still propped up the parked allowance'
 
-    world.fault_flags = 1 << 7      # encoder_degraded_warning
+    world.fault_flags = 1 << 7  # encoder_degraded_warning
     time.sleep(timeout * 2)
-    assert not manager._snapshot().localization_valid, (
-        'a degraded encoder still propped up the parked allowance')
+    assert (
+        not manager._snapshot().localization_valid
+    ), 'a degraded encoder still propped up the parked allowance'
 
 
 def test_epoch_recovery_blocks_readiness_despite_fresh_stationary_inputs(harness):
@@ -1163,7 +1153,7 @@ def test_new_epoch_seed_barrier_rejects_cached_parked_amcl(harness):
     manager, world, _ = harness
     assert wait_until(lambda: manager._snapshot().localization_valid)
     world.localization_enabled = False
-    time.sleep(.15)
+    time.sleep(0.15)
     world.seed_stamp_ns = world.get_clock().now().nanoseconds
     assert wait_until(lambda: not manager._snapshot().localization_valid)
     assert manager._snapshot().hardware_state_valid
@@ -1180,8 +1170,7 @@ def test_operator_seed_can_recover_epoch_without_releasing_motion(harness, stage
     assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
     assert manager._snapshot(for_pose_initialization=True).hardware_state_valid
     assert not precheck_ready(manager)
-    initialize = client_node.create_client(
-        InitializeDockPose, '/patrolbot/initialize_dock_pose')
+    initialize = client_node.create_client(InitializeDockPose, '/patrolbot/initialize_dock_pose')
     assert initialize.wait_for_service(timeout_sec=1.0)
     request = InitializeDockPose.Request()
     request.dock_id = 'main_charger'
@@ -1193,8 +1182,10 @@ def test_operator_seed_can_recover_epoch_without_releasing_motion(harness, stage
     assert world.undock_calls == 0
 
 
-@pytest.mark.parametrize('stage', [
-    'wait-origin', 'wait-reset', 'wait-first-odometry', 'wait-amcl-tf', 'failed:activate'])
+@pytest.mark.parametrize(
+    'stage',
+    ['wait-origin', 'wait-reset', 'wait-first-odometry', 'wait-amcl-tf', 'failed:activate'],
+)
 def test_operator_seed_cannot_bypass_unfinished_origin_reset(harness, stage):
     manager, world, _ = harness
     world.recovery_required = True
@@ -1212,23 +1203,34 @@ def test_operator_seed_cannot_bypass_invalid_origin(harness):
     assert not manager._snapshot(for_pose_initialization=True).hardware_state_valid
 
 
-
-@pytest.mark.parametrize('lidar_state,scan_age', [
-    ('OFF', -1.), ('STARTING', -1.), ('UNKNOWN', -1.), ('FAULT', -1.),
-    ('READY', .6), ('READY', float('nan')),
-])
+@pytest.mark.parametrize(
+    'lidar_state,scan_age',
+    [
+        ('OFF', -1.0),
+        ('STARTING', -1.0),
+        ('UNKNOWN', -1.0),
+        ('FAULT', -1.0),
+        ('READY', 0.6),
+        ('READY', float('nan')),
+    ],
+)
 def test_lidar_blocks_typed_pose_recovery_and_undock(harness, lidar_state, scan_age):
     manager, world, client_node = harness
     world.recovery_required = True
     world.recovery_stage = 'wait-operator-seed'
     world.lidar_state, world.lidar_scan_age = lidar_state, scan_age
-    assert wait_until(lambda: not manager._snapshot(for_pose_initialization=True).hardware_state_valid)
+    assert wait_until(
+        lambda: not manager._snapshot(for_pose_initialization=True).hardware_state_valid
+    )
     assert not manager._snapshot().hardware_state_valid
-    initialize = client_node.create_client(
-        InitializeDockPose, '/patrolbot/initialize_dock_pose')
+    initialize = client_node.create_client(InitializeDockPose, '/patrolbot/initialize_dock_pose')
     assert initialize.wait_for_service(timeout_sec=1.0)
-    response = wait_future(initialize.call_async(InitializeDockPose.Request(
-        dock_id='main_charger', operator_authorized=True)), timeout=3.0)
+    response = wait_future(
+        initialize.call_async(
+            InitializeDockPose.Request(dock_id='main_charger', operator_authorized=True)
+        ),
+        timeout=3.0,
+    )
     assert not response.success
     assert response.code == InitializeDockPose.Response.PRECONDITION_FAILED
     assert world.nomotion_update_calls == 0
@@ -1238,7 +1240,7 @@ def test_lidar_blocks_typed_pose_recovery_and_undock(harness, lidar_state, scan_
 def test_localization_override_cannot_bypass_missing_lidar(harness_with_degenerate_override):
     manager, world, _ = harness_with_degenerate_override
     world.position_variance = world.cross_variance = world.yaw_variance = 0.0
-    world.lidar_state, world.lidar_scan_age = 'OFF', -1.
+    world.lidar_state, world.lidar_scan_age = 'OFF', -1.0
     assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
     assert not precheck_ready(manager)
     assert world.undock_calls == 0

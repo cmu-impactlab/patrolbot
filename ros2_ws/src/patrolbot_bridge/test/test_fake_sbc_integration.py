@@ -9,10 +9,9 @@ from uuid import uuid4
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from lifecycle_msgs.srv import ChangeState, GetState
+from nav2_msgs.srv import ManageLifecycleNodes
 from nav_msgs.msg import Odometry
 from nav_msgs.srv import GetMap
-from nav2_msgs.srv import ManageLifecycleNodes
-from std_srvs.srv import Trigger
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.srv import ChargeRelease, MotorEnable, SetLidarPower
@@ -22,11 +21,12 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-
+from std_srvs.srv import Trigger
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('PATROLBOT_RUN_INTEGRATION') != '1',
-    reason='set PATROLBOT_RUN_INTEGRATION=1 in an isolated ROS domain')
+    reason='set PATROLBOT_RUN_INTEGRATION=1 in an isolated ROS domain',
+)
 
 
 class FakeSbc:
@@ -100,7 +100,10 @@ class FakeSbc:
                 features = 'UNDOCK,LIDAR_POWER' if self.advertise_undock else 'LIDAR_POWER'
                 self._send(
                     connection,
-                    f'HELLO:PROTOCOL=2:FEATURES={features}:ODOM_EPOCH={self.odom_epoch}\n'.encode('ascii'))
+                    f'HELLO:PROTOCOL=2:FEATURES={features}:ODOM_EPOCH={self.odom_epoch}\n'.encode(
+                        'ascii'
+                    ),
+                )
             except OSError:
                 pass
             buffer = ''
@@ -144,16 +147,18 @@ class FakeSbc:
                 f'{self.dock_state},{self.dock_phase},{self.dock_phase_name},'
                 f'{int(self.undock_active)},0,99.0,1,'
                 f'{int(self.redock_inhibited)},0,'
-                f'{int(self.profile_commissioned)}')
+                f'{int(self.profile_commissioned)}'
+            )
             odom_x, odom_y, odom_th = self.odom_pose
-            laser_field = self.laser_field if self.lidar_state == "READY" else ""
+            laser_field = self.laser_field if self.lidar_state == 'READY' else ''
         return (
             f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}'
             f'|ODOM_EPOCH:{self.odom_epoch}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
             f'DOCK={dock}|LIDAR={self.lidar_state},{int(self.lidar_supported)},'
-            f'{self.lidar_scan_age_ms}\n').encode('ascii')
+            f'{self.lidar_scan_age_ms}\n'
+        ).encode('ascii')
 
     def _reply(self, connection, line):
         fields = line.split(':')
@@ -164,20 +169,27 @@ class FakeSbc:
             with self._lock:
                 self.lidar_state = 'STARTING' if verb == 'LIDAR_ON' else 'OFF'
                 self.lidar_scan_age_ms = -1
-            self._send(connection, (
-                f'ACK:{verb}:{fields[1]}:ACCEPTED\n'
-                f'RESULT:{verb}:{fields[1]}:OK:0:commanded:2:0:1\n'
-            ).encode('ascii'))
-            if verb == 'LIDAR_ON': self._spawn(self._fresh_lidar)
+            self._send(
+                connection,
+                (
+                    f'ACK:{verb}:{fields[1]}:ACCEPTED\n'
+                    f'RESULT:{verb}:{fields[1]}:OK:0:commanded:2:0:1\n'
+                ).encode('ascii'),
+            )
+            if verb == 'LIDAR_ON':
+                self._spawn(self._fresh_lidar)
         elif verb == 'CHARGE_RELEASE' and len(fields) == 2:
             self._reply_charge_release(connection, fields[1])
         elif verb == 'MOTOR_ENABLE' and len(fields) == 2:
             with self._lock:
                 self.motors_enabled = True
-            self._send(connection, (
-                f'ACK:MOTOR_ENABLE:{fields[1]}:ACCEPTED\n'
-                f'RESULT:MOTOR_ENABLE:{fields[1]}:OK:0:motors_enabled:0:1:0\n'
-            ).encode('ascii'))
+            self._send(
+                connection,
+                (
+                    f'ACK:MOTOR_ENABLE:{fields[1]}:ACCEPTED\n'
+                    f'RESULT:MOTOR_ENABLE:{fields[1]}:OK:0:motors_enabled:0:1:0\n'
+                ).encode('ascii'),
+            )
         elif verb == 'UNDOCK' and len(fields) == 6:
             # Scripted off the receive loop. Both undock scripts sleep between
             # frames, and running them inline froze this loop -- and so the
@@ -189,7 +201,7 @@ class FakeSbc:
             self._spawn(self._cancel_undock, connection, fields[1])
 
     def _fresh_lidar(self):
-        time.sleep(.15)
+        time.sleep(0.15)
         with self._lock:
             self.lidar_state = 'READY'
             self.lidar_scan_age_ms = 0
@@ -212,19 +224,20 @@ class FakeSbc:
         with self._lock:
             self.charge_state = 0
             self.motors_enabled = False
-        self._send(connection, (
-            f'ACK:CHARGE_RELEASE:{request_id}:ACCEPTED\n'
-            f'RESULT:CHARGE_RELEASE:{request_id}:OK:0:released:0:0:1\n'
-        ).encode('ascii'))
+        self._send(
+            connection,
+            (
+                f'ACK:CHARGE_RELEASE:{request_id}:ACCEPTED\n'
+                f'RESULT:CHARGE_RELEASE:{request_id}:OK:0:released:0:0:1\n'
+            ).encode('ascii'),
+        )
 
     def _start_undock(self, connection, request_id):
         # Runs on its own thread now, so it can outlive the socket when a test
         # drops the connection or tears the harness down mid-undock. A closed
         # peer is a normal end to the script, not an error.
         try:
-            self._send(
-                connection,
-                f'ACK:UNDOCK:{request_id}:ACCEPTED\n'.encode('ascii'))
+            self._send(connection, f'ACK:UNDOCK:{request_id}:ACCEPTED\n'.encode('ascii'))
             with self._lock:
                 self._active_undock = request_id
                 self.undock_active = True
@@ -239,31 +252,35 @@ class FakeSbc:
                 with self._lock:
                     if self._active_undock != request_id:
                         return
-                    self._send(connection, (
-                        f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:'
-                        f'{distance:.4f}:'
-                        f'0.0000:0.0000:3:1:99.0000:0:DEPARTING\n'
-                    ).encode('ascii'))
+                    self._send(
+                        connection,
+                        (
+                            f'UNDOCK_EVENT:{request_id}:4:BACKING_OUT:'
+                            f'{distance:.4f}:'
+                            f'0.0000:0.0000:3:1:99.0000:0:DEPARTING\n'
+                        ).encode('ascii'),
+                    )
                 time.sleep(0.05)
         except OSError:
             return
         if self.undock_stall:
             # Never emits a terminal frame: exercises the bridge backstop.
             return
-        self._finish_undock(connection, request_id, self.undock_should_succeed,
-                            0 if self.undock_should_succeed else 11,
-                            'undocked' if self.undock_should_succeed
-                            else 'rear_path_blocked')
+        self._finish_undock(
+            connection,
+            request_id,
+            self.undock_should_succeed,
+            0 if self.undock_should_succeed else 11,
+            'undocked' if self.undock_should_succeed else 'rear_path_blocked',
+        )
 
     def _cancel_undock(self, connection, target_id):
-        self._send(
-            connection,
-            f'ACK:UNDOCK_CANCEL:{target_id}:ACCEPTED\n'.encode('ascii'))
+        self._send(connection, f'ACK:UNDOCK_CANCEL:{target_id}:ACCEPTED\n'.encode('ascii'))
         with self._lock:
             active = self._active_undock
         if active != target_id:
             return
-        # Terminal only after the stop, exactly as the real SBC behaves.
+            # Terminal only after the stop, exactly as the real SBC behaves.
         time.sleep(0.05)
         self._finish_undock(connection, target_id, False, 13, 'canceled')
 
@@ -277,19 +294,22 @@ class FakeSbc:
                 return
             self._active_undock = None
             self.undock_active = False
-            self.dock_state = (
-                'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED')
+            self.dock_state = 'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED'
             self.motors_enabled = bool(success)
             self.redock_inhibited = bool(success)
             phase = 6 if success else 7
             phase_name = 'HANDOFF_READY' if success else 'STOPPING'
         try:
-            self._send(connection, (
-                f'UNDOCK_RESULT:{request_id}:{"OK" if success else "ERROR"}:'
-                f'{code}:{message}:{phase}:{phase_name}:0.5300:0.0010:0.0020:'
-                f'3:{int(success)}:0:99.0000:1:'
-                f'{"CLEAR_CONFIRMED" if success else "FAULT_STOPPED"}:'
-                f'{int(success)}\n').encode('ascii'))
+            self._send(
+                connection,
+                (
+                    f"UNDOCK_RESULT:{request_id}:{'OK' if success else 'ERROR'}:"
+                    f'{code}:{message}:{phase}:{phase_name}:0.5300:0.0010:0.0020:'
+                    f'3:{int(success)}:0:99.0000:1:'
+                    f"{'CLEAR_CONFIRMED' if success else 'FAULT_STOPPED'}:"
+                    f'{int(success)}\n'
+                ).encode('ascii'),
+            )
         except OSError:
             pass
 
@@ -339,11 +359,14 @@ class FakeAmcl(Node):
         self.state = 3
         self.transitions = []
         self.navigation_transitions = []
-        self.create_service(ManageLifecycleNodes,
-                            '/lifecycle_manager_navigation/manage_nodes',
-                            self.manage_navigation)
-        self.create_service(Trigger, '/lifecycle_manager_localization/is_active',
-                            self.localization_active)
+        self.create_service(
+            ManageLifecycleNodes,
+            '/lifecycle_manager_navigation/manage_nodes',
+            self.manage_navigation,
+        )
+        self.create_service(
+            Trigger, '/lifecycle_manager_localization/is_active', self.localization_active
+        )
         self.create_service(GetState, '/amcl/get_state', self.get_state)
         self.create_service(Trigger, '/amcl/initial_pose_tf_ready', self.tf_ready)
         self.create_service(ChangeState, '/amcl/change_state', self.change_state)
@@ -351,7 +374,8 @@ class FakeAmcl(Node):
         self.create_service(Trigger, '/amcl/map_consumed', self.map_consumed)
         self.create_service(Trigger, '/bt_navigator/navigation_idle', self.localization_active)
         self.ack = self.create_publisher(
-            PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', 10)
+            PoseWithCovarianceStamped, '/amcl/accepted_initial_pose', 10
+        )
         self.pose = self.create_publisher(PoseWithCovarianceStamped, '/amcl_pose', 10)
         self.create_subscription(PoseWithCovarianceStamped, '/initialpose', self.seed, 10)
 
@@ -359,10 +383,10 @@ class FakeAmcl(Node):
         response.map.header.frame_id = 'map'
         response.map.info.width = 3192
         response.map.info.height = 2205
-        response.map.info.resolution = .075
-        response.map.info.origin.position.x = -1.
-        response.map.info.origin.position.y = -1.
-        response.map.info.origin.orientation.w = 1.
+        response.map.info.resolution = 0.075
+        response.map.info.origin.position.x = -1.0
+        response.map.info.origin.position.y = -1.0
+        response.map.info.origin.orientation.w = 1.0
         response.map.info.map_load_time.sec = 1
         return response
 
@@ -411,7 +435,7 @@ def seed_harness(bridge, client_node):
     message.header.stamp = client_node.get_clock().now().to_msg()
     message.pose.pose.orientation.w = 1.0
     for index in (0, 7, 35):
-        message.pose.covariance[index] = .1
+        message.pose.covariance[index] = 0.1
     publisher.publish(message)
     assert wait_until(lambda: bridge._epoch.commands_allowed)
     client_node.destroy_publisher(publisher)
@@ -420,14 +444,16 @@ def seed_harness(bridge, client_node):
 def build_harness(fake):
     rclpy.init()
     amcl = FakeAmcl()
-    bridge = PatrolBotBridge(parameter_overrides=[
-        Parameter('server_ip', value='127.0.0.1'),
-        Parameter('server_port', value=fake.port),
-        Parameter('connect_timeout', value=0.2),
-        Parameter('receive_timeout', value=0.3),
-        Parameter('reconnect_delay', value=0.05),
-        Parameter('control_timeout', value=0.4),
-    ])
+    bridge = PatrolBotBridge(
+        parameter_overrides=[
+            Parameter('server_ip', value='127.0.0.1'),
+            Parameter('server_port', value=fake.port),
+            Parameter('connect_timeout', value=0.2),
+            Parameter('receive_timeout', value=0.3),
+            Parameter('reconnect_delay', value=0.05),
+            Parameter('control_timeout', value=0.4),
+        ]
+    )
     client_node = Node('fake_sbc_integration_client')
     client_node.fake_amcl = amcl
     executor = MultiThreadedExecutor(num_threads=4)
@@ -436,10 +462,16 @@ def build_harness(fake):
     executor.add_node(client_node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
-    assert wait_until(lambda: bridge._link_connected)
-    assert wait_until(lambda: bridge._pose_received)
-    assert wait_until(lambda: bridge._charge_state_at > 0 and bridge._flags_at > 0)
-    seed_harness(bridge, client_node)
+    try:
+        assert wait_until(lambda: bridge._link_connected)
+        assert wait_until(lambda: bridge._pose_received)
+        assert wait_until(lambda: bridge._charge_state_at > 0 and bridge._flags_at > 0)
+        seed_harness(bridge, client_node)
+    except BaseException:
+        # A failed seed must not leak nodes/threads or poison every subsequent
+        # test with an already-initialized ROS context.
+        teardown_harness(bridge, client_node, executor, spin_thread, fake)
+        raise
     return bridge, client_node, executor, spin_thread
 
 
@@ -455,7 +487,8 @@ def teardown_harness(bridge, client_node, executor, spin_thread, fake):
 
 
 @pytest.fixture
-def harness():
+def harness(tmp_path, monkeypatch):
+    monkeypatch.setenv('PATROLBOT_STATE_DIR', str(tmp_path))
     fake = FakeSbc()
     bridge, client_node, executor, spin_thread = build_harness(fake)
     yield fake, bridge, client_node, executor
@@ -463,7 +496,8 @@ def harness():
 
 
 @pytest.fixture
-def harness_without_undock():
+def harness_without_undock(tmp_path, monkeypatch):
+    monkeypatch.setenv('PATROLBOT_STATE_DIR', str(tmp_path))
     fake = FakeSbc(advertise_undock=False)
     bridge, client_node, executor, spin_thread = build_harness(fake)
     yield fake, bridge, client_node, executor
@@ -471,8 +505,7 @@ def harness_without_undock():
 
 
 def call_release(client_node, request_id):
-    client = client_node.create_client(
-        ChargeRelease, '/patrolbot/charge_release')
+    client = client_node.create_client(ChargeRelease, '/patrolbot/charge_release')
     assert client.wait_for_service(timeout_sec=1.0)
     request = ChargeRelease.Request()
     request.request_id = request_id
@@ -481,8 +514,9 @@ def call_release(client_node, request_id):
     return future.result()
 
 
-def send_undock(client_node, clearance=0.53, speed=0.10, duration=30.0,
-                feedback=None, timeout=10.0):
+def send_undock(
+    client_node, clearance=0.53, speed=0.10, duration=30.0, feedback=None, timeout=10.0
+):
     client = ActionClient(client_node, HardwareUndock, '/patrolbot/hardware_undock')
     assert client.wait_for_server(timeout_sec=2.0)
     goal = HardwareUndock.Goal()
@@ -510,8 +544,7 @@ def test_release_round_trip_and_duplicate_never_emit_velocity(harness):
     assert first.success and first.charge_state == 0
     assert second.success and second.charge_state == 0
     assert all(not line.startswith('DRIVE:') for _session, line in fake.received)
-    releases = [line for _session, line in fake.received
-                if line == f'CHARGE_RELEASE:{request_id}']
+    releases = [line for _session, line in fake.received if line == f'CHARGE_RELEASE:{request_id}']
     assert len(releases) == 2
 
 
@@ -531,8 +564,7 @@ def test_velocity_is_not_replayed_after_hardware_reconnect(harness):
     command = Twist()
     command.linear.x = 0.04
     publisher.publish(command)
-    assert wait_until(
-        lambda: any(line.startswith('DRIVE:') for _session, line in fake.received))
+    assert wait_until(lambda: any(line.startswith('DRIVE:') for _session, line in fake.received))
     first_generation = bridge._session_generation
     fake.drop_connection()
     assert wait_until(lambda: bridge._session_generation > first_generation)
@@ -540,7 +572,8 @@ def test_velocity_is_not_replayed_after_hardware_reconnect(harness):
     time.sleep(0.25)
     assert not any(
         session == second_connection and line.startswith('DRIVE:')
-        for session, line in fake.received)
+        for session, line in fake.received
+    )
 
 
 def test_motor_enable_is_independent_of_dock_state(harness):
@@ -548,8 +581,9 @@ def test_motor_enable_is_independent_of_dock_state(harness):
     with fake._lock:
         fake.estop_pressed = False
         fake.dock_state = 'DOCKED_CONFIRMED'
-    assert wait_until(lambda: bridge._dock_state == 'DOCKED_CONFIRMED'
-                      and not bridge._estop_pressed)
+    assert wait_until(
+        lambda: bridge._dock_state == 'DOCKED_CONFIRMED' and not bridge._estop_pressed
+    )
     client = client_node.create_client(MotorEnable, '/patrolbot/motor_enable')
     assert client.wait_for_service(timeout_sec=1.0)
     request = MotorEnable.Request()
@@ -564,8 +598,7 @@ def test_motor_enable_is_independent_of_dock_state(harness):
 def test_hardware_undock_reports_success_with_motors_left_enabled(harness):
     fake, _bridge, client_node, _executor = harness
     seen = []
-    _client, handle = send_undock(
-        client_node, feedback=lambda msg: seen.append(msg.feedback))
+    _client, handle = send_undock(client_node, feedback=lambda msg: seen.append(msg.feedback))
     assert handle.accepted
     result_future = handle.get_result_async()
     assert wait_until(result_future.done, timeout=10.0)
@@ -626,8 +659,7 @@ def test_hardware_undock_cancel_is_forwarded_and_terminal(harness):
     result = result_future.result().result
     assert not result.success
     assert result.code == HardwareUndock.Result.CANCELED
-    assert any(
-        line.startswith('UNDOCK_CANCEL:') for _session, line in fake.received)
+    assert any(line.startswith('UNDOCK_CANCEL:') for _session, line in fake.received)
 
 
 def test_hardware_undock_aborts_when_the_session_disappears(harness):
@@ -645,11 +677,9 @@ def test_hardware_undock_aborts_when_the_session_disappears(harness):
     assert result.code == HardwareUndock.Result.SESSION_CHANGED
 
 
-def test_hardware_undock_is_refused_by_a_server_without_the_feature(
-        harness_without_undock):
+def test_hardware_undock_is_refused_by_a_server_without_the_feature(harness_without_undock):
     fake, _bridge, client_node, _executor = harness_without_undock
-    client = ActionClient(
-        client_node, HardwareUndock, '/patrolbot/hardware_undock')
+    client = ActionClient(client_node, HardwareUndock, '/patrolbot/hardware_undock')
     assert client.wait_for_server(timeout_sec=2.0)
     goal = HardwareUndock.Goal()
     goal.clearance_distance = 0.53
@@ -660,8 +690,7 @@ def test_hardware_undock_is_refused_by_a_server_without_the_feature(
     # Fail closed at admission rather than sending a command that will never be
     # answered and then waiting out the whole timeout.
     assert not send_future.result().accepted
-    assert not any(
-        line.startswith('UNDOCK:') for _session, line in fake.received)
+    assert not any(line.startswith('UNDOCK:') for _session, line in fake.received)
 
 
 def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
@@ -680,10 +709,11 @@ def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
 
     seen = []
     client_node.create_subscription(
-        TFMessage, '/tf',
-        lambda msg: seen.extend(
-            t for t in msg.transforms if t.child_frame_id == 'base_link'),
-        10)
+        TFMessage,
+        '/tf',
+        lambda msg: seen.extend(t for t in msg.transforms if t.child_frame_id == 'base_link'),
+        10,
+    )
     assert wait_until(lambda: len(seen) > 0), 'no odom->base_link to begin with'
 
     # The SBC goes quiet with the socket still open. The last pose is now
@@ -692,7 +722,7 @@ def test_odom_tf_stops_rather_than_going_stale_when_the_link_dies(harness):
     timeout = bridge.get_parameter('odom_tf_timeout').value
     time.sleep(timeout + 0.3)
     settled = len(seen)
-    time.sleep(0.5)   # 25 TF ticks at 50 Hz
+    time.sleep(0.5)  # 25 TF ticks at 50 Hz
     assert len(seen) == settled, 'kept broadcasting a stale pose'
 
     # It must resume when telemetry does, rather than latching off for good.
@@ -717,16 +747,18 @@ def test_the_transform_leads_the_scan_out_of_a_telemetry_gap(harness):
 
     events = []
     client_node.create_subscription(
-        TFMessage, '/tf',
-        lambda msg: events.extend(
-            'tf' for t in msg.transforms if t.child_frame_id == 'base_link'),
-        50)
+        TFMessage,
+        '/tf',
+        lambda msg: events.extend('tf' for t in msg.transforms if t.child_frame_id == 'base_link'),
+        50,
+    )
     # /scan is published with sensor QoS; a default RELIABLE subscription is
     # silently incompatible and receives nothing.
     from rclpy.qos import qos_profile_sensor_data
+
     client_node.create_subscription(
-        LaserScan, '/scan', lambda _msg: events.append('scan'),
-        qos_profile_sensor_data)
+        LaserScan, '/scan', lambda _msg: events.append('scan'), qos_profile_sensor_data
+    )
     assert wait_until(lambda: 'tf' in events and 'scan' in events)
 
     fake.telemetry_paused = True
@@ -737,8 +769,7 @@ def test_the_transform_leads_the_scan_out_of_a_telemetry_gap(harness):
 
     fake.telemetry_paused = False
     assert wait_until(lambda: 'scan' in events), 'no scan after the gap'
-    assert events[0] == 'tf', (
-        f'first frame out of the gap was {events[0]!r}, not the transform')
+    assert events[0] == 'tf', f'first frame out of the gap was {events[0]!r}, not the transform'
 
 
 def test_odom_publishes_a_usable_covariance_not_a_block_of_zeros(harness):
@@ -756,8 +787,7 @@ def test_odom_publishes_a_usable_covariance_not_a_block_of_zeros(harness):
     from patrolbot_bridge.odom_covariance import UNOBSERVED_VARIANCE
 
     seen = []
-    client_node.create_subscription(
-        Odometry, '/odom', lambda msg: seen.append(msg), 10)
+    client_node.create_subscription(Odometry, '/odom', lambda msg: seen.append(msg), 10)
     assert wait_until(lambda: len(seen) > 0), 'no /odom at all'
 
     pose = list(seen[-1].pose.covariance)
@@ -769,11 +799,11 @@ def test_odom_publishes_a_usable_covariance_not_a_block_of_zeros(harness):
         assert pose[axis] > 0.0, f'pose diagonal {axis} still zero'
         assert twist[axis] > 0.0, f'twist diagonal {axis} still zero'
 
-    # z, roll and pitch are not measured by a planar base, and must say so.
+        # z, roll and pitch are not measured by a planar base, and must say so.
     for axis in (14, 21, 28):
         assert pose[axis] == UNOBSERVED_VARIANCE
 
-    # Nothing here estimates a cross-correlation, so none is claimed.
+        # Nothing here estimates a cross-correlation, so none is claimed.
     diagonal = {0, 7, 14, 21, 28, 35}
     assert all(pose[i] == 0.0 for i in range(36) if i not in diagonal)
 
@@ -790,8 +820,7 @@ def test_odom_pose_covariance_grows_as_the_robot_drives(harness):
     from nav_msgs.msg import Odometry
 
     seen = []
-    client_node.create_subscription(
-        Odometry, '/odom', lambda msg: seen.append(msg), 50)
+    client_node.create_subscription(Odometry, '/odom', lambda msg: seen.append(msg), 50)
     assert wait_until(lambda: len(seen) > 0)
     at_rest = seen[-1].pose.covariance[0]
 
@@ -801,8 +830,9 @@ def test_odom_pose_covariance_grows_as_the_robot_drives(harness):
         fake.odom_pose = (0.005 * step, 0.0, 0.0)
         time.sleep(0.05)
 
-    assert wait_until(lambda: seen[-1].pose.covariance[0] > at_rest), (
-        'covariance never grew despite 0.1 m of driving')
+    assert wait_until(
+        lambda: seen[-1].pose.covariance[0] > at_rest
+    ), 'covariance never grew despite 0.1 m of driving'
 
 
 def test_link_reconnect_preserves_odometry_covariance(harness):
@@ -811,8 +841,7 @@ def test_link_reconnect_preserves_odometry_covariance(harness):
     from nav_msgs.msg import Odometry
 
     seen = []
-    client_node.create_subscription(
-        Odometry, '/odom', lambda msg: seen.append(msg), 50)
+    client_node.create_subscription(Odometry, '/odom', lambda msg: seen.append(msg), 50)
     assert wait_until(lambda: len(seen) > 0)
     at_rest = seen[-1].pose.covariance[0]
     for step in range(1, 21):
@@ -825,8 +854,9 @@ def test_link_reconnect_preserves_odometry_covariance(harness):
     for _ in range(2):
         generation = bridge._session_generation
         fake.drop_connection()
-        assert wait_until(lambda: bridge._session_generation > generation,
-                          timeout=6.0), 'never reconnected'
+        assert wait_until(
+            lambda: bridge._session_generation > generation, timeout=6.0
+        ), 'never reconnected'
         # Require a newly accepted frame, not a queued pre-disconnect message.
         before = bridge._pose_at
         assert wait_until(lambda: bridge._pose_at > before)
@@ -834,18 +864,19 @@ def test_link_reconnect_preserves_odometry_covariance(harness):
             assert bridge._odom_covariance.pose_covariance() == driven
 
     fake.odom_pose = (0.11, 0.0, 0.0)
-    assert wait_until(lambda: seen[-1].pose.covariance[0] > driven[0]), (
-        'valid motion after reconnect did not accumulate covariance')
+    assert wait_until(
+        lambda: seen[-1].pose.covariance[0] > driven[0]
+    ), 'valid motion after reconnect did not accumulate covariance'
 
+    # ----------------------------------------------------------------------------
+    # Scan geometry. The SBC sends ranges only -- ARIA's per-reading angles never
+    # reach the wire -- so a beam's bearing is purely its index in the list, and
+    # `_laser_scan_message` reconstructs the sweep as angle_min = -pi/2 with
+    # angle_increment = pi/(N-1). N is therefore not a count, it is the angular
+    # calibration: add or drop one element and every beam after it is reported at
+    # the wrong bearing, in a scan that still looks entirely plausible in RViz.
+    # ----------------------------------------------------------------------------
 
-# ----------------------------------------------------------------------------
-# Scan geometry. The SBC sends ranges only -- ARIA's per-reading angles never
-# reach the wire -- so a beam's bearing is purely its index in the list, and
-# `_laser_scan_message` reconstructs the sweep as angle_min = -pi/2 with
-# angle_increment = pi/(N-1). N is therefore not a count, it is the angular
-# calibration: add or drop one element and every beam after it is reported at
-# the wrong bearing, in a scan that still looks entirely plausible in RViz.
-# ----------------------------------------------------------------------------
 
 def _scan_from(seen, field_count, second_range):
     """
@@ -858,14 +889,15 @@ def _scan_from(seen, field_count, second_range):
     bridge drops the bad element and publishes N-1 beams, and this has to fail
     on the assertions below rather than hang here.
     """
+
     def matches(msg):
         if len(msg.ranges) not in (field_count - 1, field_count):
             return False
-        return (len(msg.ranges) > 1 and
-                msg.ranges[1] == pytest.approx(second_range))
+        return len(msg.ranges) > 1 and msg.ranges[1] == pytest.approx(second_range)
 
-    assert wait_until(lambda: any(matches(m) for m in seen)), (
-        'no scan was produced from the installed LASER: field')
+    assert wait_until(
+        lambda: any(matches(m) for m in seen)
+    ), 'no scan was produced from the installed LASER: field'
     return next(m for m in seen if matches(m))
 
 
@@ -875,8 +907,8 @@ def _subscribe_to_scan(client_node):
 
     seen = []
     client_node.create_subscription(
-        LaserScan, '/scan', lambda msg: seen.append(msg),
-        qos_profile_sensor_data)
+        LaserScan, '/scan', lambda msg: seen.append(msg), qos_profile_sensor_data
+    )
     return seen
 
 
@@ -900,13 +932,15 @@ def test_an_unparsable_range_does_not_rotate_the_rest_of_the_scan(harness):
     scan = _scan_from(seen, field_count=4, second_range=float('inf'))
 
     assert len(scan.ranges) == 4, (
-        f'published {len(scan.ranges)} beams for 4 fields -- the unparsable '
+        f'published {len(scan .ranges)} beams for 4 fields -- the unparsable '
         'one was dropped rather than marked invalid, so every beam after it '
-        'is now reported at the wrong bearing')
+        'is now reported at the wrong bearing'
+    )
     assert scan.angle_increment == pytest.approx(math.pi / 3.0)
     assert math.isinf(scan.ranges[1])
-    assert scan.ranges[2] == pytest.approx(3.0), (
-        'the beam after the bad field shifted into the wrong slot')
+    assert scan.ranges[2] == pytest.approx(
+        3.0
+    ), 'the beam after the bad field shifted into the wrong slot'
     assert scan.ranges[3] == pytest.approx(4.0)
 
 
@@ -926,8 +960,9 @@ def test_a_blank_field_inside_the_sweep_also_keeps_its_slot(harness):
     scan = _scan_from(seen, field_count=4, second_range=float('inf'))
 
     assert len(scan.ranges) == 4, (
-        f'published {len(scan.ranges)} beams for 4 fields -- the blank one '
-        'was dropped, re-aiming every beam after it')
+        f'published {len(scan .ranges)} beams for 4 fields -- the blank one '
+        'was dropped, re-aiming every beam after it'
+    )
     assert scan.angle_increment == pytest.approx(math.pi / 3.0)
     assert math.isinf(scan.ranges[1])
     assert scan.ranges[2] == pytest.approx(3.0)
@@ -956,8 +991,9 @@ def test_the_servers_trailing_comma_does_not_add_a_phantom_beam(harness):
     scan = _scan_from(seen, field_count=4, second_range=2.0)
 
     assert len(scan.ranges) == 3, (
-        f'published {len(scan.ranges)} beams for 3 readings plus the '
-        "server's trailing comma -- the terminator was counted as a beam")
+        f'published {len(scan .ranges)} beams for 3 readings plus the '
+        "server's trailing comma -- the terminator was counted as a beam"
+    )
     assert scan.angle_increment == pytest.approx(math.pi / 2.0)
     assert scan.ranges == pytest.approx([1.0, 2.0, 3.0])
 
@@ -984,8 +1020,7 @@ def test_a_one_beam_frame_is_dropped_without_disturbing_the_stream(harness):
     fake, _bridge, client_node, _executor = harness
     seen = _subscribe_to_scan(client_node)
     odom_seen = []
-    client_node.create_subscription(
-        Odometry, '/odom', lambda msg: odom_seen.append(msg), 50)
+    client_node.create_subscription(Odometry, '/odom', lambda msg: odom_seen.append(msg), 50)
     assert wait_until(lambda: len(seen) > 0), 'no scan on a clean stream'
 
     # One reading plus the server's terminator: N == 1 after the terminator is
@@ -996,10 +1031,11 @@ def test_a_one_beam_frame_is_dropped_without_disturbing_the_stream(harness):
 
     assert wait_until(lambda: len(odom_seen) > 2), (
         'odometry stopped while the laser field was degenerate -- a bad scan '
-        'must not take the pose stream down with it')
+        'must not take the pose stream down with it'
+    )
     assert all(len(msg.ranges) >= 2 for msg in seen), (
-        'published a scan with fewer than two beams, which has no valid '
-        'angle_increment')
+        'published a scan with fewer than two beams, which has no valid ' 'angle_increment'
+    )
 
     # The next good frame must come straight back.
     fake.laser_field = '1.0,2.0,3.0,'
@@ -1008,33 +1044,39 @@ def test_a_one_beam_frame_is_dropped_without_disturbing_the_stream(harness):
     assert scan.angle_increment == pytest.approx(math.pi / 2.0)
 
 
-@pytest.mark.parametrize('odom,reason', [
-    ('nan,0,0,0,0', 'non-finite'),
-    ('0,0,0,inf,0', 'non-finite'),
-    ('0,0,0,0.31,0', 'linear-speed-limit'),
-    ('0,0,0,0,1.21', 'angular-speed-limit'),
-    ('100,0,0,0,0', 'position-discontinuity'),
-    ('0,0,3.0,0,0', 'heading-discontinuity'),
-])
-def test_invalid_odometry_cannot_refresh_pose_and_valid_stream_recovers(
-        harness, odom, reason):
+@pytest.mark.parametrize(
+    'odom,reason',
+    [
+        ('nan,0,0,0,0', 'non-finite'),
+        ('0,0,0,inf,0', 'non-finite'),
+        ('0,0,0,0.31,0', 'linear-speed-limit'),
+        ('0,0,0,0,1.21', 'angular-speed-limit'),
+        ('100,0,0,0,0', 'position-discontinuity'),
+        ('0,0,3.0,0,0', 'heading-discontinuity'),
+    ],
+)
+def test_invalid_odometry_cannot_refresh_pose_and_valid_stream_recovers(harness, odom, reason):
     fake, bridge, _client_node, _executor = harness
     assert wait_until(lambda: bridge._pose_at > 0)
     fake.telemetry_paused = True
     time.sleep(0.2)
     before = bridge._pose_at
-    bridge._parse_telemetry(
-        'ODOM:' + odom + '|LASER:1,1,1|ODOM_EPOCH:' + fake.odom_epoch)
+    bridge._parse_telemetry('ODOM:' + odom + '|LASER:1,1,1|ODOM_EPOCH:' + fake.odom_epoch)
     assert bridge._odom_rejections.get(reason, 0) >= 1
     assert bridge._pose_at == before
     fake.telemetry_paused = False
     assert wait_until(lambda: bridge._pose_at > before)
 
 
-@pytest.mark.parametrize('metadata', [
-    'LASER_AGE_MS:-1', 'LASER_AGE_MS:501', 'LASER_AGE_MS:nan',
-    'LASER_AGE_MS:1|LASER_AGE_MS:2',
-])
+@pytest.mark.parametrize(
+    'metadata',
+    [
+        'LASER_AGE_MS:-1',
+        'LASER_AGE_MS:501',
+        'LASER_AGE_MS:nan',
+        'LASER_AGE_MS:1|LASER_AGE_MS:2',
+    ],
+)
 def test_invalid_scan_age_drops_only_scan_and_recovers(harness, metadata):
     fake, bridge, _client, _executor = harness
     assert wait_until(lambda: bridge._pose_at > 0)
@@ -1044,16 +1086,20 @@ def test_invalid_scan_age_drops_only_scan_and_recovers(harness, metadata):
     original = bridge._publish_with_timing
     bridge._publish_with_timing = lambda pub, msg, topic: published.append((topic, msg))
     try:
-        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|' + metadata +
-            '|ODOM_EPOCH:' + fake.odom_epoch)
+        bridge._parse_telemetry(
+            'ODOM:0,0,0,0,0|LASER:1,2,3,|' + metadata + '|ODOM_EPOCH:' + fake.odom_epoch
+        )
         assert [topic for topic, _ in published] == ['/odom']
         published.clear()
-        bridge._parse_telemetry('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' +
-            '|ODOM_EPOCH:' + fake.odom_epoch)
+        bridge._parse_telemetry(
+            'ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' + '|ODOM_EPOCH:' + fake.odom_epoch
+        )
         assert [topic for topic, _ in published] == ['/odom', '/scan']
         odom, scan = [msg for _, msg in published]
+
         def ns(msg):
             return msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
+
         assert 120000000 <= ns(odom) - ns(scan) < 140000000
         assert list(scan.ranges) == [1, 2, 3]
     finally:
@@ -1072,27 +1118,28 @@ def test_scan_age_includes_local_queue_wait(harness):
     original = bridge._publish_with_timing
     bridge._publish_with_timing = lambda pub, msg, topic: published.append((topic, msg))
     try:
-        line = ('ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' +
-                '|ODOM_EPOCH:' + fake.odom_epoch)
+        line = 'ODOM:0,0,0,0,0|LASER:1,2,3,|LASER_AGE_MS:120' + '|ODOM_EPOCH:' + fake.odom_epoch
         clock = bridge.get_clock()
         receipt_clock = clock.now()
-        received_at = time.monotonic() - .1
+        received_at = time.monotonic() - 0.1
         earliest_queue_age = time.monotonic() - received_at
         with patch.object(clock, 'now', return_value=receipt_clock):
             bridge._parse_telemetry(line, received_at=received_at)
         latest_queue_age = time.monotonic() - received_at
         odom, scan = [msg for _, msg in published]
+
         def ns(msg):
             return msg.header.stamp.sec * 1000000000 + msg.header.stamp.nanosec
-        # Queue delay ages both stamps; acquisition age separates them.
+            # Queue delay ages both stamps; acquisition age separates them.
+
         assert ns(odom) - ns(scan) == 120000000
         odom_age = receipt_clock.nanoseconds - ns(odom)
         assert int(earliest_queue_age * 1e9) <= odom_age <= int(latest_queue_age * 1e9)
         assert receipt_clock.nanoseconds - ns(scan) == odom_age + 120000000
         # The next delayed frame must still have a newer network receipt.
-        time.sleep(.31)
+        time.sleep(0.31)
         published.clear()
-        bridge._parse_telemetry(line, received_at=time.monotonic() - .4)
+        bridge._parse_telemetry(line, received_at=time.monotonic() - 0.4)
         assert [topic for topic, _ in published] == ['/odom']
     finally:
         bridge._publish_with_timing = original
@@ -1107,10 +1154,11 @@ def test_explicit_origin_change_holds_commands_until_new_seed(harness):
     old_epoch = fake.odom_epoch
     with bridge._epoch.lock:
         bridge._odom_covariance.update(0.0, 0.0, 0.0)
-        bridge._odom_covariance.update(.1, 0.0, 0.0)
+        bridge._odom_covariance.update(0.1, 0.0, 0.0)
         before = bridge._odom_covariance.pose_covariance()[0]
-    with patch.object(bridge._odom_covariance, 'reset',
-                      wraps=bridge._odom_covariance.reset) as reset:
+    with patch.object(
+        bridge._odom_covariance, 'reset', wraps=bridge._odom_covariance.reset
+    ) as reset:
         with fake._lock:
             fake.odom_epoch = str(uuid4())
         fake.drop_connection()
@@ -1120,21 +1168,22 @@ def test_explicit_origin_change_holds_commands_until_new_seed(harness):
         assert bridge._odom_covariance.pose_covariance()[0] < before
         assert reset.call_count == 1
         fake.telemetry_paused = True
-        time.sleep(.1)
+        time.sleep(0.1)
         previous = bridge._pose_at
         bridge._parse_telemetry(
-            'ODOM:0,0,0,0,0|LASER:1,1|ODOM_EPOCH:' + old_epoch,
-            session=old_session)
+            'ODOM:0,0,0,0,0|LASER:1,1|ODOM_EPOCH:' + old_epoch, session=old_session
+        )
         assert bridge._pose_at == previous
         command = Twist()
-        command.linear.x = .05
+        command.linear.x = 0.05
         with fake._lock:
             command_count = len(fake.received)
         bridge.cmd_vel_callback(command)
-        time.sleep(.05)
+        time.sleep(0.05)
         with fake._lock:
-            assert not any(line.startswith('DRIVE:0.05:')
-                           for _, line in fake.received[command_count:])
+            assert not any(
+                line.startswith('DRIVE:0.05:') for _, line in fake.received[command_count:]
+            )
         fake.telemetry_paused = False
         seed_harness(bridge, client)
         assert reset.call_count == 1
@@ -1152,15 +1201,14 @@ def test_close_dock_returns_survive_without_changing_bearings(harness):
     assert len(scan.ranges) == 10
     assert scan.range_min == pytest.approx(0.10)
     assert scan.angle_increment == pytest.approx(math.pi / 9)
-    assert list(scan.ranges[1:6]) == pytest.approx(
-        [0.124, 0.15, 0.249, 0.25, 0.1])
+    assert list(scan.ranges[1:6]) == pytest.approx([0.124, 0.15, 0.249, 0.25, 0.1])
     assert all(math.isinf(scan.ranges[i]) for i in [0, 6, 7, 8, 9])
 
 
 def test_lidar_power_roundtrip_keeps_odometry_and_requires_fresh_pose(harness):
     fake, bridge, client_node, _ = harness
     client = client_node.create_client(SetLidarPower, '/patrolbot/set_lidar_power')
-    assert client.wait_for_service(timeout_sec=2.)
+    assert client.wait_for_service(timeout_sec=2.0)
     seen = []
     subscription = client_node.create_subscription(Odometry, '/odom', seen.append, 10)
     assert wait_until(lambda: bridge._epoch._navigation_idle_at is not None)
@@ -1172,14 +1220,17 @@ def test_lidar_power_roundtrip_keeps_odometry_and_requires_fresh_pose(harness):
     assert wait_until(lambda: len(seen) > before + 3)
     assert not bridge._epoch.commands_allowed
     old_seed = bridge._epoch.recovery._seed_ns
-    initial = PoseWithCovarianceStamped(); initial.header.frame_id = 'map'
+    initial = PoseWithCovarianceStamped()
+    initial.header.frame_id = 'map'
     initial.header.stamp = client_node.get_clock().now().to_msg()
-    initial.pose.pose.orientation.w = 1.
-    for index in (0, 7, 35): initial.pose.covariance[index] = .1
+    initial.pose.pose.orientation.w = 1.0
+    for index in (0, 7, 35):
+        initial.pose.covariance[index] = 0.1
     bridge._epoch.seed(initial)
     assert bridge._epoch.recovery._seed_ns == old_seed
     request_count = len(fake.received)
-    velocity = Twist(); velocity.linear.x = .1
+    velocity = Twist()
+    velocity.linear.x = 0.1
     bridge.cmd_vel_callback(velocity)
     assert not any(line.startswith('DRIVE:0.1:') for _, line in fake.received[request_count:])
     on = client.call_async(SetLidarPower.Request(request_id=str(uuid4()), enabled=True))
@@ -1198,7 +1249,7 @@ def test_ready_scans_without_power_commissioning_do_not_advertise_control(harnes
     assert wait_until(lambda: not bridge._lidar.snapshot(time.monotonic())[1])
     assert bridge._lidar_ready()
     client = client_node.create_client(SetLidarPower, '/patrolbot/set_lidar_power')
-    assert client.wait_for_service(timeout_sec=2.)
+    assert client.wait_for_service(timeout_sec=2.0)
     before = len(fake.received)
     future = client.call_async(SetLidarPower.Request(request_id=str(uuid4()), enabled=False))
     assert wait_until(future.done)

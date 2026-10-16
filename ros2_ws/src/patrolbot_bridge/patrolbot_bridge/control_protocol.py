@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
-
 COMMAND_CHARGE_RELEASE = 'CHARGE_RELEASE'
 COMMAND_MOTOR_ENABLE = 'MOTOR_ENABLE'
 COMMAND_MOTOR_DISABLE = 'MOTOR_DISABLE'
@@ -16,15 +15,29 @@ COMMAND_DOCK_RESET = 'DOCK_RESET'
 # terminal frames live in undock_protocol.
 COMMAND_UNDOCK = 'UNDOCK'
 COMMAND_UNDOCK_CANCEL = 'UNDOCK_CANCEL'
-COMMANDS = frozenset((
-    COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE, COMMAND_MOTOR_DISABLE, COMMAND_DOCK_RESET,
-    COMMAND_UNDOCK, COMMAND_UNDOCK_CANCEL, COMMAND_LIDAR_ON, COMMAND_LIDAR_OFF,
-))
+COMMANDS = frozenset(
+    (
+        COMMAND_CHARGE_RELEASE,
+        COMMAND_MOTOR_ENABLE,
+        COMMAND_MOTOR_DISABLE,
+        COMMAND_DOCK_RESET,
+        COMMAND_UNDOCK,
+        COMMAND_UNDOCK_CANCEL,
+        COMMAND_LIDAR_ON,
+        COMMAND_LIDAR_OFF,
+    )
+)
 # Commands whose payload is a bare request id.
-SIMPLE_COMMANDS = frozenset((
-    COMMAND_CHARGE_RELEASE, COMMAND_MOTOR_ENABLE, COMMAND_MOTOR_DISABLE, COMMAND_DOCK_RESET,
-    COMMAND_LIDAR_ON, COMMAND_LIDAR_OFF,
-))
+SIMPLE_COMMANDS = frozenset(
+    (
+        COMMAND_CHARGE_RELEASE,
+        COMMAND_MOTOR_ENABLE,
+        COMMAND_MOTOR_DISABLE,
+        COMMAND_DOCK_RESET,
+        COMMAND_LIDAR_ON,
+        COMMAND_LIDAR_OFF,
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -79,8 +92,12 @@ def parse_reply(line: str) -> Optional[ControlReply]:
         if status not in ('ACCEPTED', 'REPLAYED'):
             raise ValueError('invalid ACK status')
         return ControlReply(
-            kind='ACK', command=command, request_id=request_id,
-            accepted=True, message=status.lower())
+            kind='ACK',
+            command=command,
+            request_id=request_id,
+            accepted=True,
+            message=status.lower(),
+        )
 
     if len(fields) != 9:
         raise ValueError('malformed RESULT')
@@ -97,7 +114,14 @@ def parse_reply(line: str) -> Optional[ControlReply]:
     except ValueError as exc:
         raise ValueError('non-numeric RESULT state') from exc
     return ControlReply(
-        kind='RESULT', command=command, request_id=request_id,
-        accepted=True, success=status == 'OK', code=code_value,
-        message=message.replace('_', ' '), charge_state=charge_value,
-        motors_enabled=motor_value, estop_pressed=estop_value)
+        kind='RESULT',
+        command=command,
+        request_id=request_id,
+        accepted=True,
+        success=status == 'OK',
+        code=code_value,
+        message=message.replace('_', ' '),
+        charge_state=charge_value,
+        motors_enabled=motor_value,
+        estop_pressed=estop_value,
+    )

@@ -1,9 +1,11 @@
-"""Fail-closed map-localization ordering, owned by EpochRuntime.
+"""
+Fail-closed map-localization ordering, owned by EpochRuntime.
 
 All acknowledgements are scoped to one request and origin/transport generation.
 A failed transaction remains held even if a late success arrives. This policy
 never publishes velocity, seeds, changes lifecycle state, or guesses rollback.
 """
+
 from dataclasses import dataclass
 import math
 from uuid import UUID
@@ -18,9 +20,20 @@ class MapToken:
 
 
 class MapTransaction:
-    STAGES = ('hold', 'pause-navigation', 'reset-amcl', 'load-map',
-              'verify-map', 'persist-map', 'wait-tf', 'seed',
-              'wait-localization', 'refresh-costmaps', 'verify-costmaps', 'ready')
+    STAGES = (
+        'hold',
+        'pause-navigation',
+        'reset-amcl',
+        'load-map',
+        'verify-map',
+        'persist-map',
+        'wait-tf',
+        'seed',
+        'wait-localization',
+        'refresh-costmaps',
+        'verify-costmaps',
+        'ready',
+    )
 
     def __init__(self, catalog):
         self.catalog = catalog
@@ -35,8 +48,22 @@ class MapTransaction:
         self.seed_stamp = None
         self._seen = set()
 
-    def begin(self, request_id, map_id, revision, pose, authorized, origin, session,
-              telemetry_age, linear, angular, navigation, undock, hardware_busy):
+    def begin(
+        self,
+        request_id,
+        map_id,
+        revision,
+        pose,
+        authorized,
+        origin,
+        session,
+        telemetry_age,
+        linear,
+        angular,
+        navigation,
+        undock,
+        hardware_busy,
+    ):
         try:
             if str(UUID(request_id)) != request_id:
                 raise ValueError()
@@ -48,7 +75,7 @@ class MapTransaction:
             raise ValueError('map recovery busy or request already consumed')
         if origin is None or not all(math.isfinite(v) for v in (telemetry_age, linear, angular)):
             raise ValueError('base telemetry unavailable')
-        if not 0 <= telemetry_age <= .5 or abs(linear) > .005 or abs(angular) > .01:
+        if not 0 <= telemetry_age <= 0.5 or abs(linear) > 0.005 or abs(angular) > 0.01:
             raise ValueError('fresh stationary telemetry required')
         if navigation or undock or hardware_busy:
             raise ValueError('another operation owns the robot')
@@ -67,7 +94,11 @@ class MapTransaction:
         return self.token
 
     def advance(self, token, completed):
-        if token != self.token or completed != self.stage or self.stage in ('failed', 'ready', 'idle'):
+        if (
+            token != self.token
+            or completed != self.stage
+            or self.stage in ('failed', 'ready', 'idle')
+        ):
             return False
         if completed == 'verify-map':
             self.active = self.target

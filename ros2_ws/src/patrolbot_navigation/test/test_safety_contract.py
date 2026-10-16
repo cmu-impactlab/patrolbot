@@ -496,17 +496,35 @@ class SafetyContractTest(unittest.TestCase):
 
     def test_dock_manager_never_publishes_velocity_directly(self):
         manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')
-        self.assertNotIn('create_publisher(Twist', manager_text)
-        self.assertNotIn('create_publisher(\n            Twist', manager_text)
+        tree = ast.parse(manager_text)
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        # Inspect the calls, not their whitespace: formatting must not weaken
+        # the no-direct-velocity-publisher or SBC-delegation contracts.
+        self.assertFalse(any(
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == 'create_publisher'
+            and call.args and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == 'Twist'
+            for call in calls))
         self.assertNotIn("'/cmd_vel'", manager_text.split(
             'def _refresh_command_path', 1)[0])
         # Contact separation is delegated to the SBC, not driven from here.
-        self.assertIn(
-            "ActionClient(\n            self, HardwareUndock, "
-            "'/patrolbot/hardware_undock'", manager_text)
+        self.assertTrue(any(
+            isinstance(call.func, ast.Name) and call.func.id == 'ActionClient'
+            and len(call.args) >= 3
+            and isinstance(call.args[1], ast.Name)
+            and call.args[1].id == 'HardwareUndock'
+            and isinstance(call.args[2], ast.Constant)
+            and call.args[2].value == '/patrolbot/hardware_undock'
+            for call in calls))
         # Foreign BackUp goals are still watched for, so a stray Nav2 recovery
         # counts as another action being active.
-        self.assertIn("'assisted_teleop', 'backup'", manager_text)
+        self.assertTrue(any(
+            isinstance(node, (ast.List, ast.Tuple))
+            and {'assisted_teleop', 'backup'} <= {
+                item.value for item in node.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)}
+            for node in ast.walk(tree)))
 
     def test_runtime_command_path_contract_covers_every_stage(self):
         manager_text = DOCK_MANAGER_FILE.read_text(encoding='utf-8')

@@ -12,14 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ament_flake8.main import main_with_errors
+from configparser import ConfigParser
+from pathlib import Path
+
+import ament_flake8.main
 import pytest
 
 
 @pytest.mark.flake8
 @pytest.mark.linter
-def test_flake8():
-    rc, errors = main_with_errors(argv=[])
-    assert rc == 0, \
-        'Found %d code style errors / warnings:\n' % len(errors) + \
-        '\n'.join(errors)
+def test_flake8(tmp_path):
+    # ROS tests leave DDS threads loaded in this process; do not fork workers.
+    config = ConfigParser()
+    defaults = Path(ament_flake8.main.__file__).parent / 'configuration' / 'ament_flake8.ini'
+    assert config.read(defaults), 'ROS lint configuration must be present'
+    config['flake8']['jobs'] = '1'
+    path = tmp_path / 'flake8.ini'
+    with path.open('w') as stream:
+        config.write(stream)
+    rc, errors = ament_flake8.main.main_with_errors(argv=['--config', str(path)])
+    assert rc == 0, 'Found %d code style errors / warnings:\n' % len(errors) + '\n'.join(errors)

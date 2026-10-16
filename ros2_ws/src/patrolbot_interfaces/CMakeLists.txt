@@ -12,11 +12,9 @@ find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BaseState.msg"
-  "msg/NavigationPath.msg"
   "msg/DockReadiness.msg"
   "msg/GimbalCommand.msg"
   "msg/GimbalState.msg"
-  "srv/GetNavigationPath.srv"
   "srv/ChargeRelease.srv"
   "srv/DockReset.srv"
   "srv/InitializeDockPose.srv"

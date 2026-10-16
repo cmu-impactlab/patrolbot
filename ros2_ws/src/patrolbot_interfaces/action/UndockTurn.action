@@ -1,0 +1,20 @@
+# Consume the one-shot handoff from this successful HardwareUndock goal.
+# The bridge owns the fixed, collision-checked 180 degree Nav2 Spin.
+unique_identifier_msgs/UUID hardware_goal_id
+uint64 session_generation
+# Requested turn magnitude in radians. 0 < target_yaw <= pi; anything
+# larger is refused as configuration error, not clamped.
+float32 target_yaw
+---
+uint16 OK=0
+uint16 REJECTED=1
+uint16 SAFETY_FAULT=2
+uint16 MOTION_FAILED=3
+uint16 CANCELED=4
+uint16 TIMEOUT=5
+bool success
+uint16 code
+string message
+float32 radians_traveled
+---
+float32 radians_traveled

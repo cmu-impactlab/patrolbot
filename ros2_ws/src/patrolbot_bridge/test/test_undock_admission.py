@@ -32,7 +32,13 @@ def bridge():
         _state_lock=threading.Lock(), _undock_goal_lock=threading.Lock(),
         _link_connected=True, _server_hello=NS(supports_undock=lambda: True),
         _lidar_ready=Mock(return_value=True), _undock_goal_reserved=False,
+        _undock_turn=NS(reserve_reverse=Mock(return_value=True)),
         get_logger=Mock(return_value=Mock()), sock=Mock())
+
+
+def _request():
+    return NS(clearance_distance=0.53, reverse_speed=0.1,
+              maximum_duration=30.0, validation_mode=False)
 
 
 @pytest.mark.parametrize('condition', ['epoch_down', 'lidar_down', 'both_down'])
@@ -46,10 +52,19 @@ def test_epoch_and_lidar_state_do_not_gate_undock_admission(
         bridge._epoch.commands_allowed = False
     if condition in ('lidar_down', 'both_down'):
         bridge._lidar_ready.return_value = False
-    request = NS(clearance_distance=0.53, reverse_speed=0.1, maximum_duration=30.0)
+    request = _request()
     assert admission(bridge, request) == 'accept'
     assert bridge._undock_goal_reserved
     bridge.get_logger().error.assert_not_called()
+    bridge.sock.sendall.assert_not_called()
+
+
+def test_turn_reserve_refusal_rejects_silently_without_reserving(
+        admission, bridge):
+    bridge._undock_turn.reserve_reverse.return_value = False
+    assert admission(bridge, _request()) == 'reject'
+    bridge.get_logger().error.assert_not_called()
+    assert not bridge._undock_goal_reserved
     bridge.sock.sendall.assert_not_called()
 
 
@@ -63,10 +78,9 @@ def test_transport_and_identity_gates_still_refuse(
         admission, bridge, setup, expected):
     if setup == 'bad_params':
         request = NS(clearance_distance=float('nan'), reverse_speed=0.1,
-                     maximum_duration=30.0)
+                     maximum_duration=30.0, validation_mode=False)
     else:
-        request = NS(clearance_distance=0.53, reverse_speed=0.1,
-                     maximum_duration=30.0)
+        request = _request()
     reserved_before = bridge._undock_goal_reserved
     if setup == 'no_link':
         bridge._link_connected = False
@@ -83,8 +97,7 @@ def test_transport_and_identity_gates_still_refuse(
 
 
 def test_healthy_admission_still_reserves_without_sending(admission, bridge):
-    request = NS(clearance_distance=0.53, reverse_speed=0.1, maximum_duration=30.0)
-    assert admission(bridge, request) == 'accept'
+    assert admission(bridge, _request()) == 'accept'
     assert bridge._undock_goal_reserved
     bridge.get_logger().error.assert_not_called()
     bridge.sock.sendall.assert_not_called()

@@ -35,19 +35,50 @@ def bridge():
         get_logger=Mock(return_value=Mock()), sock=Mock())
 
 
-@pytest.mark.parametrize('gate,expected', [
-    ('epoch', 'Hardware undock rejected: epoch commands_allowed=False.'),
-    ('lidar', 'Hardware undock rejected: lidar_not_ready.'),
-])
-def test_rejection_names_gate_without_reserving_or_sending(admission, bridge, gate, expected):
-    if gate == 'epoch':
+@pytest.mark.parametrize('condition', ['epoch_down', 'lidar_down', 'both_down'])
+def test_epoch_and_lidar_state_do_not_gate_undock_admission(
+        admission, bridge, condition):
+    """Authorized 2026-10-16: admission lives at the dock manager (E-stop
+    plus charging) and the SBC. Epoch recovery, TF/nav readiness and scan
+    freshness must not refuse an undock goal here; post-reverse motion
+    stays gated elsewhere."""
+    if condition in ('epoch_down', 'both_down'):
         bridge._epoch.commands_allowed = False
-    else:
+    if condition in ('lidar_down', 'both_down'):
         bridge._lidar_ready.return_value = False
     request = NS(clearance_distance=0.53, reverse_speed=0.1, maximum_duration=30.0)
+    assert admission(bridge, request) == 'accept'
+    assert bridge._undock_goal_reserved
+    bridge.get_logger().error.assert_not_called()
+    bridge.sock.sendall.assert_not_called()
+
+
+@pytest.mark.parametrize('setup,expected', [
+    ('bad_params', 'must be finite and positive'),
+    ('no_link', 'no SBC link'),
+    ('no_features', 'FEATURES=UNDOCK'),
+    ('reserved', 'another goal is active'),
+])
+def test_transport_and_identity_gates_still_refuse(
+        admission, bridge, setup, expected):
+    if setup == 'bad_params':
+        request = NS(clearance_distance=float('nan'), reverse_speed=0.1,
+                     maximum_duration=30.0)
+    else:
+        request = NS(clearance_distance=0.53, reverse_speed=0.1,
+                     maximum_duration=30.0)
+    reserved_before = bridge._undock_goal_reserved
+    if setup == 'no_link':
+        bridge._link_connected = False
+    elif setup == 'no_features':
+        bridge._server_hello = NS(supports_undock=lambda: False)
+    elif setup == 'reserved':
+        bridge._undock_goal_reserved = True
+        reserved_before = True
     assert admission(bridge, request) == 'reject'
-    bridge.get_logger().error.assert_called_once_with(expected)
-    assert not bridge._undock_goal_reserved
+    bridge.get_logger().error.assert_called_once()
+    assert expected in bridge.get_logger().error.call_args.args[0]
+    assert bridge._undock_goal_reserved == reserved_before
     bridge.sock.sendall.assert_not_called()
 
 

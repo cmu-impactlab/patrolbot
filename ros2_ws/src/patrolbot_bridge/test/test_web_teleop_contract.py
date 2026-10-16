@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Pin the cross-repo dashboard-teleop interface (contracts/web-teleop.json).
+"""
+Pin the cross-repo dashboard-teleop interface (contracts/web-teleop.json).
 
 The canonical contract lives in this repo; patrolbot-dashboard vendors an
 identical copy and its CI compares the two byte for byte. This test keeps the

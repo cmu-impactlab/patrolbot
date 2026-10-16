@@ -32,6 +32,12 @@ def manager_class():
         return NS(Result=NS(**codes), Goal=NS)
 
     namespace = {'Undock': action('Undock'), 'HardwareUndock': action('HardwareUndock'),
+                 # action_msgs/msg/GoalStatus is not in this repo; values mirror
+                 # the interface definition (note SUCCEEDED=5, CANCELED=4).
+                 'GoalStatus': NS(STATUS_UNKNOWN=0, STATUS_ACCEPTED=1,
+                                  STATUS_EXECUTING=2, STATUS_CANCELING=3,
+                                  STATUS_CANCELED=4, STATUS_SUCCEEDED=5,
+                                  STATUS_ABORTED=6),
                  'time': time, 'uuid4': lambda: 'offline-test'}
     exec(compile(ast.Module(body=[manager], type_ignores=[]), str(source), 'exec'),
          namespace)
@@ -80,6 +86,25 @@ def test_terminal_motion_failure_is_not_reclassified(manager):
     # HardwareUndock.MOTION_FAILED=10 maps to Undock.MOTION_FAILED=8.
     assert manager._undock_result_code(
         NS(is_cancel_requested=False), NS(code=10), 'hardware undock goal rejected') == 8
+
+
+def test_success_flag_on_a_nonterminal_action_is_not_trusted(manager):
+    """A stale success riding on an aborted action proves nothing (2026-10-16)."""
+    accepted = Mock(accepted=True)
+    result_future = Mock()
+    result_future.done.return_value = True
+    stale = NS(success=True, code=0, message='stale success',
+               distance_traveled=0.0, release_attempts=0)
+    result_future.result.return_value = NS(status=6, result=stale)
+    accepted.get_result_async.return_value = result_future
+    client = manager._hardware_undock_client
+    client.send_goal_async.return_value.result.return_value = accepted
+    goal = NS(is_cancel_requested=False, request=NS(validation_mode=False))
+    ok, reason, result = manager._run_hardware_undock(goal, 'offline-test')
+    assert not ok
+    assert reason == 'hardware undock action did not succeed'
+    assert result is stale
+    assert manager._undock_result_code(goal, result, reason) == 8
 
 
 def test_execute_relays_rejection_code_and_preserves_manual_recovery(manager):

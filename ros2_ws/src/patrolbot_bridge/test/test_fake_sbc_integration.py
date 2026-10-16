@@ -13,6 +13,7 @@ from nav2_msgs.srv import ManageLifecycleNodes
 from nav_msgs.msg import Odometry
 from nav_msgs.srv import GetMap
 from patrolbot_bridge.bridge_node import PatrolBotBridge
+from patrolbot_bridge.manual_active import MANUAL_ACTIVE_TIMEOUT
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.srv import ChargeRelease, MotorEnable, SetLidarPower
 import pytest
@@ -21,6 +22,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 pytestmark = pytest.mark.skipif(
@@ -563,6 +565,49 @@ def test_velocity_is_not_replayed_after_hardware_reconnect(harness):
         session == second_connection and line.startswith('DRIVE:')
         for session, line in fake.received
     )
+
+
+def test_manual_deadman_admits_drive_on_the_wire_while_localization_is_held(harness):
+    """
+    Exercise the extra-return regression end to end.
+
+    The deployed generation admitted a manual DRIVE during localization
+    recovery and then discarded it behind an unconditional return. Here the
+    epoch is genuinely held (a fresh seed is required again), the deadman
+    evidence arrives over ROS, and the exact DRIVE bytes must reach the SBC.
+    Evidence expiry must close the bypass again.
+    """
+    fake, bridge, client_node, _executor = harness
+    bridge._epoch.require_lidar_seed()
+    assert not bridge._epoch.commands_allowed
+    manual = client_node.create_publisher(Bool, '/patrolbot/manual_active', 10)
+    command = client_node.create_publisher(Twist, '/cmd_vel', 10)
+    assert wait_until(lambda: manual.get_subscription_count() >= 1)
+    assert wait_until(lambda: command.get_subscription_count() >= 1)
+
+    twist = Twist()
+    twist.linear.x = 0.05
+    command.publish(twist)
+    time.sleep(0.2)
+    assert not any(line == 'DRIVE:0.05:0.0' for _session, line in fake.received)
+
+    manual.publish(Bool(data=True))
+    assert wait_until(lambda: bridge._manual_active_at > 0.0)
+    command.publish(twist)
+    assert wait_until(
+        lambda: any(line == 'DRIVE:0.05:0.0' for _session, line in fake.received)
+    )
+
+    # Evidence expires on its own: release must stop admitting nonzero DRIVE.
+    time.sleep(MANUAL_ACTIVE_TIMEOUT + 0.1)
+    released = Twist()
+    released.linear.x = 0.06
+    command.publish(released)
+    time.sleep(0.2)
+    assert not any(line == 'DRIVE:0.06:0.0' for _session, line in fake.received)
+
+    client_node.destroy_publisher(manual)
+    client_node.destroy_publisher(command)
 
 
 def test_motor_enable_is_independent_of_dock_state(harness):

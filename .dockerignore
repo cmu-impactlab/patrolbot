@@ -16,6 +16,9 @@
 !docker/nav2-log-health.py
 !docker/capture-nav-goal.sh
 
+!contracts/
+!contracts/**
+
 !ros2_ws/
 !ros2_ws/src/
 !ros2_ws/src/patrolbot_bridge/

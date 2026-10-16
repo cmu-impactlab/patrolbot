@@ -40,10 +40,12 @@ CHARGE_RELEASE:request_uuid\n
 MOTOR_ENABLE:request_uuid\n
 ```
 Subscribed topics: `/cmd_vel` (`geometry_msgs/Twist`) — the command after Nav2,
-collision monitoring, `twist_mux`, and final velocity smoothing — and
-`/patrolbot/manual_active` (`std_msgs/Bool`) — fresh deadman evidence from the
-joystick teleop that admits nonzero `DRIVE` while localization (recovery
-stage, Nav2 readiness, AMCL pose freshness, map state) would hold autonomy.
+collision monitoring, `twist_mux`, and final velocity smoothing — and the two
+deadman-evidence topics, `/patrolbot/manual_active` (F710 joystick teleop) and
+`/patrolbot/web_teleop_active` (dashboard on-screen teleop, relayed by the Pi
+web bridge), `std_msgs/Bool` each. Fresh evidence from either admits nonzero
+`DRIVE` while localization (recovery stage, Nav2 readiness, AMCL pose
+freshness, map state) would hold autonomy.
 
 Services:
 

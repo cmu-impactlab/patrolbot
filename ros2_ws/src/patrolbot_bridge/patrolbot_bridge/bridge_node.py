@@ -111,6 +111,15 @@ class PatrolBotBridge(Node):
         self.manual_sub = self.create_subscription(
             Bool, '/patrolbot/manual_active', self._manual_active_cb, 10
         )
+        # Second deadman source: the dashboard on-screen teleop, relayed by
+        # the Pi web bridge. A separate topic keeps the two publishers from
+        # ever fighting over one Bool; the freshest of the two admits manual
+        # DRIVE, and the F710 still outranks the dashboard at the mux
+        # (input/joy 8 > input/teleop 7).
+        self._web_teleop_active_at = 0.0
+        self.web_teleop_sub = self.create_subscription(
+            Bool, '/patrolbot/web_teleop_active', self._web_teleop_active_cb, 10
+        )
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # Auxiliary telemetry (sonar / battery / diagnostics). Parsed from a separate
@@ -1783,6 +1792,10 @@ class PatrolBotBridge(Node):
         if bool(getattr(msg, 'data', False)):
             self._manual_active_at = time.monotonic()
 
+    def _web_teleop_active_cb(self, msg):
+        if bool(getattr(msg, 'data', False)):
+            self._web_teleop_active_at = time.monotonic()
+
     def _manual_drive_allowed(self):
         # Scoped bypass: fresh deadman evidence AND no in-flight/unknown
         # owner (callers hold the epoch lock, like _lidar_ready). Localization
@@ -1813,8 +1826,12 @@ class PatrolBotBridge(Node):
             or epoch._map_future is not None
             or (epoch._future is not None and epoch._future_kind != 'read-only')
         )
+        # Either human channel's fresh evidence counts; a channel that stops
+        # reporting simply ages out. F710-over-dashboard ordering is enforced
+        # by the mux priorities, not by this predicate.
+        evidence_at = max(self._manual_active_at, self._web_teleop_active_at)
         return manual_drive_bypass(
-            now - self._manual_active_at,
+            now - evidence_at,
             undock_hold=epoch.undock_hold,
             lidar_ready=self._lidar_ready(),
             guard_ready=epoch.guard.ready,

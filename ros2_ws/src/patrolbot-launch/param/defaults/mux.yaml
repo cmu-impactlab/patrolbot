@@ -12,9 +12,14 @@ cmd_vel_mux:             # Must match the 'name' in your launch file
         timeout: 0.25
         priority: 9
       teleop:
+        # Dashboard on-screen deadman teleop (patrolbot_web_bridge). Strictly
+        # below the F710 on input/joy (8) so the joystick always wins, and
+        # above navigation (5) so a held deadman outranks autonomy. The web
+        # bridge zeroes this input at its fail-closed 300 ms watchdog; the
+        # 1.0 s timeout only releases the slot after that zero.
         topic: "input/teleop"
         timeout: 1.0
-        priority: 8
+        priority: 7
       joy:
         topic: "input/joy"
         # Slightly above the teleop's 0.4 s receiver watchdog. Once its final

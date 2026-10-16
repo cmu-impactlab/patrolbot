@@ -610,6 +610,48 @@ def test_manual_deadman_admits_drive_on_the_wire_while_localization_is_held(harn
     client_node.destroy_publisher(command)
 
 
+def test_dashboard_deadman_admits_drive_on_the_wire_while_localization_is_held(
+        harness):
+    """
+    The dashboard channel is a second, independently-wired deadman source.
+
+    The Pi web bridge publishes /patrolbot/web_teleop_active; the bridge must
+    accept that evidence alone while the epoch is held and forward the exact
+    DRIVE bytes, then stop admitting once the evidence expires.
+    """
+    fake, bridge, client_node, _executor = harness
+    bridge._epoch.require_lidar_seed()
+    assert not bridge._epoch.commands_allowed
+    web = client_node.create_publisher(Bool, '/patrolbot/web_teleop_active', 10)
+    command = client_node.create_publisher(Twist, '/cmd_vel', 10)
+    assert wait_until(lambda: web.get_subscription_count() >= 1)
+    assert wait_until(lambda: command.get_subscription_count() >= 1)
+
+    twist = Twist()
+    twist.linear.x = 0.05
+    command.publish(twist)
+    time.sleep(0.2)
+    assert not any(line == 'DRIVE:0.05:0.0' for _session, line in fake.received)
+
+    web.publish(Bool(data=True))
+    assert wait_until(lambda: bridge._web_teleop_active_at > 0.0)
+    command.publish(twist)
+    assert wait_until(
+        lambda: any(line == 'DRIVE:0.05:0.0' for _session, line in fake.received)
+    )
+
+    # Evidence expires on its own: release must stop admitting nonzero DRIVE.
+    time.sleep(MANUAL_ACTIVE_TIMEOUT + 0.1)
+    released = Twist()
+    released.linear.x = 0.06
+    command.publish(released)
+    time.sleep(0.2)
+    assert not any(line == 'DRIVE:0.06:0.0' for _session, line in fake.received)
+
+    client_node.destroy_publisher(web)
+    client_node.destroy_publisher(command)
+
+
 def test_motor_enable_is_independent_of_dock_state(harness):
     fake, bridge, client_node, _executor = harness
     with fake._lock:

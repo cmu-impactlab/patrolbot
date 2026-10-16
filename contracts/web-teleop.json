@@ -26,5 +26,9 @@
   "timing": {
     "evidence_max_age_s": 0.5,
     "web_bridge_zero_watchdog_ms": 300
+  },
+  "velocity_limits": {
+    "linear_m_s": {"min": -0.3, "max": 0.3},
+    "angular_rad_s": {"min": -0.7, "max": 0.7}
   }
 }

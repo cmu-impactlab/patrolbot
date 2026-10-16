@@ -40,13 +40,22 @@ COPY ros2_ws/src/patrolbot_dock_manager ros2_ws/src/patrolbot_dock_manager
 
 RUN rosdep update \
     && apt-get update \
-    && rosdep install --from-paths ros2_ws/src --ignore-src -r -y --rosdistro jazzy \
+    && rosdep install \
+        --from-paths \
+            ros2_ws/src/patrolbot_interfaces \
+            ros2_ws/src/patrolbot_bridge \
+            ros2_ws/src/patrolbot_dock_manager \
+        --ignore-src -r -y --rosdistro jazzy \
     && rm -rf /var/lib/apt/lists/*
 
 RUN . /opt/ros/jazzy/setup.sh \
     && colcon build \
         --base-paths ros2_ws/src \
         --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager
+
+# Map data and helper scripts for the catalog/persistence suites. Not built:
+# nothing imports this package, tests read its files directly.
+COPY ros2_ws/src/patrolbot_navigation ros2_ws/src/patrolbot_navigation
 
 COPY docker/run-ros-tests.sh /usr/local/bin/run-ros-tests.sh
 

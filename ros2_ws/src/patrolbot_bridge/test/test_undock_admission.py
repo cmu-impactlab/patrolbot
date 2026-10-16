@@ -39,9 +39,11 @@ def bridge():
 def test_epoch_and_lidar_state_do_not_gate_undock_admission(
         admission, bridge, condition):
     """Authorized 2026-10-16: admission lives at the dock manager (E-stop
-    plus charging) and the SBC. Epoch recovery, TF/nav readiness and scan
-    freshness must not refuse an undock goal here; post-reverse motion
-    stays gated elsewhere."""
+    plus charging) and the SBC.
+
+    Epoch recovery, TF/nav readiness and scan freshness must not refuse
+    an undock goal here; post-reverse motion stays gated elsewhere.
+    """
     if condition in ('epoch_down', 'both_down'):
         bridge._epoch.commands_allowed = False
     if condition in ('lidar_down', 'both_down'):

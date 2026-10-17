@@ -24,7 +24,7 @@ flowchart LR
     VS -->|/cmd_vel_smoothed| CM["collision_monitor"]
     CM -->|input/navi p5| MUX["cmd_vel_mux"]
     JOY["joy teleop"] -->|input/joy p8| MUX
-    TEL["teleop"] -->|input/teleop p8| MUX
+    TEL["dashboard teleop"] -->|input/teleop p7| MUX
     WD["safety_watchdog"] -->|input/safety_controller p10| MUX
     MUX --> OUT["/cmd_vel_out"]
     OUT --> TS["teleop_velocity_smoother"]
@@ -77,19 +77,26 @@ stops publishing releases its claim after its timeout.
 | Input topic | Priority | Timeout (s) | Source |
 |---|---|---|---|
 | `input/safety_controller` | 10 | 0.2 | Safety watchdog |
-| `input/teleop` | 8 | 1.0 | Teleop |
 | `input/joy` | 8 | 0.5 | Joystick |
+| `input/teleop` | 7 | 1.0 | Dashboard deadman teleop (`patrolbot_web_bridge`) |
 | `input/switch` | 6 | 1.0 | Mode switching |
 | `input/navi` | 5 | 1.0 | All of Nav2, via the collision monitor |
 
 Two consequences matter operationally:
 
-- **The joystick outranks all of Nav2.** Picking up the controller takes ownership mid-goal,
-  regardless of which Nav2 source was driving.
+- **The joystick outranks all of Nav2 — and the dashboard teleop.** Picking up the controller
+  takes ownership mid-goal, regardless of which Nav2 source was driving; with both manual
+  channels held, `input/joy` (8) wins over `input/teleop` (7).
 - **The watchdog outranks everything.** When it publishes a stop, nothing else can drive.
 
 The joystick's 0.5 s timeout sits just above the teleop receiver's 0.4 s watchdog, so once its
 final zero lands, manual ownership releases promptly without reviving a prior Nav2 goal.
+
+The dashboard channel is the same deadman shape at a lower priority: the Pi-side
+`patrolbot_web_bridge` publishes `input/teleop` only while the browser deadman is held and zeroes
+it within 0.3 s of the last frame. Like the joystick it can move the robot while localization is
+held, because `patrolbot_bridge` admits manual `DRIVE` on fresh deadman evidence; unlike the
+joystick it never outranks it.
 
 ## Collision monitor
 

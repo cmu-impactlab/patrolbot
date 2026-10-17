@@ -2,8 +2,9 @@
 """
 Exercise the real cmd_vel gating against a recording fake SBC socket.
 
-`cmd_vel_callback`, `_manual_active_cb` and `_manual_drive_allowed` are
-compiled straight from the bridge source, so this pins the exact DRIVE bytes
+`cmd_vel_callback`, `_manual_active_cb`, `_web_teleop_active_cb` and
+`_manual_drive_allowed` are compiled straight from the bridge source, so
+this pins the exact DRIVE bytes
 written while commands_allowed is False. The deployed generation once
 admitted a manual command and then dropped it behind an extra unconditional
 return; the exact bytes below are the regression evidence for that defect.
@@ -53,10 +54,12 @@ def _namespace():
     methods = _class_methods(
         BRIDGE_SOURCE,
         'PatrolBotBridge',
-        {'_manual_active_cb', '_manual_drive_allowed', 'cmd_vel_callback'},
+        {'_manual_active_cb', '_web_teleop_active_cb', '_manual_drive_allowed',
+         'cmd_vel_callback'},
     )
     assert {node.name for node in methods} == {
         '_manual_active_cb',
+        '_web_teleop_active_cb',
         '_manual_drive_allowed',
         'cmd_vel_callback',
     }
@@ -94,6 +97,7 @@ def make_bridge(
     *,
     commands_allowed=True,
     manual_age=0.0,
+    web_manual_age=None,
     undock_busy=False,
     drive_allowed=False,
     undock_active=False,
@@ -134,6 +138,8 @@ def make_bridge(
         _epoch=epoch,
         _lidar_ready=Mock(return_value=lidar_ready),
         _manual_active_at=0.0 if manual_age is None else now - manual_age,
+        _web_teleop_active_at=(
+            0.0 if web_manual_age is None else now - web_manual_age),
         _pose_received=pose_received,
         _pose_at=now - raw_odom_age,
         _odom_tf_timeout=0.5,
@@ -141,6 +147,7 @@ def make_bridge(
         sock_lock=threading.Lock(),
     )
     node._manual_active_cb = MethodType(_BRIDGE['_manual_active_cb'], node)
+    node._web_teleop_active_cb = MethodType(_BRIDGE['_web_teleop_active_cb'], node)
     node._manual_drive_allowed = MethodType(_BRIDGE['_manual_drive_allowed'], node)
     node.cmd_vel_callback = MethodType(_BRIDGE['cmd_vel_callback'], node)
     return node
@@ -241,3 +248,42 @@ def test_deadman_callback_refreshes_only_on_true():
     mark = bridge._manual_active_at
     bridge._manual_active_cb(NS(data=False))
     assert bridge._manual_active_at == mark
+
+
+def test_dashboard_evidence_alone_admits_drive_while_localization_held():
+    bridge = make_bridge(commands_allowed=False, manual_age=None,
+                         web_manual_age=0.1)
+    assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
+
+
+def test_f710_evidence_alone_admits_drive_while_localization_held():
+    bridge = make_bridge(commands_allowed=False, manual_age=0.1,
+                         web_manual_age=None)
+    assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
+
+
+def test_freshest_evidence_of_either_channel_counts():
+    # A stale channel ages out; the fresh one keeps the bypass open.
+    stale_f710 = make_bridge(commands_allowed=False, manual_age=2.0,
+                             web_manual_age=0.1)
+    assert drive(stale_f710, linear=0.05) == ['DRIVE:0.05:0.0\n']
+    stale_web = make_bridge(commands_allowed=False, manual_age=0.1,
+                            web_manual_age=2.0)
+    assert drive(stale_web, linear=0.05) == ['DRIVE:0.05:0.0\n']
+
+
+def test_both_channels_stale_drop_drive_while_localization_held():
+    bridge = make_bridge(commands_allowed=False, manual_age=1.0,
+                         web_manual_age=1.0)
+    assert drive(bridge, linear=0.05) == []
+
+
+def test_web_teleop_callback_refreshes_only_on_true():
+    bridge = make_bridge(commands_allowed=False, manual_age=None,
+                         web_manual_age=1.0)
+    assert bridge._manual_drive_allowed() is False
+    bridge._web_teleop_active_cb(NS(data=True))
+    assert bridge._manual_drive_allowed() is True
+    mark = bridge._web_teleop_active_at
+    bridge._web_teleop_active_cb(NS(data=False))
+    assert bridge._web_teleop_active_at == mark

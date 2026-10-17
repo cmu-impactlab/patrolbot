@@ -1,0 +1,34 @@
+{
+  "contract": "patrolbot-web-teleop",
+  "version": 1,
+  "topics": {
+    "velocity": {
+      "name": "/input/teleop",
+      "type": "geometry_msgs/msg/Twist"
+    },
+    "evidence": {
+      "name": "/patrolbot/web_teleop_active",
+      "type": "std_msgs/msg/Bool"
+    },
+    "joystick_evidence": {
+      "name": "/patrolbot/manual_active",
+      "type": "std_msgs/msg/Bool"
+    }
+  },
+  "mux": {
+    "safety_controller": {"priority": 10, "timeout_s": 0.2},
+    "undock_turn": {"priority": 9, "timeout_s": 0.25},
+    "joy": {"priority": 8, "timeout_s": 0.5},
+    "teleop": {"priority": 7, "timeout_s": 1.0},
+    "switch": {"priority": 6, "timeout_s": 1.0},
+    "navigation": {"priority": 5, "timeout_s": 1.0}
+  },
+  "timing": {
+    "evidence_max_age_s": 0.5,
+    "web_bridge_zero_watchdog_ms": 300
+  },
+  "velocity_limits": {
+    "linear_m_s": {"min": -0.3, "max": 0.3},
+    "angular_rad_s": {"min": -0.7, "max": 0.7}
+  }
+}

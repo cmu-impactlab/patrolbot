@@ -46,8 +46,9 @@ flowchart LR
 (`sensor_msgs/PointCloud2`), `/battery` (`sensor_msgs/BatteryState`), `/diagnostics`
 (`diagnostic_msgs/DiagnosticArray`), `/patrolbot/base_state`
 (`patrolbot_interfaces/BaseState`), TF `odom→base_link` (50 Hz).
-**Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`), `/patrolbot/manual_active`
-(`std_msgs/Bool`, fresh deadman evidence from the joystick teleop that admits nonzero `DRIVE`
+**Subscribers:** `/cmd_vel` (`geometry_msgs/Twist`), `/patrolbot/manual_active` and
+`/patrolbot/web_teleop_active` (`std_msgs/Bool`, fresh deadman evidence from the joystick teleop
+and the dashboard web bridge respectively; a fresh report from either admits nonzero `DRIVE`
 while localization — recovery stage, Nav2 readiness, AMCL pose freshness, map state — would
 otherwise hold autonomy).
 **Services:** `/patrolbot/charge_release` (`patrolbot_interfaces/srv/ChargeRelease`),
@@ -90,8 +91,9 @@ docker logs patrolbot-bridge
 | **Executable** | `twist_mux` (package `twist_mux`), launched as node name `cmd_vel_mux` |
 | **Purpose** | Single velocity arbiter. Selects the highest-priority active input and republishes it. |
 
-**Subscribers:** `input/safety_controller` (prio 10), `input/joy` (prio 8), `input/navi` (prio 5),
-plus configured-but-unused `input/teleop` (8), `input/switch` (6).
+**Subscribers:** `input/safety_controller` (prio 10), `input/joy` (prio 8), `input/teleop`
+(prio 7, dashboard deadman teleop via `patrolbot_web_bridge`), `input/navi` (prio 5), plus
+configured-but-unused `input/switch` (6).
 **Publishers:** `cmd_vel_out`.
 **Parameters:** from `param/defaults/mux.yaml` (see [Parameters](parameters.md#twist_mux-muxyaml)).
 **Failure modes:** if an input goes silent past its `timeout`, twist_mux drops it and the next

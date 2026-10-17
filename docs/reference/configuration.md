@@ -160,8 +160,8 @@ There are two muxes. `nav_command_mux` arbitrates within Nav2 and publishes `/cm
 | Input | Priority | Timeout |
 |---|---|---|
 | `input/safety_controller` | 10 | 0.2 s |
-| `input/teleop` | 8 | 1.0 s |
 | `input/joy` | 8 | 0.5 s |
+| `input/teleop` | 7 | 1.0 s |
 | `input/switch` | 6 | 1.0 s |
 | `input/navi` | 5 | 1.0 s |
 

@@ -1,0 +1,2591 @@
+{
+  "contract": "patrolbot-robot-tuning",
+  "version": 1,
+  "note": "Offline fixtures. 'valid' means schema+semantic valid as a request; it does NOT mean the runtime can activate anything (slice 1 is non-activatable and unadvertised). Cases with a 'context' supply the authoritative revision/session so stale CAS/session tokens can be rejected; without context validation is shape-only.",
+  "cases": [
+    {
+      "schema_ref": "#/$defs/read_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "read",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        }
+      },
+      "name": "valid_read_catalog"
+    },
+    {
+      "name": "valid_save_linear_cap_coherent",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          },
+          {
+            "id": "nav2.velocity_smoother.max_velocity_x",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_angular_cap_coherent",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_angular_rad_s",
+            "value": 0.6
+          },
+          {
+            "id": "nav2.controller.rotate_to_heading_angular_vel",
+            "value": 0.6
+          },
+          {
+            "id": "nav2.velocity_smoother.max_velocity_theta",
+            "value": 0.6
+          },
+          {
+            "id": "nav2.behavior.max_rotational_vel",
+            "value": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_angular_producer_compliance",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.rotate_to_heading_angular_vel",
+            "value": 0.7
+          },
+          {
+            "id": "nav2.velocity_smoother.max_velocity_theta",
+            "value": 0.7
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_amcl_particle_group",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 800
+          },
+          {
+            "id": "amcl.max_particles",
+            "value": 3000
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_zhit_zrand_sum",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.z_hit",
+            "value": 0.6
+          },
+          {
+            "id": "amcl.z_rand",
+            "value": 0.4
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_nav2_cruise",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.desired_linear_vel",
+            "value": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_lookahead_group",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.min_lookahead_dist",
+            "value": 0.2
+          },
+          {
+            "id": "nav2.controller.lookahead_dist",
+            "value": 0.4
+          },
+          {
+            "id": "nav2.controller.max_lookahead_dist",
+            "value": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_lookahead_upper_only",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.max_lookahead_dist",
+            "value": 0.8
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_lookahead_min_only",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.min_lookahead_dist",
+            "value": 0.3
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_batch_noise",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.alpha1",
+            "value": 0.1
+          },
+          {
+            "id": "amcl.alpha2",
+            "value": 0.1
+          },
+          {
+            "id": "amcl.update_min_d",
+            "value": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_reverse_only_particle_min",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 2000
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_save_particle_against_base",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 2000
+          }
+        ]
+      },
+      "base_values": {
+        "amcl.max_particles": 3000
+      }
+    },
+    {
+      "name": "valid_save_revision_bound",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 5,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      },
+      "context": {
+        "current_revision": 5,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "valid_apply_exact_revision",
+      "schema_ref": "#/$defs/apply_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "apply",
+        "request_id": "33333333-3333-4333-8333-333333333333",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 3
+      },
+      "context": {
+        "current_revision": 3,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "valid_redeploy_exact_revision",
+      "schema_ref": "#/$defs/redeploy_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "redeploy",
+        "request_id": "34343434-3434-4343-8343-343434343434",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 4
+      },
+      "context": {
+        "current_revision": 4,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "schema_ref": "#/$defs/status_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "status",
+        "request_id": "35353535-3535-4353-8353-353535353535",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        }
+      },
+      "name": "valid_status_latest_job"
+    },
+    {
+      "name": "valid_status_named_job",
+      "schema_ref": "#/$defs/status_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "status",
+        "request_id": "35353535-3535-4353-8353-353535353535",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "job_id": "36363636-3636-4363-8363-363636363636"
+      }
+    },
+    {
+      "name": "valid_restore_last_known_good",
+      "schema_ref": "#/$defs/restore_request",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "restore",
+        "request_id": "37373737-3737-4373-8373-373737373737",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 2,
+        "restore_revision": 2,
+        "target": "last_known_good"
+      },
+      "context": {
+        "current_revision": 2,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "valid_snapshot_desired_pending",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_snapshot_runtime_unknown",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "unknown",
+        "revisions": {
+          "desired": 1,
+          "active": null,
+          "last_known_good": null,
+          "known": false
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.3,
+            "active": null,
+            "active_known": false,
+            "pending": false,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_snapshot_read_only_strings",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "amcl.laser_model_type",
+            "desired": "likelihood_field_prob",
+            "active": "likelihood_field_prob",
+            "active_known": true,
+            "pending": false,
+            "classification": "read_only"
+          },
+          {
+            "id": "costmap.footprint",
+            "desired": "[[0.255, 0.138]]",
+            "active": "[[0.255, 0.138]]",
+            "active_known": true,
+            "pending": false,
+            "classification": "read_only"
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_snapshot_unknown_runtime_durable_pending",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "unknown",
+        "revisions": {
+          "desired": 4,
+          "active": null,
+          "last_known_good": 2,
+          "known": false
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "runtime unreadable; a saved change is pending promotion"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": null,
+            "active_known": false,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_snapshot_active_drift",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "valid",
+      "expected_reason": null,
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.3,
+            "active": 0.45,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_non_object_payload",
+      "schema_ref": null,
+      "expect": "invalid",
+      "expected_reason": "bad_shape",
+      "payload": []
+    },
+    {
+      "name": "invalid_missing_request_id",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "missing_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_request_id_not_uuid",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_pattern",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "not-a-uuid",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_non_canonical_uuid_uppercase",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "non_canonical_uuid",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "ABCDEF01-2345-4678-8ABC-ABCDEF012345",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_unknown_actor_field",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "unknown_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ],
+        "administrator": true
+      }
+    },
+    {
+      "name": "invalid_contract_const",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_const",
+      "payload": {
+        "contract": "patrolbot-other",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_version_const",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_const",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 2,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_unknown_operation",
+      "schema_ref": null,
+      "expect": "invalid",
+      "expected_reason": "unsupported_operation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "frobnicate",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 1
+      }
+    },
+    {
+      "name": "invalid_change_value_string_path",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": "../../etc/passwd"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_change_value_object",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": {}
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_change_missing_value",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "missing_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_change_extra_path_field",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "unknown_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25,
+            "path": "/etc/patrolbot.yaml"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_empty_changes",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": []
+      }
+    },
+    {
+      "name": "invalid_too_many_changes",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          },
+          {
+            "id": "amcl.alpha1",
+            "value": 0.05
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_missing_generation",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "missing_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_generation_capability",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_const",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v2",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_missing_generation_session",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "missing_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_generation_session_not_uuid",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_pattern",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "not-a-uuid"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_missing_base_revision",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "missing_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_negative_base_revision",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": -1,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_base_revision_not_js_safe",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 9007199254740992,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_exact_revision_string",
+      "schema_ref": "#/$defs/apply_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "apply",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": "latest"
+      }
+    },
+    {
+      "name": "invalid_save_stale_revision",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "stale_revision",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 1,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      },
+      "context": {
+        "current_revision": 3,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "invalid_apply_stale_revision",
+      "schema_ref": "#/$defs/apply_request",
+      "expect": "invalid",
+      "expected_reason": "stale_revision",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "apply",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 2
+      },
+      "context": {
+        "current_revision": 3,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "invalid_revision_float_base",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0.0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_revision_bool_expected",
+      "schema_ref": "#/$defs/apply_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "apply",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": true
+      }
+    },
+    {
+      "name": "invalid_restore_revision_float",
+      "schema_ref": "#/$defs/restore_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "restore",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 1,
+        "restore_revision": 1.0,
+        "target": "last_known_good"
+      }
+    },
+    {
+      "name": "invalid_snapshot_revision_float",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2.0,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_context_empty",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_context",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      },
+      "context": {}
+    },
+    {
+      "name": "invalid_context_partial",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_context",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      },
+      "context": {
+        "current_revision": 3
+      }
+    },
+    {
+      "name": "invalid_context_extra",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_context",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      },
+      "context": {
+        "current_revision": 3,
+        "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "extra": 1
+      }
+    },
+    {
+      "name": "invalid_stale_session",
+      "schema_ref": "#/$defs/apply_request",
+      "expect": "invalid",
+      "expected_reason": "stale_session",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "apply",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 3
+      },
+      "context": {
+        "current_revision": 3,
+        "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "invalid_unknown_logical_id",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "unknown_logical_id",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.not_a_real_param",
+            "value": 0.1
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_path_injection_id",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "path_injection",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.alpha1/../../etc/passwd",
+            "value": 0.1
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_protected_knob",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "protected_parameter",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "safety_watchdog.scan_timeout",
+            "value": 2.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_not_applicable_alpha5",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "not_applicable",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.alpha5",
+            "value": 0.1
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_bool_as_number",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bool_as_number",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_out_of_bounds_linear",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.31
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_out_of_bounds_angular",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "23232323-2323-4232-8232-232323232323",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_angular_rad_s",
+            "value": 0.71
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_negative_ceiling",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": -0.1
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_integer_type_for_particles",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 1000.5
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_whole_float_for_integer_field",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 1000.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_particle_relationship",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 5000
+          },
+          {
+            "id": "amcl.max_particles",
+            "value": 1000
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_max_particles_below_default_min",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.max_particles",
+            "value": 500
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_z_rand_alone",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.z_rand",
+            "value": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_z_hit_alone",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.z_hit",
+            "value": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_zhit_zrand_sum",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.z_hit",
+            "value": 0.5
+          },
+          {
+            "id": "amcl.z_rand",
+            "value": 0.2
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_lookahead_relationship",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "nav2.controller.min_lookahead_dist",
+            "value": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_linear_cap_alone",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_linear_cap_below_producers",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.01
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_angular_cap_alone",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "dependency_violation",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "23232323-2323-4232-8232-232323232323",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_angular_rad_s",
+            "value": 0.6
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_base_value_type",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "invalid_dependency_operand",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "amcl.min_particles",
+            "value": 2000
+          }
+        ]
+      },
+      "base_values": {
+        "amcl.max_particles": "abc"
+      }
+    },
+    {
+      "name": "invalid_duplicate_change_id",
+      "schema_ref": "#/$defs/save_request",
+      "expect": "invalid",
+      "expected_reason": "duplicate_change_id",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "save",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "base_revision": 0,
+        "changes": [
+          {
+            "id": "max_linear_m_s",
+            "value": 0.25
+          },
+          {
+            "id": "max_linear_m_s",
+            "value": 0.28
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_restore_missing_restore_revision",
+      "schema_ref": "#/$defs/restore_request",
+      "expect": "invalid",
+      "expected_reason": "missing_field",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "restore",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 2,
+        "target": "last_known_good"
+      }
+    },
+    {
+      "name": "invalid_restore_target_latest",
+      "schema_ref": "#/$defs/restore_request",
+      "expect": "invalid",
+      "expected_reason": "bad_const",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "restore",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 2,
+        "restore_revision": 2,
+        "target": "latest"
+      }
+    },
+    {
+      "name": "invalid_restore_generation_mismatch",
+      "schema_ref": "#/$defs/restore_request",
+      "expect": "invalid",
+      "expected_reason": "stale_session",
+      "payload": {
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "operation": "restore",
+        "request_id": "22222222-2222-4222-8222-222222222222",
+        "generation": {
+          "capability": "robot_tuning_v1",
+          "session_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        },
+        "expected_revision": 2,
+        "restore_revision": 2,
+        "target": "last_known_good"
+      },
+      "context": {
+        "current_revision": 2,
+        "session_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "invalid_snapshot_advertised_true",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "bad_const",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": true,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_safe_apply_allowed_true",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "bad_const",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": true,
+          "reason": "looks fine"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_empty_reason",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": ""
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_classification_live",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "bad_enum",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "live"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_classification_mismatch",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "classification_mismatch",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "restart_required"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_unknown_id",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "unknown_logical_id",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "ghost.param",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_duplicate_id",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "duplicate_snapshot_id",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          },
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_runtime_unknown_with_active",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "inconsistent_active_state",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "unknown",
+        "revisions": {
+          "desired": 3,
+          "active": null,
+          "last_known_good": 2,
+          "known": false
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_active_known_true_null",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "inconsistent_active_state",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": null,
+            "active_known": true,
+            "pending": false,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_active_known_false_with_value",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "inconsistent_active_state",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.3,
+            "active": 0.3,
+            "active_known": false,
+            "pending": false,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_known_runtime_active_revision_null",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "inconsistent_active_state",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": null,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_field_type_mismatch",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "bad_type",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": "fast",
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_desired_out_of_bounds",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "out_of_bounds",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.99,
+            "active": 0.3,
+            "active_known": true,
+            "pending": true,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_snapshot_desired_differs_without_pending",
+      "schema_ref": "#/$defs/tuning_state_snapshot",
+      "expect": "invalid",
+      "expected_reason": "pending_flag_mismatch",
+      "payload": {
+        "kind": "tuning_state_snapshot",
+        "contract": "patrolbot-robot-tuning",
+        "version": 1,
+        "capability": "robot_tuning_v1",
+        "advertised": false,
+        "runtime": "known",
+        "revisions": {
+          "desired": 3,
+          "active": 2,
+          "last_known_good": 2,
+          "known": true
+        },
+        "safe_apply": {
+          "allowed": false,
+          "reason": "robot is busy: motion owner unknown"
+        },
+        "fields": [
+          {
+            "id": "max_linear_m_s",
+            "desired": 0.25,
+            "active": 0.3,
+            "active_known": true,
+            "pending": false,
+            "classification": "uncommissioned"
+          }
+        ]
+      }
+    }
+  ],
+  "raw_cases": [
+    {
+      "name": "raw_nan_literal",
+      "expect": "invalid",
+      "expected_reason": "non_finite_number",
+      "schema_ref": "#/$defs/save_request",
+      "text": "{\"contract\":\"patrolbot-robot-tuning\",\"version\":1,\"operation\":\"save\",\"request_id\":\"22222222-2222-4222-8222-222222222222\",\"generation\":{\"capability\":\"robot_tuning_v1\",\"session_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\"},\"base_revision\":0,\"changes\":[{\"id\":\"max_linear_m_s\",\"value\":NaN}]}"
+    },
+    {
+      "name": "raw_infinity_literal",
+      "expect": "invalid",
+      "expected_reason": "non_finite_number",
+      "schema_ref": "#/$defs/save_request",
+      "text": "{\"contract\":\"patrolbot-robot-tuning\",\"version\":1,\"operation\":\"save\",\"request_id\":\"22222222-2222-4222-8222-222222222222\",\"generation\":{\"capability\":\"robot_tuning_v1\",\"session_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\"},\"base_revision\":0,\"changes\":[{\"id\":\"max_linear_m_s\",\"value\":Infinity}]}"
+    },
+    {
+      "name": "raw_negative_infinity_literal",
+      "expect": "invalid",
+      "expected_reason": "non_finite_number",
+      "schema_ref": "#/$defs/save_request",
+      "text": "{\"contract\":\"patrolbot-robot-tuning\",\"version\":1,\"operation\":\"save\",\"request_id\":\"22222222-2222-4222-8222-222222222222\",\"generation\":{\"capability\":\"robot_tuning_v1\",\"session_id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\"},\"base_revision\":0,\"changes\":[{\"id\":\"max_linear_m_s\",\"value\":-Infinity}]}"
+    },
+    {
+      "name": "raw_overflow_exponent",
+      "expect": "invalid",
+      "expected_reason": "non_finite_number",
+      "schema_ref": "#/$defs/save_request",
+      "text": "{\"a\": 1e9999}"
+    },
+    {
+      "name": "raw_huge_integer",
+      "expect": "invalid",
+      "expected_reason": "integer_too_large",
+      "schema_ref": "#/$defs/save_request",
+      "text": "{\"a\": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000}"
+    },
+    {
+      "name": "raw_duplicate_key",
+      "expect": "invalid",
+      "expected_reason": "duplicate_key",
+      "schema_ref": "#/$defs/read_request",
+      "text": "{\"contract\":\"patrolbot-robot-tuning\",\"contract\":\"patrolbot-robot-tuning\"}"
+    },
+    {
+      "name": "raw_duplicate_nested_key",
+      "expect": "invalid",
+      "expected_reason": "duplicate_key",
+      "schema_ref": "#/$defs/save_request",
+      "text": "{\"a\": {\"b\": 1, \"b\": 2}}"
+    },
+    {
+      "name": "raw_too_deep",
+      "expect": "invalid",
+      "expected_reason": "payload_too_deep",
+      "schema_ref": "#/$defs/save_request",
+      "text": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+    },
+    {
+      "name": "raw_invalid_json",
+      "expect": "invalid",
+      "expected_reason": "invalid_json",
+      "schema_ref": null,
+      "text": "{\"contract\": \"patrolbot-robot-tuning\", "
+    }
+  ]
+}

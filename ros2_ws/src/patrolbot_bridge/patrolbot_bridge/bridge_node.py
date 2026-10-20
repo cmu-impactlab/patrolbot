@@ -1,4 +1,6 @@
+import json
 import math
+import os
 import queue
 import socket
 import struct
@@ -9,6 +11,7 @@ from uuid import uuid4
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TransformStamped, Twist
 from nav_msgs.msg import Odometry
+from patrolbot_bridge.config_bootstrap import _read_registry
 from patrolbot_bridge.control_protocol import (
     COMMAND_CHARGE_RELEASE,
     COMMAND_DOCK_RESET,
@@ -35,6 +38,18 @@ from patrolbot_bridge.safety_telemetry import (
     decode_fault_flags,
 )
 from patrolbot_bridge.scan_timing import compute_scan_stamp_ns, parse_laser_age
+from patrolbot_bridge.tuning_activation import ActivationCoordinator
+from patrolbot_bridge.tuning_authorization import (
+    AuthorizationError,
+    load_key as load_tuning_key,
+    verify as verify_tuning_authorization,
+)
+from patrolbot_bridge.tuning_backend import LifecycleBackend, RosParameterTransport
+from patrolbot_bridge.tuning_initialize import marker_path, RuntimeGuard
+from patrolbot_bridge.tuning_policy import clamp_drive, limits_from_store, PolicyCache
+from patrolbot_bridge.tuning_runtime import TuningObservations
+from patrolbot_bridge.tuning_service import ServiceError, strict_json_loads, TuningService
+from patrolbot_bridge.tuning_store import RevisionStore, StoreUnavailable
 from patrolbot_bridge.undock_protocol import (
     CANCELED,
     format_undock_cancel,
@@ -55,11 +70,12 @@ from patrolbot_interfaces.srv import (
     DockReset,
     MotorDisable,
     MotorEnable,
+    RobotTuning,
     SetLidarPower,
 )
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -324,6 +340,24 @@ class PatrolBotBridge(Node):
 
         self._epoch = EpochRuntime(self)
         self._undock_turn = UndockTurnRuntime(self)
+
+        # Advanced tuning: read-capable service and the trusted-side speed
+        # backstop. Construction never arms teleop, publishes velocity, enables
+        # motors, undocks or injects a pose. Activation stays unavailable until
+        # a reviewed evidence-backed backend is wired in (see tuning_activation).
+        self._tuning_store = None
+        self._tuning_service = None
+        self._tuning_coordinator = None
+        self._tuning_error = ''
+        self._tuning_policy = PolicyCache(self._probe_tuning_limits,
+                                          required=self._tuning_state_expected())
+        self._init_tuning()
+        self._tuning_requests = MutuallyExclusiveCallbackGroup()
+        self.tuning_srv = self.create_service(
+            RobotTuning, '/patrolbot/tuning', self._tuning_callback,
+            callback_group=self._tuning_requests)
+        self._tuning_policy.refresh()
+        self.create_timer(0.5, self._refresh_tuning_policy, callback_group=self._callbacks)
 
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
@@ -1788,11 +1822,427 @@ class PatrolBotBridge(Node):
     # Velocity forwarding
     # ------------------------------------------------------------------
 
-    def _manual_active_cb(self, msg):
+    def _init_tuning(self):
+        """
+        Construct the read-capable tuning service without activating anything.
+
+        A robot with no prior tuning state reports tuning as unavailable and
+        keeps the fixed hard speed envelope. Once tuning state is expected,
+        missing or corrupt state holds motion rather than restoring defaults.
+        """
+        self._tuning_observations = TuningObservations()
+        self._tuning_source_stamps = {}
+        self._tuning_source_generation = None
+        self._tuning_hold_pub = self.create_publisher(Bool, '/patrolbot/tuning_hold', 10)
+        self.create_subscription(
+            Bool, '/patrolbot/web_teleop_session_active',
+            lambda msg, info: self._tuning_deadman_observed(
+                'web_session', '/patrolbot/web_teleop_session_active',
+                'patrolbot_web_bridge', msg, info), 10)
+        self.create_timer(.1, lambda: self._tuning_hold_pub.publish(
+            Bool(data=bool(self._epoch.tuning_hold))))
+        self.create_subscription(
+            Twist, '/cmd_vel_out', lambda msg, info: self._tuning_velocity_observed(
+                '/cmd_vel_out', 'cmd_vel_mux', msg, info), 10)
+        self.create_timer(.1, self._tuning_publisher_health, callback_group=self._callbacks)
+        self._tuning_authorization_key = None
+        self._tuning_robot_id = os.environ.get('PATROLBOT_ROBOT_ID', 'patrolbot-01')
+        self._tuning_runtime_guard = None
+        try:
+            self._tuning_runtime_guard = RuntimeGuard(self._tuning_dir())
+        except OSError:
+            self._tuning_error = 'local initialization or state-volume access is unresolved'
+            self._epoch.set_tuning_hold(True, self._tuning_error)
+            self._tuning_service = None
+            return
+        except StoreUnavailable:
+            if self._tuning_state_expected():
+                self._epoch.set_tuning_hold(True, 'expected tuning state volume unavailable')
+            self._tuning_service = None
+            self._tuning_error = 'tuning state volume unavailable'
+            return
+        try:
+            self._tuning_authorization_key = load_tuning_key(
+                os.environ.get('PATROLBOT_TUNING_AUTH_KEY_FILE', ''))
+        except (AuthorizationError, OSError):
+            self.get_logger().warning(
+                'Tuning mutations disabled: private signing key unavailable.')
+        try:
+            registry_path = self._tuning_registry_path()
+            if not registry_path:
+                raise RuntimeError('tuning registry is not installed')
+            registry = _read_registry(registry_path)
+            store = RevisionStore(self._tuning_dir(), registry)
+            # No verified native parameter mutability and no approved fixed
+            # backend yet: every activation request is refused, never faked.
+            self._tuning_transport = RosParameterTransport(self)
+            backend = LifecycleBackend(
+                store, self._tuning_transport, self._tuning_evidence,
+                self._tuning_require_seed,
+                enabled=os.environ.get('PATROLBOT_TUNING_RUNTIME_ENABLED', '0') == '1',
+                selected_map=self._tuning_selected_map,
+                generation=lambda: (self._session_generation, self._epoch.guard.generation))
+            coordinator = ActivationCoordinator(store, self._epoch, backend)
+            self._tuning_backend = backend
+            self._tuning_readback = None
+            self._tuning_readback_at = None
+            self._tuning_readback_lock = threading.Lock()
+            self.create_timer(1., self._poll_tuning_readback, callback_group=self._callbacks)
+            self._tuning_store = store
+            self._tuning_coordinator = coordinator
+            self._tuning_service = TuningService(
+                store, coordinator,
+                mutations_enabled=self._tuning_authorization_key is not None,
+                runtime_readback=self._current_tuning_readback)
+            try:
+                job = coordinator.recover()
+            except StoreUnavailable as exc:
+                job = None
+                self.get_logger().warning('Tuning store not ready: ' + exc.code)
+                if self._tuning_state_expected():
+                    self._epoch.set_tuning_hold(True, 'tuning state unavailable: ' + exc.code)
+            if job is not None:
+                self.get_logger().warning(
+                    'Tuning job ' + str(job.get('job_id')) + ' unsettled after restart; '
+                    'motion held until resolved.'
+                )
+            self._restore_tuning_admission()
+        except Exception as exc:
+            self._tuning_service = None
+            self._tuning_error = 'tuning_unavailable: ' + exc.__class__.__name__
+            self.get_logger().warning('Advanced tuning unavailable: ' + str(exc))
+            if self._tuning_state_expected():
+                self._epoch.set_tuning_hold(True, self._tuning_error)
+
+    def _tuning_state_expected(self):
+        path = self._tuning_dir()
+        marker = marker_path(path)
+        if marker.exists() or marker.is_symlink():
+            return True
+        if os.environ.get('PATROLBOT_TUNING_ENABLED', '0') == '1':
+            return True
+        try:
+            return os.path.islink(path) or any(name != 'lock' for name in os.listdir(path))
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+
+    @staticmethod
+    def _tuning_dir():
+        base = os.environ.get('PATROLBOT_TUNING_DIR')
+        if base:
+            return base
+        state = os.environ.get('PATROLBOT_STATE_DIR', '/var/lib/patrolbot')
+        return os.path.join(state, 'config')
+
+    @staticmethod
+    def _tuning_registry_path():
+        override = os.environ.get('PATROLBOT_TUNING_REGISTRY')
+        if override and os.path.isfile(override):
+            return override
+        candidates = []
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            candidates.append(os.path.join(
+                get_package_share_directory('patrolbot_bridge'),
+                'contracts', 'robot-tuning.registry.json'))
+        except Exception:
+            pass
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates.append(os.path.join(here, 'config', 'robot-tuning.registry.json'))
+        for candidate in candidates:
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def _probe_tuning_limits(self):
+        if self._tuning_store is None:
+            raise RuntimeError('tuning store unavailable')
+        return limits_from_store(self._tuning_store)
+
+    def _refresh_tuning_policy(self):
+        # A fresh policy generation updates the cached clamp on the very next
+        # ordinary DRIVE. It never arms teleop or publishes anything itself.
+        self._tuning_policy.required = (
+            self._tuning_policy.required or self._tuning_state_expected()
+        )
+        if self._tuning_policy.refresh():
+            self.get_logger().info('Tuning speed policy updated; caps cached, no auto-arm.')
+        self._epoch.set_tuning_policy_hold(
+            self._tuning_policy.required and self._tuning_policy.generation is None,
+            'required active tuning policy is unavailable')
+        return self._tuning_policy.limits()
+
+    def _tuning_evidence(self):
+        """
+        Collect runtime evidence for a future approved backend.
+
+        Unused while the shipped backend is :class:`UnavailableBackend`, but
+        wired so the predicate cannot silently default to permissive.
+        """
+        now = time.monotonic()
+        with self._pose_lock:
+            odom_age = now - self._pose_at
+            raw_odom_fresh = bool(
+                self._pose_received and math.isfinite(odom_age)
+                and 0.0 <= odom_age <= self._odom_tf_timeout
+            )
+            stationary = bool(abs(self._vx) <= 0.005 and abs(self._vth) <= 0.01)
+        with self._state_lock:
+            session_generation = self._session_generation
+            hardware_fresh = (
+                self._link_connected and self._flags_at and self._charge_state_at
+                and 0 <= now - self._flags_at <= .5
+                and 0 <= now - self._charge_state_at <= .5)
+            faults_clear = bool(hardware_fresh and not self._fault_flags
+                                and not self._estop_pressed)
+            masks = (int(self.get_parameter('front_bumper_mask').value)
+                     | int(self.get_parameter('rear_bumper_mask').value))
+            bumpers_known = (bool(self.get_parameter('bumpers_mapped').value)
+                             and bool(self.get_parameter('front_bumper_mask').value)
+                             and bool(self.get_parameter('rear_bumper_mask').value))
+            faults_clear = bool(faults_clear and bumpers_known and not self._stall_value & masks)
+            dock_ok = bool(self._dock_state_at and 0 <= now - self._dock_state_at <= 1
+                           and self._dock_state == 'CLEAR_CONFIRMED')
+            undock_clear = not (self._undock_active or self._undock_goal_reserved)
+        epoch = self._epoch
+        with epoch.lock:
+            facts = {
+                'raw_odom_fresh': raw_odom_fresh,
+                'stationary': stationary,
+                'hardware_ok': bool(hardware_fresh and epoch.guard.ready
+                                    and session_generation == self._session_generation),
+                'dock_ok': dock_ok,
+                'faults_clear': faults_clear,
+                'autonomy_idle': bool(not epoch.navigation_idle_problem()
+                                      and not epoch._navigation_status
+                                      and not getattr(epoch, '_tuning_nav_pending', False)),
+                'maps_clear': bool(not epoch.map_hold and epoch._map_goal is None
+                                   and epoch._map_future is None),
+                'undock_clear': undock_clear,
+                'lifecycle_clear': bool(not epoch._failed and epoch._future is None),
+            }
+        return self._tuning_observations.evidence(**facts)
+
+    def _tuning_publisher_health(self):
+        try:
+            identities = []
+            for topic, expected in (('/cmd_vel_out', 'cmd_vel_mux'),
+                                    ('/cmd_vel', 'teleop_velocity_smoother')):
+                publishers = self.get_publishers_info_by_topic(topic)
+                if len(publishers) != 1 or publishers[0].node_name != expected:
+                    return
+                identities.append(bytes(publishers[0].endpoint_gid).hex())
+            generation = (self._session_generation, self._epoch.guard.generation,
+                          tuple(identities))
+            if generation != self._tuning_source_generation:
+                self._tuning_source_stamps.clear()
+                self._tuning_source_generation = generation
+            self._tuning_observations.healthy_publishers(generation)
+        except Exception:
+            return
+
+    def _tuning_source_is_current(self, topic, publisher, info, type_name):
+        if info is None:
+            return False
+        try:
+            endpoints = self.get_publishers_info_by_topic(topic)
+            if (len(endpoints) != 1 or endpoints[0].node_name != publisher
+                    or endpoints[0].node_namespace != '/'
+                    or endpoints[0].topic_type != type_name
+                    or bytes(endpoints[0].endpoint_gid) != bytes(info.publisher_gid)):
+                return False
+            stamp = info.source_timestamp
+            age = (self.get_clock().now().nanoseconds - stamp) / 1e9
+            if (stamp <= self._tuning_source_stamps.get(topic, 0)
+                    or not 0 <= age <= .5):
+                return False
+            self._tuning_source_stamps[topic] = stamp
+            return True
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            return False
+
+    def _tuning_velocity_observed(self, topic, publisher, msg, info):
+        if self._tuning_source_is_current(topic, publisher, info, 'geometry_msgs/msg/Twist'):
+            extra = (msg.linear.z, msg.angular.x, msg.angular.y)
+            invalid = any(not math.isfinite(value) or value != 0 for value in extra)
+            self._tuning_observations.velocity(
+                topic, msg.linear.x, msg.angular.z, float('nan') if invalid else msg.linear.y)
+        elif info is not None:
+            self._tuning_observations.invalidate(topic=topic)
+
+    def _tuning_deadman_observed(self, channel, topic, publisher, msg, info):
+        if self._tuning_source_is_current(topic, publisher, info, 'std_msgs/msg/Bool'):
+            self._tuning_observations.deadman(channel, msg.data)
+        elif info is not None:
+            self._tuning_observations.invalidate(channel=channel)
+
+    def _tuning_require_seed(self, map_identity):
+        with self._epoch.lock:
+            epoch = self._epoch
+            if not isinstance(map_identity, str) or not map_identity:
+                raise ValueError('exact reloaded map identity is required')
+            epoch._tuning_nav_pending = True
+            epoch._tuning_nav_reserved = True
+            epoch._tuning_map_identity = map_identity
+            epoch._tuning_map_probe = None
+            epoch._tuning_map_phase = 'global-map'
+            epoch.recovery.require_seed(self.get_clock().now().nanoseconds)
+            epoch._token = epoch.recovery.token
+            epoch._phase = 'wait-localization-manager'
+            epoch._navigation_ready = False
+            epoch._accepted_seed_stamp = None
+            epoch._pending_pose = None
+            epoch._tf_ready_at = None
+
+    def _restore_tuning_admission(self):
+        admission = self._tuning_store.navigation_admission()
+        if admission is None or not admission['pending']:
+            return
+        with self._epoch.lock:
+            self._epoch._tuning_nav_pending = True
+            self._epoch._tuning_nav_reserved = False
+            self._epoch._tuning_map_identity = admission['map_identity']
+            self._epoch._tuning_map_probe = None
+            self._epoch._tuning_map_phase = 'reserve'
+            self._epoch._navigation_ready = False
+
+    def _tuning_navigation_released(self):
+        record = self._tuning_store.navigation_admission()
+        if record is not None and record['pending']:
+            self._tuning_store.record_navigation_admission(dict(record, pending=False))
+
+    def _tuning_map_identity_changed(self, identity):
+        record = self._tuning_store.navigation_admission()
+        if record is not None and record['pending']:
+            self._tuning_store.record_navigation_admission(dict(record, map_identity=identity))
+
+    def _tuning_selected_map(self):
+        with self._epoch.lock:
+            active = self._epoch.maps.active if self._epoch.maps else None
+            if active is None:
+                raise ValueError('selected map is unavailable')
+            entry = self._epoch._map_store.catalog.require(active['map_id'], active['revision'])
+            return dict(entry)
+
+    def _current_tuning_readback(self):
+        at = getattr(self, '_tuning_readback_at', None)
+        value = getattr(self, '_tuning_readback', None)
+        if (at is None or not 0 <= time.monotonic() - at <= 3
+                or not isinstance(value, dict)
+                or value['hardware_session_generation'] != self._session_generation
+                or self._epoch.tuning_hold):
+            return None
+        return value
+
+    def _poll_tuning_readback(self):
+        if not self._tuning_readback_lock.acquire(blocking=False):
+            return
+        try:
+            if self._epoch.tuning_hold or not self._tuning_backend.approved:
+                self._tuning_readback = None
+                return
+            state = self._tuning_store.snapshot_state()
+            revision = state.get('active_revision')
+            if revision is None:
+                self._tuning_readback = None
+                return
+            digest = self._tuning_store.load_revision(revision)['meta']['generated_digest']
+            generation = self._session_generation
+            _, actual = self._tuning_backend.inspect(revision, digest)
+            values = {}
+            for pid, entry in self._tuning_store.index.items():
+                if not entry.get('accepts_edits') or entry.get('protected'):
+                    continue
+                source = entry['source']
+                value = actual[source['node']][source['key']]
+                if source.get('index') is not None:
+                    value = value[source['index']]
+                values[pid] = value
+            self._tuning_readback = {
+                'revision': revision, 'digest': digest, 'values': values,
+                'hardware_session_generation': generation,
+                'effective_limits': {'max_linear_m_s': values['max_linear_m_s'],
+                                     'max_angular_rad_s': values['max_angular_rad_s']}}
+            self._tuning_readback_at = time.monotonic()
+        except Exception:
+            self._tuning_readback = None
+        finally:
+            self._tuning_readback_lock.release()
+
+    def _tuning_callback(self, request, response):
+        """
+        Serve inspection and short-lived server-authorized tuning mutations.
+
+        A DDS actor claim alone is never authority: mutations require a valid
+        signature from the authenticated server bound to this robot and request.
+        """
+        request_id = None
+        try:
+            if self._tuning_service is not None:
+                payload = strict_json_loads(request.payload_json)
+                operation = (
+                    payload.get('request', {}).get('operation')
+                    if isinstance(payload, dict)
+                    and isinstance(payload.get('request'), dict) else None
+                )
+                raw_id = (payload.get('request', {}).get('request_id')
+                          if isinstance(payload, dict)
+                          and isinstance(payload.get('request'), dict) else None)
+                request_id = raw_id if isinstance(raw_id, str) and len(raw_id) <= 128 else None
+                if operation not in ('read', 'status'):
+                    try:
+                        payload = verify_tuning_authorization(
+                            payload, getattr(self, '_tuning_authorization_key', None),
+                            getattr(self, '_tuning_robot_id', 'patrolbot-01'))
+                    except AuthorizationError as exc:
+                        raise ServiceError('refused', 'read_only: ' + str(exc)) from exc
+                elif payload.get('authorization') is None:
+                    payload = {k: v for k, v in payload.items() if k != 'authorization'}
+                response.result_json = self._tuning_service.result_json(
+                    json.dumps(payload, allow_nan=False))
+            else:
+                response.result_json = json.dumps({
+                    'request_id': None,
+                    'outcome': 'refused',
+                    'detail': self._tuning_error or 'tuning_unavailable',
+                    'snapshot': None,
+                    'job': None,
+                }, sort_keys=True)
+        except ServiceError as exc:
+            response.result_json = json.dumps({
+                'request_id': request_id,
+                'outcome': 'refused',
+                'detail': exc.detail,
+                'snapshot': None,
+                'job': None,
+            }, sort_keys=True)
+        except Exception as exc:
+            response.result_json = json.dumps({
+                'request_id': None,
+                'outcome': 'failed',
+                'detail': 'internal_error: ' + exc.__class__.__name__,
+                'snapshot': None,
+                'job': None,
+            }, sort_keys=True)
+        finally:
+            self._refresh_tuning_policy()
+        return response
+
+    def _manual_active_cb(self, msg, info=None):
+        observations = getattr(self, '_tuning_observations', None)
+        if observations is not None:
+            self._tuning_deadman_observed(
+                'physical', '/patrolbot/manual_active', 'patrolbot_joy_teleop', msg, info)
         if bool(getattr(msg, 'data', False)):
             self._manual_active_at = time.monotonic()
 
-    def _web_teleop_active_cb(self, msg):
+    def _web_teleop_active_cb(self, msg, info=None):
+        observations = getattr(self, '_tuning_observations', None)
+        if observations is not None:
+            self._tuning_deadman_observed(
+                'web', '/patrolbot/web_teleop_active', 'patrolbot_web_bridge', msg, info)
         if bool(getattr(msg, 'data', False)):
             self._web_teleop_active_at = time.monotonic()
 
@@ -1838,9 +2288,13 @@ class PatrolBotBridge(Node):
             raw_odom_ready=raw_odom_ready,
             map_blocked=map_blocked,
             mutation_blocked=mutation_blocked,
+            tuning_hold=epoch.tuning_hold,
         )
 
-    def cmd_vel_callback(self, msg):
+    def cmd_vel_callback(self, msg, info=None):
+        observations = getattr(self, '_tuning_observations', None)
+        if observations is not None:
+            self._tuning_velocity_observed('/cmd_vel', 'teleop_velocity_smoother', msg, info)
         # Defence in depth. The SBC refuses every nonzero DRIVE while its undock
         # state machine owns motion; not sending them at all keeps the log clean
         # and removes any chance of a race on the socket.
@@ -1851,10 +2305,14 @@ class PatrolBotBridge(Node):
             # Serialize all writes so DRIVE bytes can never interleave with an
             # idempotent hardware-control request on the TCP stream.
             with self._epoch.lock, self.sock_lock:
+                undock_drive = False
                 if msg.linear.x != 0.0 or msg.angular.z != 0.0:
                     if self._undock_turn.busy:
                         if not (self._undock_turn.drive_allowed and pure_angular(msg)):
                             return
+                        # The commissioned undock exclusive profile is the
+                        # bridge's own and is never rewritten by tuning.
+                        undock_drive = True
                     elif not self._epoch.commands_allowed or not self._lidar_ready():
                         # Manual deadman evidence bypasses only the
                         # localization hold and forwards the admitted DRIVE;
@@ -1863,7 +2321,19 @@ class PatrolBotBridge(Node):
                             return
                 if self.sock is None:
                     return
-                self.sock.sendall(f'DRIVE:{msg.linear.x}:{msg.angular.z}\n'.encode('utf-8'))
+                # Trusted-side backstop: ordinary DRIVE (manual and autonomy) is
+                # clamped to the active effective policy, or to the fixed hard
+                # envelope when no policy is active. The undock turn keeps its
+                # exclusive profile. This never raises a bound.
+                if undock_drive:
+                    linear, angular = msg.linear.x, msg.angular.z
+                else:
+                    policy = getattr(self, '_tuning_policy', None)
+                    if policy is None:
+                        linear, angular, _ = clamp_drive(msg.linear.x, msg.angular.z)
+                    else:
+                        linear, angular, _ = policy.clamp(msg.linear.x, msg.angular.z)
+                self.sock.sendall(f'DRIVE:{linear}:{angular}\n'.encode('utf-8'))
         except Exception:
             pass
 

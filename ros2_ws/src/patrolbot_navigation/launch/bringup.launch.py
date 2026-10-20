@@ -25,6 +25,8 @@ def generate_launch_description():
     state = ActiveMapStore(os.environ.get('PATROLBOT_STATE_DIR', '/var/lib/patrolbot'), catalog)
     map_yaml_file = state.load()['path']
     nav2_params_file = os.path.join(pkg_dir, 'config', 'nav2_params.yaml')
+    from patrolbot_bridge.tuning_startup import resolve as active_tuning_config
+    nav2_params_file = active_tuning_config(nav2_params_file, 'navigation')
     # We do NOT use nav2_bringup's bringup_launch.py because its lifecycle
     # managers hard-code bond_timeout (4.0s) and never read our params file.
     # Inflating the large 3192x2205 map starves map_server's bond heartbeat
@@ -136,6 +138,7 @@ def generate_launch_description():
         # deadman if joy_node dies, so a crash can't leave the robot driving.
         Node(package='patrolbot_navigation', executable='patrolbot_joy_teleop.py',
              name='patrolbot_joy_teleop', output='screen',
+             parameters=[nav2_params_file],
              remappings=[('/cmd_vel_joy', '/input/joy')],
              respawn=True, respawn_delay=2.0),
         # Alert-only controller feedback. Its sole publisher is joy_node's

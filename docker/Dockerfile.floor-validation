@@ -16,6 +16,7 @@ RUN . /opt/ros/jazzy/setup.sh && MAKEFLAGS=-j2 colcon build --parallel-workers 2
 WORKDIR /opt/patrolbot_ws
 COPY ros2_ws/src src
 COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server
+COPY contracts contracts
 RUN . /opt/patrolbot_nav2/install/setup.sh && colcon build --parallel-workers 2 \
     --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_docking_plugins patrolbot_navigation \
     --cmake-args -DBUILD_TESTING=OFF

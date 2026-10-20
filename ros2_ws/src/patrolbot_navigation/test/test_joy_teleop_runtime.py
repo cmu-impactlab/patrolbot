@@ -101,10 +101,23 @@ def teleop(monkeypatch):
         def create_timer(self, *args):
             pass
 
+        def create_service(self, *args):
+            pass
+
+        def add_on_set_parameters_callback(self, callback):
+            self.validate_parameters = callback
+
+        def add_post_set_parameters_callback(self, callback):
+            self.commit_parameters = callback
+
     class Twist:
         def __init__(self):
             self.linear = SimpleNamespace(x=0.0)
             self.angular = SimpleNamespace(z=0.0)
+
+    class Bool:
+        def __init__(self, data=False):
+            self.data = data
 
     modules = {
         'rclpy': {}, 'rclpy.node': {'Node': Node},
@@ -117,6 +130,9 @@ def teleop(monkeypatch):
         'action_msgs.srv': {'CancelGoal': SimpleNamespace(Request=SimpleNamespace)},
         'geometry_msgs': {}, 'geometry_msgs.msg': {'Twist': Twist},
         'sensor_msgs': {}, 'sensor_msgs.msg': {'Joy': object},
+        'std_msgs': {}, 'std_msgs.msg': {'Bool': Bool},
+        'std_srvs': {}, 'std_srvs.srv': {'Trigger': SimpleNamespace(Request=SimpleNamespace)},
+        'rcl_interfaces': {}, 'rcl_interfaces.msg': {'SetParametersResult': SimpleNamespace},
         'patrolbot_interfaces': {}, 'patrolbot_interfaces.msg': {'BaseState': object},
         'patrolbot_interfaces.srv': {'SetLidarPower': SimpleNamespace(Request=SimpleNamespace)},
     }
@@ -141,6 +157,91 @@ def cancel_done(teleop):
 
 def power_client(teleop):
     return teleop.clients['/patrolbot/set_lidar_power']
+
+
+def test_tuning_hold_requires_release_then_a_new_deadman_press(teleop):
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    teleop.tick()
+    assert not teleop.active
+    assert teleop.lin_cmd == 0
+    assert not teleop._tuning_idle(None, SimpleNamespace()).success
+    teleop._tuning_hold_cb(SimpleNamespace(data=False))
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    teleop.tick()
+    assert not teleop.active
+    assert teleop.lin_cmd == 0
+    teleop.joy_cb(joy(teleop.now, rb=False))
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    teleop.tick()
+    assert teleop.active
+    assert 0 < teleop.lin_cmd < teleop.max_lin
+
+
+def test_tuning_enabled_restart_does_not_replay_an_already_held_controller(teleop, monkeypatch):
+    monkeypatch.setenv('PATROLBOT_TUNING_ENABLED', '1')
+    restarted = type(teleop)()
+    restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
+    restarted.tick()
+    assert not restarted.active and restarted.lin_cmd == 0
+    restarted.joy_cb(joy(restarted.now, rb=False))
+    restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
+    restarted.tick()
+    assert restarted.active and restarted.lin_cmd > 0
+
+
+def test_tuning_policy_updates_cached_caps_only_under_acknowledged_idle_hold(teleop):
+    updates = [SimpleNamespace(name=name, value=value) for name, value in {
+        'max_linear': .15, 'max_linear_cap': .15, 'min_linear': .05,
+        'max_angular': .35, 'max_angular_cap': .35, 'min_angular': .1,
+    }.items()]
+    assert not teleop.validate_parameters(updates).successful
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    assert teleop._tuning_idle(None, SimpleNamespace()).success
+    assert teleop.validate_parameters(updates).successful
+    for parameter in updates:
+        teleop.parameters[parameter.name] = parameter.value
+    teleop.commit_parameters(updates)
+    assert teleop.lin_cap == .15 and teleop.ang_cap == .35
+    assert teleop.max_lin <= .15 and teleop.max_ang <= .35
+    assert not teleop.active and teleop.lin_cmd == teleop.ang_cmd == 0
+    updates[0].value = .31
+    assert not teleop.validate_parameters(updates).successful
+
+
+def test_lower_then_raise_updates_real_cached_targets_but_never_rearms(teleop):
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    for linear, angular in ((.15, .35), (.30, .70)):
+        updates = [SimpleNamespace(name=name, value=value) for name, value in {
+            'max_linear': linear, 'max_linear_cap': linear, 'min_linear': .05,
+            'max_angular': angular, 'max_angular_cap': angular, 'min_angular': .1,
+        }.items()]
+        assert teleop.validate_parameters(updates).successful
+        for parameter in updates:
+            teleop.parameters[parameter.name] = parameter.value
+        teleop.commit_parameters(updates)
+        assert teleop.max_lin == linear and teleop.max_ang == angular
+        assert teleop.lin_cmd == teleop.ang_cmd == 0
+        assert not teleop.active
+
+
+def test_administrator_cap_raise_preserves_explicit_lower_operator_trim(teleop):
+    message = joy(teleop.now)
+    message.buttons[0] = 1  # A: lower the temporary linear trim.
+    teleop.joy_cb(message)
+    assert teleop.max_lin == .25 and teleop._operator_linear_trim
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    for linear in (.20, .30):
+        updates = [SimpleNamespace(name=name, value=value) for name, value in {
+            'max_linear': linear, 'max_linear_cap': linear, 'min_linear': .05,
+        }.items()]
+        assert teleop.validate_parameters(updates).successful
+        for parameter in updates:
+            teleop.parameters[parameter.name] = parameter.value
+        teleop.commit_parameters(updates)
+    assert teleop.lin_cap == .30
+    assert teleop.max_lin == .20
+    assert not teleop.active and teleop.lin_cmd == 0
 
 
 @pytest.mark.parametrize('current,target', [('READY', False), ('OFF', True)])

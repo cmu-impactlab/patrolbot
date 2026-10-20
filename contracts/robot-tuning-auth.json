@@ -1,0 +1,14 @@
+{
+  "contract": "patrolbot-tuning-authorization",
+  "version": 1,
+  "algorithm": "HMAC-SHA256",
+  "domain": "patrolbot-tuning-authorization-v1\n",
+  "canonical_json": "UTF-8, sorted keys, compact separators, finite numbers only",
+  "maximum_payload_bytes": 20480,
+  "maximum_lifetime_ms": 30000,
+  "maximum_future_skew_ms": 5000,
+  "signed_fields": ["request", "actor", "authorization"],
+  "authorization_fields": ["version", "robot_id", "issued_at_ms", "expires_at_ms", "signature"],
+  "key": "32–4096 private bytes, configured separately on authenticated server and core; never sent on ROS or to a browser",
+  "replay": "The signed request_id and core-owned generation bind durable deduplication; expiry is not a replacement for the revision/session checks."
+}

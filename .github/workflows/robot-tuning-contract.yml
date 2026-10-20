@@ -1,0 +1,74 @@
+name: Robot tuning contract
+
+# Offline validation of the robot-tuning contract and guarded runtime
+# foundation: schema, registry, persistence, strict JSON, mutation refusals and
+# source consistency. No robot contact, native ROS graph or deployment.
+#
+# This runs on every push/PR (no paths filter) because the contract pins values
+# that live in real source files (smoother.yaml, mux.yaml, nav2_params.yaml,
+# contracts/web-teleop.json). A contracts-only filter would let those sources
+# drift without ever running the source-consistency tests.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: contracts/requirements-test.txt
+
+      - name: Install offline test dependencies
+        run: python -m pip install --disable-pip-version-check -r contracts/requirements-test.txt
+
+      - name: Validate schema, registry and fixtures
+        run: python contracts/validate_robot_tuning.py
+
+      - name: Run portable and source-consistency contract tests
+        run: python -m pytest contracts/ -q -p no:cacheprovider
+
+      - name: Run tuning runtime and authorization unit tests
+        env:
+          PYTHONPATH: ros2_ws/src/patrolbot_bridge
+        run: |
+          python -m pytest \
+            ros2_ws/src/patrolbot_bridge/test/test_tuning_*.py \
+            ros2_ws/src/patrolbot_bridge/test/test_config_bootstrap.py \
+            -q -p no:cacheprovider
+
+      # test_epoch_tuning_hold.py uses real ROS message types and runs in the
+      # native docker/Dockerfile.ros-tests suite, not this ROS-free job.
+
+      # Selected existing portable teleop/safety checks. These import bridge /
+      # navigation modules with a mocked ROS graph (no native ROS, no robot).
+      - name: Run portable teleop and safety regression tests
+        env:
+          PYTHONPATH: ros2_ws/src/patrolbot_bridge
+        run: |
+          python -m pytest \
+            ros2_ws/src/patrolbot_bridge/test/test_web_teleop_contract.py \
+            ros2_ws/src/patrolbot_bridge/test/test_manual_active.py \
+            ros2_ws/src/patrolbot_bridge/test/test_manual_drive_forwarding.py \
+            ros2_ws/src/patrolbot_navigation/test/test_joy_teleop_runtime.py \
+            ros2_ws/src/patrolbot_navigation/test/test_joystick_policy.py \
+            ros2_ws/src/patrolbot_navigation/test/test_safety_policy.py \
+            ros2_ws/src/patrolbot_navigation/test/test_controller_feedback_policy.py \
+            ros2_ws/src/patrolbot_navigation/test/test_reverse_safety_rules.py \
+            ros2_ws/src/patrolbot_navigation/test/test_physical_calibration.py \
+            ros2_ws/src/patrolbot_navigation/test/test_safety_contract.py \
+            -q -p no:cacheprovider

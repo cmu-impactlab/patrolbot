@@ -6,7 +6,7 @@
   <node pkg="nav2_velocity_smoother" exec="velocity_smoother" name="teleop_velocity_smoother"
         respawn="true" respawn_delay="2.0">
 
-    <param from="$(find-pkg-share patrolbot-launch)/param/defaults/smoother.yaml" />
+    <param from="$(env PATROLBOT_SMOOTHER_PARAMS_FILE $(find-pkg-share patrolbot-launch)/param/defaults/smoother.yaml)" />
 
     <remap from="/cmd_vel" to="/cmd_vel_out"/>
     <remap from="cmd_vel_smoothed" to="cmd_vel"/>
@@ -16,5 +16,4 @@
          output="screen" respawn="true" respawn_delay="2.0">
   </node>
 </launch>  
-
 

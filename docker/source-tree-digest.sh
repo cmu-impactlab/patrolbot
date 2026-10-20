@@ -40,6 +40,12 @@ if [[ ! -d "$hardware_path" ]]; then
   exit 2
 fi
 paths+=("$hardware_path")
+contracts_path="$ROOT/contracts"
+if [[ ! -d "$contracts_path" ]]; then
+  printf 'missing source path: %s\n' "$contracts_path" >&2
+  exit 2
+fi
+paths+=("$contracts_path")
 
 LC_ALL=C find "${paths[@]}" -type f \
   ! -path '*/__pycache__/*' \

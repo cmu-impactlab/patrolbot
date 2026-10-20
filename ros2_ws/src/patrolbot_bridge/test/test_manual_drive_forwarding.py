@@ -20,6 +20,7 @@ from types import MethodType, SimpleNamespace as NS
 from unittest.mock import Mock
 
 from patrolbot_bridge.manual_active import manual_drive_bypass
+from patrolbot_bridge.tuning_policy import clamp_drive
 import pytest
 
 PACKAGE = Path(__file__).parents[1] / 'patrolbot_bridge'
@@ -67,6 +68,7 @@ def _namespace():
         'time': time,
         'math': math,
         'manual_drive_bypass': manual_drive_bypass,
+        'clamp_drive': clamp_drive,
     }
     exec(
         compile(
@@ -114,6 +116,7 @@ def make_bridge(
     map_future=False,
     future=None,
     failed=False,
+    tuning_hold=False,
 ):
     """Stand-in node carrying exactly the fields the real callbacks read."""
     now = time.monotonic()
@@ -121,6 +124,7 @@ def make_bridge(
         lock=threading.RLock(),
         commands_allowed=commands_allowed,
         undock_hold=undock_hold,
+        tuning_hold=tuning_hold,
         guard=NS(ready=guard_ready),
         maps=NS(hold=maps_hold, stage=maps_stage) if maps_present else None,
         _map_error=map_error,
@@ -233,6 +237,7 @@ def test_read_only_readiness_future_does_not_block_manual_drive():
         {'map_future': True},
         {'future': 'mutation'},
         {'failed': True},
+        {'tuning_hold': True},
     ],
 )
 def test_in_flight_or_unknown_owners_still_drop_manual_drive(overrides):
@@ -254,6 +259,41 @@ def test_dashboard_evidence_alone_admits_drive_while_localization_held():
     bridge = make_bridge(commands_allowed=False, manual_age=None,
                          web_manual_age=0.1)
     assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
+
+
+def test_active_policy_clamps_ordinary_drive_but_never_the_undock_turn():
+    from patrolbot_bridge.tuning_policy import PolicyCache
+
+    def probe():
+        return 'gen-1', {'max_linear_m_s': 0.1, 'max_angular_rad_s': 0.2}
+
+    bridge = make_bridge(commands_allowed=True, manual_age=None)
+    bridge._tuning_policy = PolicyCache(probe)
+    bridge._tuning_policy.refresh()
+    # Manual/autonomy ordinary DRIVE is clamped down to the active policy.
+    assert drive(bridge, linear=0.25) == ['DRIVE:0.1:0.0\n']
+    bridge.sock.writes.clear()
+    assert drive(bridge, angular=0.5) == ['DRIVE:0.0:0.2\n']
+    # The undock turn keeps its exclusive profile, untouched by the policy.
+    undock = make_bridge(commands_allowed=False, manual_age=None,
+                         undock_busy=True, drive_allowed=True)
+    undock._tuning_policy = bridge._tuning_policy
+    assert drive(undock, angular=0.5) == ['DRIVE:0.0:0.5\n']
+
+
+def test_unknown_policy_falls_back_to_the_hard_envelope_never_higher():
+    from patrolbot_bridge.tuning_policy import PolicyCache
+
+    def broken():
+        raise RuntimeError('store unavailable')
+
+    bridge = make_bridge(commands_allowed=True, manual_age=None)
+    bridge._tuning_policy = PolicyCache(broken)
+    bridge._tuning_policy.refresh()
+    # Falls back to 0.30/0.70: still clamped, never raised.
+    assert drive(bridge, linear=0.4) == ['DRIVE:0.3:0.0\n']
+    bridge.sock.writes.clear()
+    assert drive(bridge, angular=0.9) == ['DRIVE:0.0:0.7\n']
 
 
 def test_f710_evidence_alone_admits_drive_while_localization_held():

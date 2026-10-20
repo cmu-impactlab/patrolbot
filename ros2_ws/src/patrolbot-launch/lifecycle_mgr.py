@@ -9,11 +9,16 @@ that and re-configures+activates it within a couple of seconds, restoring the
 cmd_vel path without a full bringup restart.
 """
 import time
+import json
+import os
+from pathlib import Path
+import uuid
 
 from lifecycle_msgs.msg import State, Transition
 from lifecycle_msgs.srv import ChangeState, GetState
 import rclpy
 from rclpy.node import Node
+from std_srvs.srv import SetBool
 
 SMOOTHER = '/teleop_velocity_smoother'
 
@@ -24,6 +29,48 @@ class LifecycleManager(Node):
         self.change_cli = self.create_client(
             ChangeState, SMOOTHER + '/change_state')
         self.get_cli = self.create_client(GetState, SMOOTHER + '/get_state')
+        self._maintenance = False
+        self._transition_busy = False
+        self.create_service(SetBool, '~/tuning_maintenance', self._set_maintenance)
+
+    def _set_maintenance(self, request, response):
+        self._maintenance = bool(request.data)
+        response.success = not self._transition_busy
+        response.message = ('Lifecycle transition is still in flight' if self._transition_busy
+                            else 'Tuning maintenance acknowledged')
+        return response
+
+    def _durable_tuning_hold(self):
+        default = Path(os.environ.get('PATROLBOT_STATE_DIR', '/var/lib/patrolbot')) / 'config'
+        base = Path(os.environ.get('PATROLBOT_TUNING_DIR', str(default)))
+        if base.is_symlink():
+            return True
+        if not base.exists():
+            marker = base.parent / 'tuning-initialized.json'
+            return (marker.exists() or marker.is_symlink()
+                    or os.environ.get('PATROLBOT_TUNING_ENABLED', '0') == '1')
+        manifest = base / 'manifest.json'
+        try:
+            if manifest.is_symlink() or manifest.stat().st_size > 512 * 1024:
+                return True
+            state = json.loads(manifest.read_text())
+            job_id = state.get('latest_job')
+            if job_id is None:
+                return False
+            if str(uuid.UUID(job_id)) != job_id:
+                return True
+            job_path = base / 'jobs' / (job_id + '.json')
+            if job_path.is_symlink() or job_path.stat().st_size > 512 * 1024:
+                return True
+            job = json.loads(job_path.read_text())
+            return job.get('state') not in ('succeeded', 'failed', 'canceled')
+        except (OSError, ValueError, TypeError, AttributeError):
+            # Present but unknown tuning state must never cause automatic
+            # lifecycle activation over an unresolved configuration job.
+            try:
+                return any(path.name != 'lock' for path in base.iterdir())
+            except OSError:
+                return True
 
     def _call(self, client, req, timeout=5.0):
         if not client.wait_for_service(timeout_sec=2.0):
@@ -37,15 +84,23 @@ class LifecycleManager(Node):
         return r.current_state.id if r else None
 
     def change(self, tid, label):
+        if self._maintenance or self._durable_tuning_hold():
+            return False
         req = ChangeState.Request()
         req.transition.id = tid
         req.transition.label = label
-        r = self._call(self.change_cli, req)
+        self._transition_busy = True
+        try:
+            r = self._call(self.change_cli, req)
+        finally:
+            self._transition_busy = False
         ok = bool(r and r.success)
         self.get_logger().info(f'smoother {label}: {"ok" if ok else "FAILED"}')
         return ok
 
     def ensure_active(self):
+        if self._maintenance or self._durable_tuning_hold():
+            return
         sid = self.get_state()
         if sid is None or sid == State.PRIMARY_STATE_ACTIVE:
             # Service absent (mid-respawn) or already active: nothing to do.

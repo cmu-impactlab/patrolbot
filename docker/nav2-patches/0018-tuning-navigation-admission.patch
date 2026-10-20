@@ -1,0 +1,95 @@
+--- a/nav2_core/include/nav2_core/behavior_tree_navigator.hpp
++++ b/nav2_core/include/nav2_core/behavior_tree_navigator.hpp
+@@ -66,6 +66,24 @@
+     return !current_navigator_.empty();
+   }
+ 
++  // Serialize tuning ownership and NEW goal admission under the same mutex.
++  // Never cancel an existing goal to obtain configuration ownership.
++  bool setTuningHold(bool held)
++  {
++    std::scoped_lock l(mutex_);
++    if (held && !current_navigator_.empty()) {return false;}
++    tuning_hold_ = held;
++    return true;
++  }
++
++  bool tryStartNavigating(const std::string & navigator_name)
++  {
++    std::scoped_lock l(mutex_);
++    if (tuning_hold_ || !current_navigator_.empty()) {return false;}
++    current_navigator_ = navigator_name;
++    return true;
++  }
++
+   /**
+    * @brief Start navigating with a given navigator
+    * @param string Name of the navigator to start
+@@ -106,6 +129,7 @@
+ protected:
+   std::string current_navigator_;
+   std::mutex mutex_;
++  bool tuning_hold_{false};
+ };
+ 
+ /**
+@@ -290,7 +314,7 @@
+    */
+   bool onGoalReceived(typename ActionT::Goal::ConstSharedPtr goal)
+   {
+-    if (plugin_muxer_->isNavigating()) {
++    if (!plugin_muxer_->tryStartNavigating(getName())) {
+       RCLCPP_ERROR(
+         logger_,
+         "Requested navigation from %s while another navigator is processing,"
+@@ -301,8 +325,14 @@
+ 
+-    bool goal_accepted = goalReceived(goal);
++    bool goal_accepted = false;
++    try {
++      goal_accepted = goalReceived(goal);
++    } catch (...) {
++      plugin_muxer_->stopNavigating(getName());
++      throw;
++    }
+ 
+-    if (goal_accepted) {
+-      plugin_muxer_->startNavigating(getName());
++    if (!goal_accepted) {
++      plugin_muxer_->stopNavigating(getName());
+     }
+ 
+     return goal_accepted;
+--- a/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
++++ b/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
+@@ -17,6 +17,7 @@
+ #define NAV2_BT_NAVIGATOR__BT_NAVIGATOR_HPP_
+ 
+ #include <memory>
++#include "std_srvs/srv/set_bool.hpp"
+ #include "std_srvs/srv/trigger.hpp"
+ #include <string>
+ #include <vector>
+@@ -90,4 +91,5 @@
+   pluginlib::ClassLoader<nav2_core::NavigatorBase> class_loader_;
+   std::vector<pluginlib::UniquePtr<nav2_core::NavigatorBase>> navigators_;
+   nav2_core::NavigatorMuxer plugin_muxer_;
++  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr tuning_hold_srv_;
+   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr navigation_idle_srv_;
+--- a/nav2_bt_navigator/src/bt_navigator.cpp
++++ b/nav2_bt_navigator/src/bt_navigator.cpp
+@@ -138,2 +138,9 @@
+-  navigation_idle_srv_ = create_service<std_srvs::srv::Trigger>(
++  tuning_hold_srv_ = create_service<std_srvs::srv::SetBool>(
++    "~/tuning_hold", [this](
++      const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
++      std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
++      response->success = plugin_muxer_.setTuningHold(request->data);
++      response->message = response->success ? "Tuning admission updated" : "Navigation busy";
++    });
++  navigation_idle_srv_ = create_service<std_srvs::srv::Trigger>(
+     "~/navigation_idle",
+@@ -185,2 +193,3 @@
+   RCLCPP_INFO(get_logger(), "Cleaning up");
++  tuning_hold_srv_.reset();
+   navigation_idle_srv_.reset();

@@ -1,0 +1,24 @@
+{
+  "contract": "patrolbot-tuning-runtime",
+  "version": 1,
+  "nodes": ["teleop_velocity_smoother", "amcl", "controller_server", "velocity_smoother", "behavior_server", "patrolbot_joy_teleop"],
+  "managers": ["lifecycle_manager_navigation", "lifecycle_manager_localization"],
+  "topics": {
+    "hold": "/patrolbot/tuning_hold",
+    "physical_deadman": "/patrolbot/manual_active",
+    "web_deadman": "/patrolbot/web_teleop_active",
+    "web_session": "/patrolbot/web_teleop_session_active",
+    "mux_output": "/cmd_vel_out",
+    "smoothed_output": "/cmd_vel"
+  },
+  "services": {
+    "navigation_hold": "/bt_navigator/tuning_hold",
+    "smoother_hold": "/lifecycle_manager_script/tuning_maintenance",
+    "physical_idle": "/patrolbot/joy_tuning_idle",
+    "web_idle": "/patrolbot/web_tuning_idle"
+  },
+  "evidence_max_age_s": 0.5,
+  "joystick_policy_version": 1,
+  "startup_policy": "Only committed ACTIVE artifacts; unresolved jobs retain motion hold. Desired settings are never activated by restart.",
+  "rearm_policy": "Configuration never arms input. F710 requires release and a new deadman press; web sessions must be explicitly restarted. Navigation requires a new operator seed."
+}

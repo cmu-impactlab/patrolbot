@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmu-impactlab.github.io/patrolbot/contracts/robot-tuning.schema.json",
+  "title": "PatrolBot robot tuning contract v1 (slice 1, offline)",
+  "$comment": "Offline cross-repo draft for robot_tuning_v1. Slice 1 implements no runtime service, endpoint, store or UI; the capability is unadvertised and every parameter is non-activatable. Desired values never imply runtime activity. The validator resolves each logical ID's registry type from the generic value union, enforces strict finite bounded JSON and integer semantics, rejects duplicate keys, and checks registry dependencies. Only a complete authoritative context permits stale revision/session comparison; validation never authorizes an operation. Future server and robot implementations MUST authenticate reads and require administrator authorization for every mutation. The request deliberately has no actor/role field; a browser cannot assert privilege.",
+  "$defs": {
+    "logical_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)*$",
+      "$comment": "Logical registry ID only. Never a filesystem path, ROS key or topic name."
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "session_id"],
+      "properties": {
+        "capability": {
+          "const": "robot_tuning_v1",
+          "$comment": "Binds a request to this capability; a mismatched or absent capability is refused."
+        },
+        "session_id": {
+          "$ref": "#/$defs/canonical_uuid",
+          "$comment": "Opaque epoch/session token, minted per authoritative store session. It is NOT the desired revision: a future runtime compares this token against the authoritative current session (rejecting a stale/foreign epoch) while the compare-and-swap is done with base_revision/expected_revision against the authoritative revision. Because nothing here is a live service, slice 1 only checks the shape; a standalone shape checker cannot see the authoritative session."
+        }
+      }
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "$comment": "Optimistic compare-and-swap revision. Non-integer or negative values are invalid; the maximum is the JavaScript safe-integer limit (2^53-1) so a browser client cannot silently round it. JSON Schema 'integer' would accept an integral float like 0.0, so validate_robot_tuning.py also rejects any float/boolean revision value explicitly."
+    },
+    "change": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/logical_id" },
+        "value": {
+          "type": ["number", "boolean"],
+          "$comment": "Numeric or boolean only. Strings (possible paths/injection) are rejected. The registry decides the exact type and finite-ness; validate_robot_tuning.py rejects bool-as-number and non-finite values."
+        }
+      }
+    },
+    "base_request_fields": {
+      "$comment": "Documentation-only mirror of the fields repeated in every request. Not referenced directly because additionalProperties:false must sit on each concrete schema.",
+      "type": "object"
+    },
+    "read_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "operation", "request_id", "generation"],
+      "properties": {
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "operation": { "const": "read" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "generation": { "$ref": "#/$defs/generation" }
+      }
+    },
+    "save_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "operation", "request_id", "generation", "base_revision", "changes"],
+      "properties": {
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "operation": { "const": "save" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "generation": { "$ref": "#/$defs/generation" },
+        "base_revision": { "$ref": "#/$defs/revision" },
+        "changes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/change" },
+          "$comment": "Bounded batch. The validator additionally rejects duplicate IDs within one batch."
+        }
+      }
+    },
+    "apply_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "operation", "request_id", "generation", "expected_revision"],
+      "properties": {
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "operation": { "const": "apply" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "generation": { "$ref": "#/$defs/generation" },
+        "expected_revision": { "$ref": "#/$defs/revision" }
+      }
+    },
+    "redeploy_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "operation", "request_id", "generation", "expected_revision"],
+      "properties": {
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "operation": { "const": "redeploy" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "generation": { "$ref": "#/$defs/generation" },
+        "expected_revision": { "$ref": "#/$defs/revision" }
+      }
+    },
+    "status_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "operation", "request_id", "generation"],
+      "properties": {
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "operation": { "const": "status" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "generation": { "$ref": "#/$defs/generation" },
+        "job_id": { "$ref": "#/$defs/request_id" }
+      },
+      "$comment": "Job query/resubscribe. Absent job_id asks for the latest durable job."
+    },
+    "restore_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "version", "operation", "request_id", "generation", "expected_revision", "restore_revision", "target"],
+      "properties": {
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "operation": { "const": "restore" },
+        "request_id": { "$ref": "#/$defs/request_id" },
+        "generation": { "$ref": "#/$defs/generation" },
+        "expected_revision": { "$ref": "#/$defs/revision", "$comment": "The authoritative current desired/CAS revision (the same value context.current_revision compares against, never the active runtime revision); a mismatch means the reviewed rollback is stale." },
+        "restore_revision": { "$ref": "#/$defs/revision", "$comment": "The exact immutable last-known-good revision to restore to. Required so approval binds a specific reviewed artifact; a moving 'latest' pointer would let the reviewed target change under the approver. Must not exceed expected_revision." },
+        "target": {
+          "const": "last_known_good",
+          "$comment": "Administrator-only restore. Rollback is a new audited activation, never history deletion."
+        }
+      }
+    },
+    "canonical_uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "$comment": "Canonical lowercase RFC 4122 UUID. Only the lowercase hyphenated form is accepted so that case/brace variants cannot alias the same identifier; the validator also normalizes and rejects non-canonical forms with a distinct code."
+    },
+    "request_id": {
+      "$ref": "#/$defs/canonical_uuid",
+      "$comment": "UUID idempotency key minted by the caller; enables durable request deduplication."
+    },
+    "snapshot_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "desired", "active", "active_known", "pending", "classification"],
+      "properties": {
+        "id": { "$ref": "#/$defs/logical_id" },
+        "desired": {
+          "type": ["number", "boolean", "string", "null"],
+          "maxLength": 256,
+          "$comment": "Persisted desired value, or null when never set. A string is only ever valid for a read-only/structural registry entry (e.g. amcl.laser_model_type, costmap.footprint): the save request's change.value still cannot be a string, so read-only string state is representable in a snapshot without opening a string write path."
+        },
+        "active": {
+          "type": ["number", "boolean", "string", "null"],
+          "maxLength": 256,
+          "$comment": "Observed/read-back runtime value. null unless active_known is true. Never inferred from desired. Deliberately NOT bounds-checked: a real readback may drift outside the current policy and that drift must be representable rather than rejected as impossible."
+        },
+        "active_known": {
+          "type": "boolean",
+          "$comment": "false means the runtime readback is unknown; active MUST be null and the UI must not imply activity."
+        },
+        "pending": {
+          "type": "boolean",
+          "$comment": "Persisted promotion status owned by the robot manifest: true when a saved change is awaiting activation, independent of whether the runtime is currently readable. It survives a reboot, so pending may be true even while runtime is 'unknown' and active is null; it is never inferred from a runtime comparison and is never cleared merely on reconnect."
+        },
+        "classification": {
+          "enum": ["uncommissioned", "candidate_unverified", "restart_required", "read_only"],
+          "$comment": "Deliberately has no 'active'/'live' member: slice 1 makes no live claim."
+        }
+      }
+    },
+    "tuning_state_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "contract", "version", "capability", "advertised", "runtime", "revisions", "safe_apply", "fields"],
+      "properties": {
+        "kind": { "const": "tuning_state_snapshot" },
+        "contract": { "const": "patrolbot-robot-tuning" },
+        "version": { "const": 1 },
+        "capability": { "const": "robot_tuning_v1" },
+        "advertised": {
+          "const": false,
+          "$comment": "The runtime capability must stay unadvertised until the full safety slice lands."
+        },
+        "runtime": {
+          "enum": ["known", "unknown"],
+          "$comment": "'unknown' is a first-class state: it is busy/unsafe for apply and must not read as zero or as active."
+        },
+        "revisions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["desired", "active", "last_known_good", "known"],
+          "properties": {
+            "desired": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+            "active": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+            "last_known_good": { "type": ["integer", "null"], "minimum": 0, "maximum": 9007199254740991 },
+            "known": { "type": "boolean" }
+          }
+        },
+        "safe_apply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed", "reason"],
+          "properties": {
+            "allowed": {
+              "const": false,
+              "$comment": "Const false in slice 1: no activation path is implemented, so a snapshot may never assert that an apply is safe/allowed. It may only be widened in the slice that actually implements guarded activation."
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "$comment": "Human-readable refusal reason; 'unknown is busy' must be stated, not omitted, so a non-empty reason is required."
+            }
+          }
+        },
+        "fields": {
+          "type": "array",
+          "maxItems": 128,
+          "items": { "$ref": "#/$defs/snapshot_field" }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/read_request" },
+    { "$ref": "#/$defs/save_request" },
+    { "$ref": "#/$defs/apply_request" },
+    { "$ref": "#/$defs/redeploy_request" },
+    { "$ref": "#/$defs/status_request" },
+    { "$ref": "#/$defs/restore_request" },
+    { "$ref": "#/$defs/tuning_state_snapshot" }
+  ]
+}

@@ -17,6 +17,7 @@ def base_kwargs(**overrides):
         'raw_odom_ready': True,
         'map_blocked': False,
         'mutation_blocked': False,
+        'tuning_hold': False,
     }
     kwargs.update(overrides)
     return kwargs
@@ -61,6 +62,11 @@ class ManualDriveBypassTest(unittest.TestCase):
         self.assertFalse(manual_drive_bypass(0.0, **base_kwargs(guard_ready=False)))
         self.assertFalse(manual_drive_bypass(0.0, **base_kwargs(map_blocked=True)))
         self.assertFalse(manual_drive_bypass(0.0, **base_kwargs(mutation_blocked=True)))
+
+    def test_tuning_activation_hold_is_never_bypassed(self):
+        # A pending/unknown tuning job holds manual DRIVE even with fresh
+        # deadman evidence and every other gate clear.
+        self.assertFalse(manual_drive_bypass(0.0, **base_kwargs(tuning_hold=True)))
 
 
 if __name__ == '__main__':

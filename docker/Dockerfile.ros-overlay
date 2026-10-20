@@ -2,9 +2,19 @@
 # The caller must pin the base and verify its Nav2 patch provenance first.
 ARG PATROLBOT_BASE_IMAGE
 FROM ${PATROLBOT_BASE_IMAGE}
+# Verify the inherited native patch set BEFORE replacing any metadata. This
+# overlay rebuilds ROS Python/interfaces, not Nav2: copying new patch files
+# must never make an old native binary claim the new admission-gate provenance.
+ARG PATROLBOT_NAV2_PATCH_SHA256
+RUN test -n "${PATROLBOT_NAV2_PATCH_SHA256}" && \
+    test -d /opt/patrolbot-nav2-patches && \
+    test "$(for patch_file in /opt/patrolbot-nav2-patches/*.patch; do \
+      printf '%s\0' "${patch_file##*/}"; cat "$patch_file"; \
+    done | sha256sum | cut -d' ' -f1)" = "${PATROLBOT_NAV2_PATCH_SHA256}"
 RUN rm -rf /opt/patrolbot_ws/src /opt/patrolbot_ws/hardware/patrolbot_hw_server
 COPY ros2_ws/src /opt/patrolbot_ws/src
 COPY hardware/patrolbot_hw_server /opt/patrolbot_ws/hardware/patrolbot_hw_server
+COPY contracts /opt/patrolbot_ws/contracts
 COPY docker/source-tree-digest.sh /opt/patrolbot_ws/source-tree-digest.sh
 ARG PATROLBOT_SOURCE_SHA256
 RUN test -n "${PATROLBOT_SOURCE_SHA256}" && \

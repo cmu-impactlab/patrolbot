@@ -50,6 +50,13 @@ class EpochRuntime(MapRuntimeMixin):
         self._failed = False
         self._navigation_ready = False
         self.undock_hold = False
+        # Tuning activation hold. Owned by the tuning coordinator and surfaced
+        # here so it rides the *existing* admission boundaries: a pending or
+        # unknown activation job blocks autonomy (commands_allowed) and manual
+        # DRIVE, including the manual deadman bypass.
+        self.tuning_hold = False
+        self._tuning_hold_sources = {}
+        self._tuning_hold_reason = ''
         self._lidar_reseed = False
         self._lidar_cancel = [
             node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
@@ -89,6 +96,39 @@ class EpochRuntime(MapRuntimeMixin):
             self.guard.disconnect(session)
             if session == self.guard.session:
                 self.withdraw()
+
+    def set_tuning_hold(self, held, reason=''):
+        self._set_tuning_hold_source('job', held, reason)
+
+    def set_tuning_policy_hold(self, held, reason=''):
+        self._set_tuning_hold_source('policy', held, reason)
+
+    def _set_tuning_hold_source(self, source, held, reason=''):
+        """
+        Set the tuning hold on the existing admission boundary.
+
+        Set by the tuning coordinator before any service is stopped and held
+        until the job reaches a terminal state. A pending, running or unknown
+        job keeps this True across a restart (see ``recover``), blocking both
+        autonomy and manual DRIVE.
+        """
+        with self.lock:
+            if held:
+                self._tuning_hold_sources[source] = str(reason or '')
+            else:
+                self._tuning_hold_sources.pop(source, None)
+            self.tuning_hold = bool(self._tuning_hold_sources)
+            self._tuning_hold_reason = '; '.join(self._tuning_hold_sources.values())
+            publisher = getattr(self.node, '_tuning_hold_pub', None)
+            if publisher is not None:
+                from std_msgs.msg import Bool
+                publisher.publish(Bool(data=self.tuning_hold))
+            if held:
+                self._pending_pose = None
+                self._accepted_seed_stamp = None
+                self._navigation_ready = False
+                self.node.get_logger().warning(
+                    'Tuning activation hold engaged: ' + self._tuning_hold_reason)
 
     def withdraw(self, reset_odometry=True):
         turn = getattr(self.node, '_undock_turn', None)
@@ -142,6 +182,10 @@ class EpochRuntime(MapRuntimeMixin):
     @property
     def commands_allowed(self):
         with self.lock:
+            if self.tuning_hold:
+                return False
+            if getattr(self, '_tuning_nav_pending', False):
+                return False
             if not self.node._lidar_ready():
                 return False
             if self.map_hold:
@@ -260,6 +304,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed(self, message):
         with self.lock:
+            if self.tuning_hold:
+                return
             if self.undock_hold:
                 self.node._undock_turn.revoke('initial pose requested during undock')
                 return
@@ -497,12 +543,16 @@ class EpochRuntime(MapRuntimeMixin):
 
     def tick(self):
         with self.lock:
+            if self.tuning_hold:
+                self.poll_navigation_idle()
+                return
             self.recovery.observe_clock(self.node.get_clock().now().nanoseconds)
             token = self.recovery.token
             if self.undock_hold:
                 return
             self._poll_tf_readiness()
             self.poll_navigation_idle()
+            self.tick_tuning_map_gate()
             if self.tick_map():
                 return
             self.tick_startup_map()

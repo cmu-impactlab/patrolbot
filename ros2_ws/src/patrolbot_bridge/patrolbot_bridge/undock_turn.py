@@ -130,7 +130,7 @@ class UndockTurnRuntime:
         self.idle_at = None
         self.idle_future = None
         self.idle_requested_at = None
-        self.actions = {name: False for name in ACTION_NAMES}
+        self.actions = dict.fromkeys(ACTION_NAMES, False)
         self.hardware_cancel_sent = False
         self.spin_cancel_sent = False
         self.validation_mode = False
@@ -279,6 +279,8 @@ class UndockTurnRuntime:
 
     def reserve_reverse(self, validation_mode=False):
         with self.epoch.lock:
+            if getattr(self.epoch, 'tuning_hold', False):
+                return False
             if self.busy or self.hardware_problem(
                 charging=True, stationary=True, allow_uncommissioned=validation_mode
             ):

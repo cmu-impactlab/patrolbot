@@ -32,6 +32,7 @@ def manual_drive_bypass(
     raw_odom_ready,
     map_blocked,
     mutation_blocked,
+    tuning_hold,
 ):
     """
     Return True when fresh deadman evidence may bypass the localization hold.
@@ -40,15 +41,18 @@ def manual_drive_bypass(
     AMCL pose freshness and map state (loaded, failed, absent) never refuse
     manual DRIVE on their own. Everything physical still blocks: undock
     ownership, unavailable LiDAR, odometry-origin readiness, stale or
-    non-finite raw odometry, and any in-flight or unknown map/lifecycle
-    mutation owner (map_blocked and mutation_blocked are computed by the
-    caller from the epoch runtime). Anything non-finite or stale fails closed.
+    non-finite raw odometry, any in-flight or unknown map/lifecycle mutation
+    owner (map_blocked and mutation_blocked are computed by the caller from the
+    epoch runtime) and a pending/unknown tuning activation hold (tuning_hold is
+    likewise computed by the caller). Anything non-finite or stale fails closed.
     """
     try:
         fresh = math.isfinite(manual_age_s) and 0.0 <= manual_age_s <= MANUAL_ACTIVE_TIMEOUT
     except (TypeError, ValueError):
         return False
     if not fresh:
+        return False
+    if tuning_hold:
         return False
     if undock_hold:
         return False

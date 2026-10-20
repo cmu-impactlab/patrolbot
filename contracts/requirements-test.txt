@@ -1,0 +1,16 @@
+# Offline test dependencies for the robot-tuning contract (slice 1).
+#
+# These are DEV/TEST-ONLY packages. They are NOT robot runtime dependencies and
+# say nothing about what is installed on the Pi or SBC. The versions below are
+# the exact set this contract was tested against.
+#
+# Install:  pip install -r contracts/requirements-test.txt
+# Run:      python -m pytest contracts/ -q
+#
+# jsonschema pulls its own transitive dependencies (referencing, rpds-py,
+# jsonschema-specifications, attrs). For a byte-exact environment use
+# contracts/requirements-test.lock.txt, which records the full tested freeze.
+
+jsonschema==4.25.1
+pytest==9.1.1
+PyYAML==6.0.3

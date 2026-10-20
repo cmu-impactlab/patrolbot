@@ -52,6 +52,7 @@ COPY ros2_ws/src/patrolbot_interfaces ros2_ws/src/patrolbot_interfaces
 COPY ros2_ws/src/patrolbot_bridge ros2_ws/src/patrolbot_bridge
 COPY ros2_ws/src/patrolbot_dock_manager ros2_ws/src/patrolbot_dock_manager
 COPY ros2_ws/src/patrolbot_navigation ros2_ws/src/patrolbot_navigation
+COPY contracts contracts
 
 RUN . /opt/ros/jazzy/setup.sh \
     && colcon build \
@@ -59,7 +60,6 @@ RUN . /opt/ros/jazzy/setup.sh \
         --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation
 
 # Static-contract fixtures only: these packages are not built or launched.
-COPY contracts contracts
 COPY ros2_ws/src/patrolbot-launch ros2_ws/src/patrolbot-launch
 COPY ros2_ws/src/patrolbot_docking_plugins ros2_ws/src/patrolbot_docking_plugins
 COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server

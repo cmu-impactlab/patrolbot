@@ -40,8 +40,10 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: bringup
-    command: ["ros2", "launch", "patrolbot-launch", "bringup.xml"]
+      PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
+    command: ["ros2", "run", "patrolbot_bridge", "tuning_run", "--role", "bringup"]
     volumes:
+      - patrolbot-state:/var/lib/patrolbot:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot-launch:/opt/patrolbot_ws/src/patrolbot-launch:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bringup:/root/.ros/log
 
@@ -57,6 +59,10 @@ services:
       # stalled DDS reader and starve both /odom and /scan.
       RMW_FASTRTPS_PUBLICATION_MODE: ASYNCHRONOUS
       PATROLBOT_ROLE: bridge
+      PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
+      PATROLBOT_TUNING_RUNTIME_ENABLED: "${PATROLBOT_TUNING_RUNTIME_ENABLED:-0}"
+      PATROLBOT_TUNING_AUTH_KEY_FILE: /run/patrolbot-secrets/tuning.key
+      PATROLBOT_ROBOT_ID: "${PATROLBOT_ROBOT_ID:-patrolbot-01}"
     command:
       - ros2
       - run
@@ -67,6 +73,7 @@ services:
       - /opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml
     volumes:
       - patrolbot-state:/var/lib/patrolbot
+      - patrolbot-secrets:/run/patrolbot-secrets:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
 
@@ -159,11 +166,12 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: navigation
+      PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
       # SDL's libudev netlink monitor never joins a multicast group without /run/udev,
       # so no hotplug uevent arrives and joy_node only enumerates once at startup.
       # Disable udev to poll /dev/input every ~3s and re-detect replugged gamepads.
       SDL_JOYSTICK_DISABLE_UDEV: "1"
-    command: ["ros2", "launch", "patrolbot_navigation", "bringup.launch.py"]
+    command: ["ros2", "run", "patrolbot_bridge", "tuning_run", "--role", "navigation"]
     volumes:
       - patrolbot-state:/var/lib/patrolbot:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
@@ -174,3 +182,4 @@ services:
 
 volumes:
   patrolbot-state:
+  patrolbot-secrets:

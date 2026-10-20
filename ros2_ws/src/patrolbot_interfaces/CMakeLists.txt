@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MotorEnable.srv"
   "srv/MotorDisable.srv"
   "srv/SetLidarPower.srv"
+  "srv/RobotTuning.srv"
   "action/HardwareUndock.action"
   "action/UndockTurn.action"
   "action/Undock.action"

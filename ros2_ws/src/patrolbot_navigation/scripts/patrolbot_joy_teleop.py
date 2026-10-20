@@ -23,6 +23,7 @@ and polarity still require live confirmation before feature acceptance. If
 forward/back or left/right is reversed, flip the matching *_SIGN constant below and restart.
 """
 import math
+import os
 from uuid import uuid4
 
 import rclpy
@@ -36,6 +37,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool
+from std_srvs.srv import Trigger
 
 from joystick_policy import (
     ANG_SIGN,
@@ -80,7 +82,7 @@ class JoyTeleop(Node):
         self.declare_parameter('min_linear', 0.05)
         self.declare_parameter('max_linear_cap', 0.30)
         self.declare_parameter('min_angular', 0.1)
-        self.declare_parameter('max_angular_cap', 3.0)
+        self.declare_parameter('max_angular_cap', 0.70)
         self.declare_parameter('linear_step', 0.05)
         self.declare_parameter('angular_step', 0.1)
         self.declare_parameter('deadzone', 0.12)
@@ -92,6 +94,16 @@ class JoyTeleop(Node):
         self.max_lin = g('max_linear'); self.max_ang = g('max_angular')
         self.min_lin = g('min_linear'); self.lin_cap = g('max_linear_cap')
         self.min_ang = g('min_angular'); self.ang_cap = g('max_angular_cap')
+        # Operator trims remain proportional targets within the administrator's
+        # ceiling. A trim minimum must never push a reduced ceiling upward.
+        self.lin_cap = max(0.0, min(0.30, self.lin_cap))
+        self.ang_cap = max(0.0, min(0.70, self.ang_cap))
+        self.min_lin = max(0.0, min(self.min_lin, self.lin_cap))
+        self.min_ang = max(0.0, min(self.min_ang, self.ang_cap))
+        self.max_lin = max(0.0, min(self.max_lin, self.lin_cap))
+        self.max_ang = max(0.0, min(self.max_ang, self.ang_cap))
+        self._operator_linear_trim = False
+        self._operator_angular_trim = False
         self.lin_step = g('linear_step'); self.ang_step = g('angular_step')
         self.deadzone = g('deadzone')
         self.accel_lin = g('accel_linear'); self.accel_ang = g('accel_angular')
@@ -120,6 +132,18 @@ class JoyTeleop(Node):
         self._base_state = None
         self._base_state_at = None
         self._lidar_generation = None
+        self._tuning_hold = False
+        self._tuning_require_release = os.environ.get('PATROLBOT_TUNING_ENABLED', '0') == '1'
+        try:
+            from patrolbot_bridge.tuning_startup import state_expected
+            state_dir = os.environ.get('PATROLBOT_TUNING_DIR',
+                                       os.path.join(os.environ.get(
+                                           'PATROLBOT_STATE_DIR', '/var/lib/patrolbot'), 'config'))
+            self._tuning_require_release = self._tuning_require_release or state_expected(state_dir)
+        except ImportError:
+            # Legacy standalone receivers have no persistent tuning package.
+            pass
+        self._tuning_deadman_held = False
 
         self.create_subscription(Joy, '/joy', self.joy_cb, 10)
         self.create_subscription(
@@ -133,16 +157,84 @@ class JoyTeleop(Node):
         # localization recovery while autonomy stays blocked. Stale flag
         # fails closed at the bridge within MANUAL_ACTIVE_TIMEOUT.
         self.manual_pub = self.create_publisher(Bool, "/patrolbot/manual_active", 10)
+        self.create_subscription(Bool, '/patrolbot/tuning_hold', self._tuning_hold_cb, 10)
+        self.create_service(Trigger, '/patrolbot/joy_tuning_idle', self._tuning_idle)
         self.nav_cancel = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal')
         self.lidar_power = self.create_client(
             SetLidarPower, '/patrolbot/set_lidar_power')
         self.create_timer(self.dt, self.tick)
+        policy_callbacks = (hasattr(self, 'add_post_set_parameters_callback')
+                            and hasattr(self, 'add_on_set_parameters_callback'))
+        self.declare_parameter('tuning_policy_version', 1 if policy_callbacks else 0)
+        if policy_callbacks:
+            self.add_on_set_parameters_callback(self._validate_tuning_parameters)
+            self.add_post_set_parameters_callback(self._commit_tuning_parameters)
 
         self.get_logger().info(
             'Joy teleop ready (XInput). Hold RB + left stick (or D-pad) to drive. '
             'LB+RB+LT+RT=LiDAR power (release all to rearm). '
             f'A/Y=linear -/+, X/B=angular -/+. max {self.max_lin} m/s / {self.max_ang} rad/s.')
+
+    def _validate_tuning_parameters(self, parameters):
+        from rcl_interfaces.msg import SetParametersResult
+        allowed = {'max_linear', 'max_angular', 'min_linear', 'min_angular',
+                   'max_linear_cap', 'max_angular_cap'}
+        changes = {p.name: p.value for p in parameters if p.name in allowed}
+        if not changes:
+            return SetParametersResult(successful=True)
+        values = {name: self.get_parameter(name).value for name in allowed}
+        values.update(changes)
+        valid = all(type(value) in (int, float) and math.isfinite(value)
+                    and value >= 0 for value in values.values())
+        valid = valid and (values['max_linear_cap'] <= .30
+                           and values['max_angular_cap'] <= .70
+                           and values['min_linear'] <= values['max_linear']
+                           <= values['max_linear_cap']
+                           and values['min_angular'] <= values['max_angular']
+                           <= values['max_angular_cap'])
+        # Never mutate a live proportional/ramped command underneath a held
+        # controller. Runtime tuning owns the stationary admission boundary.
+        valid = valid and self._tuning_hold and not (self.active or self._tuning_deadman_held
+                               or abs(self.lin_cmd) > 1e-9
+                               or abs(self.ang_cmd) > 1e-9 or self._takeover_pending)
+        return SetParametersResult(successful=valid, reason='' if valid else
+                                   'Joystick policy requires idle input and coherent safe caps')
+
+    def _commit_tuning_parameters(self, parameters):
+        names = {p.name for p in parameters}
+        if not names.intersection({'max_linear', 'max_angular', 'min_linear',
+                                   'min_angular', 'max_linear_cap', 'max_angular_cap'}):
+            return
+        self.lin_cap = self.get_parameter('max_linear_cap').value
+        self.ang_cap = self.get_parameter('max_angular_cap').value
+        self.min_lin = self.get_parameter('min_linear').value
+        self.min_ang = self.get_parameter('min_angular').value
+        linear = min(self.get_parameter('max_linear').value, self.lin_cap)
+        angular = min(self.get_parameter('max_angular').value, self.ang_cap)
+        self.max_lin = min(self.max_lin, linear) if self._operator_linear_trim else linear
+        self.max_ang = min(self.max_ang, angular) if self._operator_angular_trim else angular
+        self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
+        self.active = False
+        self.deadman_was_down = False
+        self._last_joy = None
+
+    def _tuning_hold_cb(self, message):
+        self._tuning_hold = bool(message.data)
+        if self._tuning_hold:
+            self._tuning_require_release = True
+            self.active = False
+            self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
+            # Stop through the existing priority-8 producer, never a new
+            # downstream velocity publisher. No saved input survives release.
+            self.pub.publish(Twist())
+
+    def _tuning_idle(self, request, response):
+        response.success = bool(self._tuning_hold and not self._tuning_deadman_held
+                                and not self.active and not self._takeover_pending
+                                and self.lin_cmd == 0.0 and self.ang_cmd == 0.0)
+        response.message = 'Tuning idle acknowledged' if response.success else 'Manual input busy'
+        return response
 
     def _base_state_cb(self, message):
         if ((self._lidar_generation is not None and
@@ -304,6 +396,14 @@ class JoyTeleop(Node):
     def joy_cb(self, m):
         b = m.buttons
         a = m.axes
+        self._tuning_deadman_held = button_pressed(b, BTN_DEADMAN)
+        if self._tuning_hold or self._tuning_require_release:
+            self.active = False
+            self.deadman_was_down = False
+            self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
+            if not self._tuning_hold and not self._tuning_deadman_held:
+                self._tuning_require_release = False
+            return
         now = self.get_clock().now().nanoseconds / 1e9
         if self._last_joy is None or not 0 <= now - self._last_joy <= JOY_TIMEOUT:
             self._lidar_toggle_pending = False
@@ -325,12 +425,16 @@ class JoyTeleop(Node):
         # --- speed trim (edge-triggered, one step per press) ---
         changed = False
         if self._edge(b, BTN_LIN_UP):
+            self._operator_linear_trim = True
             self.max_lin = round(min(self.max_lin + self.lin_step, self.lin_cap), 2); changed = True
         if self._edge(b, BTN_LIN_DOWN):
+            self._operator_linear_trim = True
             self.max_lin = round(max(self.max_lin - self.lin_step, self.min_lin), 2); changed = True
         if self._edge(b, BTN_ANG_UP):
+            self._operator_angular_trim = True
             self.max_ang = round(min(self.max_ang + self.ang_step, self.ang_cap), 2); changed = True
         if self._edge(b, BTN_ANG_DOWN):
+            self._operator_angular_trim = True
             self.max_ang = round(max(self.max_ang - self.ang_step, self.min_ang), 2); changed = True
         if changed:
             self.get_logger().info(f'max_linear={self.max_lin} m/s   max_angular={self.max_ang} rad/s')
@@ -389,7 +493,8 @@ class JoyTeleop(Node):
         # Evidence is real manual intent only (held deadman or still coasting);
         # the fail-closed _takeover_pending zero hold is not intent and must
         # not keep the bridge's manual bypass open.
-        self.manual_pub.publish(Bool(data=bool(self.active or moving)))
+        self.manual_pub.publish(Bool(data=bool(
+            self.active or moving or (self._tuning_hold and self._tuning_deadman_held))))
         if self.active or moving or self._takeover_pending:
             # While RB held (manual control) OR still coasting to a stop, keep
             # publishing at a steady rate. A pending takeover adds a fail-closed

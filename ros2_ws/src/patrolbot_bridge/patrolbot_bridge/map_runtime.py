@@ -14,7 +14,7 @@ from nav_msgs.srv import GetMap
 from patrolbot_interfaces.action import LocalizeOnMap
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_srvs.srv import Empty, Trigger
+from std_srvs.srv import Empty, SetBool, Trigger
 
 from .epoch_recovery import EpochRecovery
 from .map_catalog import ActiveMapStore, MapCatalog
@@ -46,6 +46,10 @@ class MapRuntimeMixin:
         self._navigation_probe = None
         self._navigation_probe_at = 0.0
         self._navigation_idle = self.node.create_client(Trigger, '/bt_navigator/navigation_idle')
+        self._tuning_nav_pending = False
+        self._tuning_nav_reserved = False
+        self._tuning_map_probe = None
+        self._tuning_nav_release = self.node.create_client(SetBool, '/bt_navigator/tuning_hold')
         try:
             catalog = MapCatalog(
                 Path(get_package_share_directory('patrolbot_navigation')) / 'maps'
@@ -145,6 +149,63 @@ class MapRuntimeMixin:
             return 'wait-navigation-idle-confirmation'
         return ''
 
+    def tick_tuning_map_gate(self):
+        """
+        Release navigator admission only after a fresh seed and matching costmap.
+
+        The navigation manager may be resumed to let the costmap consume its
+        map, but the navigator's atomic goal gate and core DRIVE admission stay
+        closed until that exact map identity is confirmed. No pose is injected.
+        """
+        if not getattr(self, '_tuning_nav_pending', False):
+            return
+        if not getattr(self, '_tuning_nav_reserved', False):
+            future = self._tuning_map_probe
+            if future is not None:
+                if not future.done():
+                    return
+                self._tuning_map_probe = None
+                try:
+                    if not future.result().success:
+                        return
+                except Exception:
+                    return
+                self._tuning_nav_reserved = True
+                self._tuning_map_phase = 'global-map'
+            elif self._tuning_nav_release.service_is_ready():
+                request = SetBool.Request()
+                request.data = True
+                self._tuning_map_probe = self._tuning_nav_release.call_async(request)
+                return
+            else:
+                return
+        if (not self.guard.ready or self.recovery.stage != EpochRecovery.READY
+                or not self._navigation_ready):
+            return
+        future = self._tuning_map_probe
+        if future is not None:
+            if not future.done():
+                return
+            self._tuning_map_probe = None
+            try:
+                result = future.result()
+                if self._tuning_map_phase == 'global-map':
+                    if not result.success or result.message != self._tuning_map_identity:
+                        return
+                    self._tuning_map_phase = 'release'
+                elif result.success:
+                    self.node._tuning_navigation_released()
+                    self._tuning_nav_pending = False
+                    return
+            except Exception:
+                return
+        if self._tuning_map_phase == 'global-map' and self._global_map.service_is_ready():
+            self._tuning_map_probe = self._global_map.call_async(Trigger.Request())
+        elif self._tuning_map_phase == 'release' and self._tuning_nav_release.service_is_ready():
+            request = SetBool.Request()
+            request.data = False
+            self._tuning_map_probe = self._tuning_nav_release.call_async(request)
+
     @property
     def map_hold(self):
         return bool(
@@ -153,6 +214,8 @@ class MapRuntimeMixin:
 
     def _map_accept(self, request):
         with self.lock:
+            if getattr(self, 'tuning_hold', False):
+                return GoalResponse.REJECT
             if self.undock_hold:
                 self.node._undock_turn.revoke('map localization requested during undock')
                 return GoalResponse.REJECT
@@ -290,6 +353,11 @@ class MapRuntimeMixin:
                     if goal.is_cancel_requested:
                         goal.canceled()
                     elif tx.stage == 'ready':
+                        if getattr(self, '_tuning_nav_pending', False):
+                            self.node._tuning_map_identity_changed(self._map_identity)
+                            self._tuning_map_identity = self._map_identity
+                            self._tuning_map_probe = None
+                            self._tuning_map_phase = 'global-map'
                         goal.succeed()
                     else:
                         goal.abort()

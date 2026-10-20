@@ -7,6 +7,7 @@ ARG ROS_DISTRO
 RUN --mount=type=tmpfs,target=/var/cache/apt/archives \
     apt-get update && apt-get install -y --no-install-recommends \
       python3-colcon-common-extensions \
+      python3-yaml \
       cmake \
       build-essential \
       ros-${ROS_DISTRO}-nav2-bringup \
@@ -29,6 +30,7 @@ COPY ros2_ws/src/patrolbot_dock_manager src/patrolbot_dock_manager
 COPY ros2_ws/src/patrolbot_docking_plugins src/patrolbot_docking_plugins
 COPY ros2_ws/src/patrolbot-launch src/patrolbot-launch
 COPY ros2_ws/src/patrolbot_navigation src/patrolbot_navigation
+COPY contracts contracts
 # Retain the SBC protocol source as a static-test fixture. It is not executed
 # in the Pi image; navigation's safety-contract test verifies that dock release
 # cannot set velocity or enable motors as a side effect.

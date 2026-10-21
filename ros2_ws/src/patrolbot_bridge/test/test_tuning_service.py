@@ -48,7 +48,8 @@ def make(tmp_path, backend=None):
     store.initialize(actor=ADMIN, reason='test')
     owner = type('Owner', (), {'set_tuning_hold': lambda self, h, r='': None})()
     coordinator = ActivationCoordinator(store, owner, backend or UnavailableBackend())
-    return svc.TuningService(store, coordinator, session_id=SESSION, mutations_enabled=True)
+    return svc.TuningService(store, coordinator, session_id=SESSION, mutations_enabled=True,
+                             write_admission=lambda: (True, ''))
 
 
 def test_operator_can_read(tmp_path):
@@ -63,6 +64,38 @@ def test_operator_cannot_mutate(tmp_path):
     result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': 0.06}]), OPERATOR))
     assert result['outcome'] == 'refused'
     assert result['detail'] == 'not_administrator'
+    assert service.store.snapshot_state()['desired_revision'] == 1
+
+
+def test_disconnected_sbc_refuses_save_without_mutating_revision(tmp_path):
+    service = make(tmp_path)
+    service.write_admission = lambda: (False, 'SBC link disconnected')
+    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
+    assert result['outcome'] == 'refused'
+    assert result['detail'] == 'SBC link disconnected'
+    assert result['snapshot']['writable'] is False
+    assert service.store.snapshot_state()['desired_revision'] == 1
+
+
+def test_missing_sbc_admission_provider_fails_closed_for_saves(tmp_path):
+    service = make(tmp_path)
+    service.write_admission = None
+    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
+    assert result['outcome'] == 'refused'
+    assert service.store.snapshot_state()['desired_revision'] == 1
+
+
+def test_save_rechecks_sbc_link_after_writer_admission(tmp_path):
+    service = make(tmp_path)
+    calls = [0]
+
+    def admission():
+        calls[0] += 1
+        return calls[0] == 1, 'SBC link changed before persistence'
+
+    service.write_admission = admission
+    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
+    assert result['outcome'] == 'refused'
     assert service.store.snapshot_state()['desired_revision'] == 1
 
 

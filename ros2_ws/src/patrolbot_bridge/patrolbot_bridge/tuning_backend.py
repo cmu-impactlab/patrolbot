@@ -6,6 +6,7 @@ import time
 
 from . import tuning_spec
 from .tuning_activation import AdmissionRefused, evaluate_evidence, ReloadResult
+from .tuning_readback import READBACK_NODES
 from .tuning_yaml import strict_yaml_load
 
 
@@ -222,6 +223,7 @@ class RosParameterTransport:
                       'change': ChangeState, 'manager': ManageLifecycleNodes, 'hold': SetBool,
                       'map': LoadMap, 'map_ack': Trigger, 'nav_hold': SetBool}
         self.clients = {}
+        self.readonly_clients = {}
         for name in NODES:
             for kind, suffix in (('get', 'get_parameters'), ('set', 'set_parameters_atomically')):
                 self._client(kind, name, suffix)
@@ -263,6 +265,32 @@ class RosParameterTransport:
         result = self._call('get', node, request)
         if result is None or len(result.values) != len(names):
             raise ValueError('missing parameter readback')
+        return dict(zip(names, (parameter_value_to_python(value) for value in result.values)))
+
+    def get_readonly(self, node, names):
+        """Read fixed observation sources without requiring mutation services."""
+        from rclpy.parameter import parameter_value_to_python
+        if node not in READBACK_NODES:
+            raise ValueError('unallowlisted parameter observation node')
+        if node not in self.readonly_clients:
+            self.readonly_clients[node] = self.node.create_client(
+                self.types['get'], '/' + READBACK_NODES[node] + '/get_parameters',
+                callback_group=self.node._callbacks)
+        client = self.readonly_clients[node]
+        if not client.service_is_ready():
+            return {}
+        request = self.types['get'].Request()
+        request.names = names
+        future = client.call_async(request)
+        finished = threading.Event()
+        future.add_done_callback(lambda _: finished.set())
+        if not finished.wait(.2):
+            client.remove_pending_request(future)
+            future.cancel()
+            return {}
+        result = future.result()
+        if result is None or len(result.values) != len(names):
+            return {}
         return dict(zip(names, (parameter_value_to_python(value) for value in result.values)))
 
     def set(self, node, values):

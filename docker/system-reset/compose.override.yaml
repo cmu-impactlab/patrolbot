@@ -1,10 +1,5 @@
-# Opt-in only, after supervisor commissioning. Mount the directory so a
-# supervisor restart can replace the socket without leaving a stale bind mount.
-services:
-  web-bridge:
-    environment:
-      PATROLBOT_RESET_SOCKET: /run/patrolbot-system-reset/supervisor.sock
-    volumes:
-      - /run/patrolbot-system-reset:/run/patrolbot-system-reset:ro
-    group_add:
-      - "${PATROLBOT_RESET_GID:?Set the host patrolbot-reset group ID}"
+# Compatibility only for older deployment commands that name this file.
+# All commissioned reset wiring now lives in ../docker-compose.yml so that a
+# normal web-bridge recreation cannot silently remove it. Do not add features
+# here: keeping a second definition recreates the deployment omission hazard.
+services: {}

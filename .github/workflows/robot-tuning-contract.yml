@@ -36,6 +36,14 @@ jobs:
       - name: Install offline test dependencies
         run: python -m pip install --disable-pip-version-check -r contracts/requirements-test.txt
 
+      - name: Validate standard deployment configuration
+        env:
+          PATROLBOT_IMAGE: patrolbot:ci-only
+          PATROLBOT_REVISION: ci-only
+          PATROLBOT_RESET_GID: "65532"
+        # Config only: no image build, containers, robot, or credentials.
+        run: docker compose -f docker/docker-compose.yml --profile web-bridge config --quiet
+
       - name: Validate schema, registry and fixtures
         run: python contracts/validate_robot_tuning.py
 

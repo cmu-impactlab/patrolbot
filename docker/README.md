@@ -56,10 +56,21 @@ loading ROS/DDS threads can crash or hang the test process.
 
 ## Configure and build
 
+The standard deployment includes all commissioned web-bridge integrations,
+including the software-reset supervisor socket. They must not be hidden in
+optional feature overlays that disappear on recreation. Install/verify the host
+supervisor as described in `system-reset/README.md` and set `PATROLBOT_RESET_GID`
+to the actual host group before validating Compose. Missing prerequisites fail
+configuration/startup instead of silently dropping the integration. This does
+not enable commands, execute a reset, grant Docker/SSH access to the web bridge,
+or bypass feature-specific authorization/commissioning gates. Gimbal remains an
+explicit peripheral profile; tuning runtime activation remains separately gated.
+
 ```bash
 cd docker
 cp .env.example .env
 # Set PATROLBOT_IMAGE to a unique tag and PATROLBOT_REVISION to the Git SHA.
+# Set PATROLBOT_RESET_GID to the host patrolbot-reset group's numeric ID.
 docker compose config
 docker compose build navigation
 ```

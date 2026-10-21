@@ -1876,6 +1876,11 @@ class PatrolBotBridge(Node):
             # No verified native parameter mutability and no approved fixed
             # backend yet: every activation request is refused, never faked.
             self._tuning_transport = RosParameterTransport(self)
+            from patrolbot_bridge.tuning_readback import ParameterObserver
+            self._parameter_observer = ParameterObserver(
+                store.index, self._tuning_transport.get_readonly,
+                lambda: self._session_generation)
+            self.create_timer(1., self._parameter_observer.poll, callback_group=self._callbacks)
             backend = LifecycleBackend(
                 store, self._tuning_transport, self._tuning_evidence,
                 self._tuning_require_seed,
@@ -1893,7 +1898,9 @@ class PatrolBotBridge(Node):
             self._tuning_service = TuningService(
                 store, coordinator,
                 mutations_enabled=self._tuning_authorization_key is not None,
-                runtime_readback=self._current_tuning_readback)
+                runtime_readback=self._current_tuning_readback,
+                parameter_readback=self._parameter_observer.current,
+                write_admission=self._tuning_save_admission)
             try:
                 job = coordinator.recover()
             except StoreUnavailable as exc:
@@ -1919,6 +1926,7 @@ class PatrolBotBridge(Node):
         marker = marker_path(path)
         if marker.exists() or marker.is_symlink():
             return True
+
         if os.environ.get('PATROLBOT_TUNING_ENABLED', '0') == '1':
             return True
         try:
@@ -1927,6 +1935,15 @@ class PatrolBotBridge(Node):
             return False
         except OSError:
             return True
+
+    def _tuning_save_admission(self):
+        # Saving desired state neither commands motion nor changes live nodes.
+        # It requires a fresh SBC link, not motors, localization or safe idle.
+        now = time.monotonic()
+        with self._state_lock:
+            linked = bool(self._link_connected and self._flags_at
+                          and 0 <= now - self._flags_at <= .5)
+        return linked, '' if linked else 'The SBC link is disconnected or stale.'
 
     @staticmethod
     def _tuning_dir():
@@ -2140,7 +2157,9 @@ class PatrolBotBridge(Node):
         if not self._tuning_readback_lock.acquire(blocking=False):
             return
         try:
-            if self._epoch.tuning_hold or not self._tuning_backend.approved:
+            # Verifying running values is read-only: it must not depend on
+            # authorization to activate/reconfigure those nodes.
+            if self._epoch.tuning_hold:
                 self._tuning_readback = None
                 return
             state = self._tuning_store.snapshot_state()

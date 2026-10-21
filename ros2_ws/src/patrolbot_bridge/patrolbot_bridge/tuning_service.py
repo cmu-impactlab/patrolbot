@@ -171,13 +171,25 @@ def _canonical_uuid(value) -> bool:
 
 class TuningService:
     def __init__(self, store, coordinator, *, clock=None, session_id=None,
-                 mutations_enabled=False, runtime_readback=None):
+                 mutations_enabled=False, runtime_readback=None, parameter_readback=None,
+                 write_admission=None):
         self.store = store
         self.coordinator = coordinator
         self.clock = clock
         self.session_id = session_id or str(uuid.uuid4())
         self.mutations_enabled = mutations_enabled is True
         self.runtime_readback = runtime_readback
+        self.parameter_readback = parameter_readback
+        self.write_admission = write_admission
+
+    def _save_admission(self):
+        if self.write_admission is None:
+            return False, 'Fresh SBC link evidence is unavailable.'
+        try:
+            allowed, reason = self.write_admission()
+            return allowed is True, str(reason)
+        except Exception:
+            return False, 'Fresh SBC link evidence is unavailable.'
 
     # ------------------------------------------------------------------
     # Snapshot
@@ -234,7 +246,14 @@ class TuningService:
         safe_apply = self.coordinator.safe_apply_state() if ready else {
             'allowed': False, 'reason': 'Robot tuning has not been initialized.'}
         job = self.store.latest_job() if ready else None
+        save_allowed, save_reason = self._save_admission()
+        write_reason = ('Robot tuning has not been initialized.' if not ready else
+                        'Signed tuning authorization has not been configured.'
+                        if not self.mutations_enabled else
+                        save_reason if not save_allowed else None)
         return {
+            'readback': self.parameter_readback() if self.parameter_readback else None,
+            'write_disabled_reason': write_reason,
             'session_id': self.session_id if ready else None,
             'desired_revision': state.get('desired_revision'),
             'active_revision': state.get('active_revision') if active_known else None,
@@ -255,8 +274,8 @@ class TuningService:
                     activation_supported=ready and self.coordinator.activation_supported)
                 for entry in registry['parameters']
             ],
-            'writable': ready and self.mutations_enabled,
-            'save_supported': ready and self.mutations_enabled,
+            'writable': ready and self.mutations_enabled and save_allowed,
+            'save_supported': ready and self.mutations_enabled and save_allowed,
             'advertised_capability': READ_CAPABILITY if ready else None,
             'activation_supported': ready and self.coordinator.activation_supported,
             'safe_apply': safe_apply,
@@ -289,6 +308,10 @@ class TuningService:
                 raise ServiceError('refused', 'not_administrator')
             if operation in ADMIN_OPERATIONS and not self.mutations_enabled:
                 raise ServiceError('refused', 'signed_mutation_transport_unavailable')
+            if operation == 'save':
+                allowed, reason = self._save_admission()
+                if not allowed:
+                    raise ServiceError('refused', reason)
             mutation_dispatched = operation in ADMIN_OPERATIONS
             result = self._dispatch(operation, request, actor)
             return self._response(request_id, result['outcome'], result['detail'],
@@ -326,13 +349,18 @@ class TuningService:
                 'job': None,
             }
         if operation == 'save':
-            outcome = self.store.save(
-                request_id=request['request_id'],
-                base_revision=request.get('base_revision'),
-                changes=request['changes'],
-                actor=actor,
-                reason=request.get('reason', ''),
-            )
+            with self.store.writer():
+                # A queued filesystem writer must not reuse old link evidence.
+                allowed, reason = self._save_admission()
+                if not allowed:
+                    raise ServiceError('refused', reason)
+                outcome = self.store.save(
+                    request_id=request['request_id'],
+                    base_revision=request.get('base_revision'),
+                    changes=request['changes'],
+                    actor=actor,
+                    reason=request.get('reason', ''),
+                )
             return {'outcome': outcome.get('outcome', 'failed'),
                     'detail': outcome.get('detail', ''), 'job': None}
         # apply / redeploy / restore

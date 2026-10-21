@@ -76,8 +76,10 @@ def test_actual_compose_retains_reset_mount_and_group_on_normal_recreation():
     web = json.loads(result.stdout)['services']['web-bridge']
     assert web['environment']['PATROLBOT_RESET_SOCKET'].endswith('/supervisor.sock')
     assert web['group_add'] == ['65532']
-    assert next(v for v in web['volumes'] if v['target'] == '/run/patrolbot-system-reset')[
-        'bind']['create_host_path'] is False
+    reset = next(v for v in web['volumes'] if v['target'] == '/run/patrolbot-system-reset')
+    # Some Compose versions omit false/default booleans from normalized JSON.
+    # The source-level check above separately requires explicit false.
+    assert reset.get('bind', {}).get('create_host_path', False) is False
 
 
 def test_legacy_override_is_idempotent_and_no_longer_required():

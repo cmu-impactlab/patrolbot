@@ -53,10 +53,20 @@ The ROS 2 Pi 5 stack intentionally modernizes that shape:
 
 ## Build and run
 
+Software-reset integration is included in the standard Compose definition, not
+an extra overlay. Provision/verify the host supervisor and dedicated reset group
+using `docker/system-reset/README.md`, then set `PATROLBOT_RESET_GID` to that
+group's numeric ID. Configuration refuses a missing GID; web-bridge startup
+refuses a missing runtime directory rather than creating an empty socket mount.
+Every normal recreation retains the socket, read-only bind and group access.
+Availability is still derived from a live supervisor status reply; installation
+or a source merge never runs a reset or enables motors.
+
 ```bash
 cd ~/patrolbot-repo/docker
 cp .env.example .env
 # Set PATROLBOT_IMAGE to a unique tag and PATROLBOT_REVISION to the Git SHA.
+# Also set PATROLBOT_RESET_GID from `getent group patrolbot-reset`.
 docker compose config
 docker compose build navigation
 docker compose up -d

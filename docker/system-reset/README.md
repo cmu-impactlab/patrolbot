@@ -71,7 +71,7 @@ when that process itself is dead needs an independent host management channel.
 Offline fake-adapter tests do not contact a robot. No live reset is part of
 installation or verification.
 
-## Opt-in deployment
+## Standard Docker deployment
 
 Robot-side installation may precede the dashboard rollout: provision the restricted
 SSH access, supervisor and matching web bridge together, then verify their read-only
@@ -79,9 +79,15 @@ status. The button requires the matching dashboard server and frontend. Their
 deployment remains an operator task; installing the robot side does not update
 the production website or establish end-to-end reset acceptance.
 
-Use `compose.override.yaml` alongside the normal Compose file for **every**
-subsequent Compose operation on the web bridge. Set `PATROLBOT_RESET_GID` in the
-host's backed-up `docker/.env` to the numeric `patrolbot-reset` group ID. The
+Reset socket/environment/group wiring is part of `docker/docker-compose.yml`.
+No feature override is required: a normal web-bridge recreation retains it.
+Set `PATROLBOT_RESET_GID` in the host's backed-up `docker/.env` to the actual
+numeric `patrolbot-reset` group ID (`getent group patrolbot-reset | cut -d: -f3`).
+Missing group configuration fails Compose validation rather than silently
+removing reset. This is a standard deployment prerequisite even when selecting
+only core services; do not guess a GID or default to the root group. The host
+runtime directory must already exist; the bind mount will not create a fake
+empty directory if supervisor installation is missing. The
 supervisor restarts existing containers without recreating them, preserving socket
 access across its own reset. The web bridge advertises `software_reset` only when
 `PATROLBOT_RESET_SOCKET` is configured and the local management configuration is present.
@@ -90,19 +96,19 @@ reachable. Preserve that runtime directory across systemd restarts with
 `RuntimeDirectoryPreserve=restart`; replacing it leaves an existing container
 bound to the old directory. Never mount the host Docker socket into the web bridge.
 
-The override is not automatically discovered in this subdirectory. Validate the
-combined configuration without printing credentials before recreating the bridge:
+`compose.override.yaml` remains an empty compatibility shim for older commands;
+it is neither required nor a separate place to add deployment features. Validate
+the standard configuration without printing credentials before recreating the bridge:
 
 ```sh
 docker compose --env-file /home/ubuntu/patrolbot-repo/docker/.env \
   -f /home/ubuntu/patrolbot-repo/docker/docker-compose.yml \
-  -f /home/ubuntu/patrolbot-repo/docker/system-reset/compose.override.yaml \
   --profile web-bridge config --quiet
 ```
 
-Use the same options for an authorized web-bridge deployment. Omitting the override
-on recreation removes socket access and makes reset unavailable. A normal Docker
-restart preserves the existing mount and environment.
+Use the same options for an authorized web-bridge deployment. Both normal Compose
+recreation and Docker restart preserve the reset integration. Core images, the
+source image digests and unrelated services need not change for wiring-only fixes.
 
 Before enabling: validate Compose without printing its environment, verify the
 dedicated SBC SSH alias using the read-only `status` operation. `preflight.py`
@@ -112,9 +118,9 @@ acceptance is separate. Offline tests do not establish live reset acceptance.
 
 Back up every existing deployment file under `~/backups/<UTC>-system-reset/`,
 verify its off-host copy, and preserve the two-snapshot policy before changing
-Compose, the environment, or services. Rollback removes the opt-in override and
-socket environment, restores the prior web image/config, and stops/disables the
-host supervisor only after checking no reset is in progress. Never delete the
+Compose, the environment, or services. Rollback restores the exact prior Compose,
+environment and web image/config. Stop/disable the host supervisor only if its
+removal is explicitly authorized and no reset is in progress. Never delete the
 SQLite history or mark an uncertain request successful to make the button usable.
 An uncertain record is retained. Another reset must be a newly confirmed
 request; never rewrite the previous result or replay it automatically.

@@ -100,6 +100,9 @@ services:
       WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:-}"
       WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:-}"
       WEB_BRIDGE_ENABLE_COMMANDS: "${WEB_BRIDGE_ENABLE_COMMANDS:-0}"
+      # Standard commissioned management integration, not a deployment overlay.
+      # Availability/authorization still come from the host supervisor and UI.
+      PATROLBOT_RESET_SOCKET: /run/patrolbot-system-reset/supervisor.sock
     # The shared healthcheck script knows the ROS roles, not this bridge.
     healthcheck:
       disable: true
@@ -115,6 +118,14 @@ services:
         --ros-args -p server_url:="$$WEB_BRIDGE_SERVER_URL" -p token:="$$WEB_BRIDGE_TOKEN"
     volumes:
       - ${WEB_BRIDGE_ROOT:-/home/ubuntu/patrolbot-dashboard}/ros2_ws/src/patrolbot_web_bridge:/opt/web_bridge:ro
+      - type: bind
+        source: /run/patrolbot-system-reset
+        target: /run/patrolbot-system-reset
+        read_only: true
+        bind:
+          create_host_path: false
+    group_add:
+      - "${PATROLBOT_RESET_GID:?set PATROLBOT_RESET_GID to the host patrolbot-reset group ID}"
 
   gimbal:
     <<: *common

@@ -118,3 +118,31 @@ def test_verified_committed_readback_is_independent_of_activation_enablement():
     method(owner)
     assert owner._tuning_readback['revision'] == 1
     assert owner._tuning_readback['values']['max_linear_m_s'] == .3
+
+
+def test_observation_worker_serializes_waits_outside_ros_executor():
+    method = bridge_method('_tuning_observation_worker', {'time': NS(monotonic=lambda: 10.)})
+    calls = []
+    stopped = [False]
+
+    def wait(timeout):
+        calls.append(('wait', timeout))
+        stopped[0] = True
+
+    owner = NS(_stop_event=NS(is_set=lambda: stopped[0], wait=wait),
+               _refresh_tuning_policy=lambda: calls.append('policy'),
+               _parameter_observer=NS(poll=lambda: calls.append('observations')),
+               _poll_tuning_readback=lambda: calls.append('revision'))
+    method(owner)
+    assert calls == ['policy', 'observations', 'revision', ('wait', .5)]
+    source = (ROOT / 'ros2_ws/src/patrolbot_bridge/patrolbot_bridge/bridge_node.py').read_text()
+    for callback in ('self._poll_tuning_readback', 'self._parameter_observer.poll',
+                     'self._refresh_tuning_policy'):
+        assert not any('create_timer(' in line and callback in line
+                       for line in source.splitlines())
+    assert 'self.tuning_thread,' in source
+
+
+def test_observation_worker_stops_before_any_more_ros_calls_on_shutdown():
+    method = bridge_method('_tuning_observation_worker', {'time': NS(monotonic=lambda: 10.)})
+    method(NS(_stop_event=NS(is_set=lambda: True)))

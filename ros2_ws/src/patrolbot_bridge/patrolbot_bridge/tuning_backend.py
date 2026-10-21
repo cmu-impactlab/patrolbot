@@ -254,8 +254,13 @@ class RosParameterTransport:
         future = client.call_async(request)
         finished = threading.Event()
         future.add_done_callback(lambda _: finished.set())
-        if not finished.wait(self.timeout):
-            raise TimeoutError('tuning service outcome unknown')
+        deadline = time.monotonic() + self.timeout
+        while not finished.wait(.05):
+            stop = getattr(self.node, '_stop_event', None)
+            if time.monotonic() >= deadline or (stop is not None and stop.is_set()):
+                client.remove_pending_request(future)
+                future.cancel()
+                raise TimeoutError('tuning service outcome unknown')
         return future.result()
 
     def get(self, node, names):

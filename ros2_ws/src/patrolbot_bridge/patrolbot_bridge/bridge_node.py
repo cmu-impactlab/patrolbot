@@ -357,7 +357,6 @@ class PatrolBotBridge(Node):
             RobotTuning, '/patrolbot/tuning', self._tuning_callback,
             callback_group=self._tuning_requests)
         self._tuning_policy.refresh()
-        self.create_timer(0.5, self._refresh_tuning_policy, callback_group=self._callbacks)
 
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
@@ -376,10 +375,13 @@ class PatrolBotBridge(Node):
             daemon=True,
         )
         self.recv_thread = threading.Thread(target=self._connect_loop, daemon=True)
+        self.tuning_thread = threading.Thread(
+            target=self._tuning_observation_worker, name='tuning-observation', daemon=True)
         self._worker_threads = (
             self.nav_publish_thread,
             self.aux_publish_thread,
             self.recv_thread,
+            self.tuning_thread,
         )
         for thread in self._worker_threads:
             thread.start()
@@ -1880,7 +1882,6 @@ class PatrolBotBridge(Node):
             self._parameter_observer = ParameterObserver(
                 store.index, self._tuning_transport.get_readonly,
                 lambda: self._session_generation)
-            self.create_timer(1., self._parameter_observer.poll, callback_group=self._callbacks)
             backend = LifecycleBackend(
                 store, self._tuning_transport, self._tuning_evidence,
                 self._tuning_require_seed,
@@ -1892,7 +1893,6 @@ class PatrolBotBridge(Node):
             self._tuning_readback = None
             self._tuning_readback_at = None
             self._tuning_readback_lock = threading.Lock()
-            self.create_timer(1., self._poll_tuning_readback, callback_group=self._callbacks)
             self._tuning_store = store
             self._tuning_coordinator = coordinator
             self._tuning_service = TuningService(
@@ -1977,6 +1977,22 @@ class PatrolBotBridge(Node):
         if self._tuning_store is None:
             raise RuntimeError('tuning store unavailable')
         return limits_from_store(self._tuning_store)
+
+    def _tuning_observation_worker(self):
+        # Synchronous ROS waits and revision validation must not consume the
+        # executor threads needed to complete those very service calls.
+        # One retained worker bounds overlap and is joined before node teardown.
+        next_readback = 0.
+        while not self._stop_event.is_set():
+            self._refresh_tuning_policy()
+            observer = getattr(self, '_parameter_observer', None)
+            if observer is not None and time.monotonic() >= next_readback:
+                observer.poll()
+                if self._stop_event.is_set():
+                    break
+                self._poll_tuning_readback()
+                next_readback = time.monotonic() + .5
+            self._stop_event.wait(.5)
 
     def _refresh_tuning_policy(self):
         # A fresh policy generation updates the cached clamp on the very next
@@ -2245,8 +2261,6 @@ class PatrolBotBridge(Node):
                 'snapshot': None,
                 'job': None,
             }, sort_keys=True)
-        finally:
-            self._refresh_tuning_policy()
         return response
 
     def _manual_active_cb(self, msg, info=None):

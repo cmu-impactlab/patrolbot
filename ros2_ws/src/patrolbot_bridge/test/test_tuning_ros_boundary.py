@@ -42,7 +42,9 @@ def _invoke(payload):
     )
     response = SimpleNamespace(result_json='')
     _callback()(bridge, SimpleNamespace(payload_json=payload), response)
-    assert refreshed == [True]
+    # Policy refresh is owned by the retained observation worker, never a ROS
+    # service callback that could starve the executor needed for completions.
+    assert refreshed == []
     return json.loads(response.result_json), calls
 
 

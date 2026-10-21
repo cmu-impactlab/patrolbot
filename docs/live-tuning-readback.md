@@ -14,6 +14,12 @@ not raise a display/policy ceiling. Observations expire after three seconds and
 cannot cross hardware sessions. Their age includes the start of the whole query
 batch, not merely the final service reply.
 
+Synchronous observation waits and policy disk validation run on one retained
+worker, not ROS executor timer callbacks. This prevents poll overlap from
+starving the executor threads required to deliver the service responses. Read
+requests never trigger another policy disk refresh. The worker is stopped and
+joined with the existing bridge workers before ROS node teardown.
+
 This observation does **not** establish `active_known` or a committed revision.
 Those still require exact revision/digest/parameter verification. That read-only
 verification no longer depends on permission to activate nodes.

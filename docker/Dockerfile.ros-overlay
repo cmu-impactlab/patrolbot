@@ -20,12 +20,12 @@ ARG PATROLBOT_SOURCE_SHA256
 RUN test -n "${PATROLBOT_SOURCE_SHA256}" && \
     test "$(bash /opt/patrolbot_ws/source-tree-digest.sh /opt/patrolbot_ws)" = "${PATROLBOT_SOURCE_SHA256}"
 WORKDIR /opt/patrolbot_ws
-RUN for package in patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation patrolbot-launch; do \
+RUN for package in patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_docking_plugins patrolbot_navigation patrolbot-launch; do \
       rm -rf "build/$package" "install/$package"; \
     done && \
     . /opt/patrolbot_ws/install/setup.sh && \
     MAKEFLAGS=-j2 colcon build --parallel-workers 1 \
-      --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_navigation patrolbot-launch \
+      --packages-select patrolbot_interfaces patrolbot_bridge patrolbot_dock_manager patrolbot_docking_plugins patrolbot_navigation patrolbot-launch \
       --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 # Replace inherited metadata with the complete reviewed native patch manifest.
 COPY docker/nav2-patches /opt/patrolbot-nav2-patches

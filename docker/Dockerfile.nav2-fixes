@@ -13,7 +13,7 @@ RUN test "$(dpkg-query -W -f='${Version}' ros-jazzy-nav2-amcl | cut -d- -f1)" = 
     tar xzf /tmp/nav2.tar.gz -C /opt/patrolbot_nav2/src --strip-components=1 \
       navigation2-1.3.12/nav2_core navigation2-1.3.12/nav2_amcl navigation2-1.3.12/nav2_costmap_2d navigation2-1.3.12/nav2_behaviors navigation2-1.3.12/nav2_behavior_tree navigation2-1.3.12/nav2_bt_navigator navigation2-1.3.12/nav2_route navigation2-1.3.12/nav2_regulated_pure_pursuit_controller navigation2-1.3.12/nav2_lifecycle_manager && \
     cd /opt/patrolbot_nav2/src && \
-    for patch_file in /opt/patrolbot-nav2-patches/*.patch; do patch --batch -p1 < "$patch_file"; done && \
+    for patch_file in /opt/patrolbot-nav2-patches/*.patch; do patch --batch -p1 < "$patch_file" || exit 1; done && \
     rm /tmp/nav2.tar.gz
 WORKDIR /opt/patrolbot_nav2
 RUN . /opt/patrolbot_ws/install/setup.sh && \

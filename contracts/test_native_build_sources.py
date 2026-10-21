@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import re
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,3 +51,18 @@ def test_robot_overlay_checks_native_provenance_before_replacing_patch_metadata(
     check = text.index('test -d /opt/patrolbot-nav2-patches')
     replace = text.index('COPY docker/nav2-patches ')
     assert check < replace
+
+
+def test_native_build_aborts_if_an_earlier_patch_fails(tmp_path):
+    patches = tmp_path / 'patches'
+    patches.mkdir()
+    (patches / '0001.patch').write_text('first')
+    (patches / '0002.patch').write_text('second')
+    text = recipe('Dockerfile.nav2-fixes')
+    loop = re.search(r'for patch_file in .*?; done', text).group(0)
+    loop = loop.replace('/opt/patrolbot-nav2-patches', str(patches))
+    # An early failure must not be hidden by a later successful patch. No real
+    # patch executable or upstream checkout is needed for this shell regression.
+    result = subprocess.run(['sh', '-c', 'patch() { read -r name; '
+                             '[ "$name" != first ]; }; ' + loop])
+    assert result.returncode != 0

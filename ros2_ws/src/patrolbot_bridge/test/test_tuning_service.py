@@ -59,6 +59,39 @@ def test_operator_can_read(tmp_path):
     assert result['snapshot']['advertised_capability'] == svc.READ_CAPABILITY
 
 
+def test_snapshot_validates_each_revision_once_and_never_caches_between_requests(tmp_path, monkeypatch):
+    service = make(tmp_path)
+    load = service.store.load_revision
+    calls = []
+
+    def observed(revision):
+        calls.append(revision)
+        return load(revision)
+
+    monkeypatch.setattr(service.store, 'load_revision', observed)
+    service.runtime_snapshot()
+    assert calls == [1]
+    service.runtime_snapshot()
+    assert calls == [1, 1]
+    service.store.save(request_id=REQ, base_revision=1,
+                       changes=[{'id': 'amcl.alpha1', 'value': .06}], actor=ADMIN)
+    calls.clear()
+    snapshot = service.runtime_snapshot()
+    assert calls == [2, 1]
+    assert snapshot['desired']['amcl.alpha1'] == .06
+    assert snapshot['committed_active']['amcl.alpha1'] == .05
+
+
+def test_read_does_not_hide_revision_corruption_after_a_successful_snapshot(tmp_path):
+    service = make(tmp_path)
+    assert service.handle(wrap(read_request(), OPERATOR))['outcome'] == 'ok'
+    path = service.store.revision_dir(1) / 'overrides.yaml'
+    path.write_text('corrupt: true\n')
+    result = service.handle(wrap(read_request(), OPERATOR))
+    assert result['outcome'] == 'refused'
+    assert result['snapshot'] is None
+
+
 def test_operator_cannot_mutate(tmp_path):
     service = make(tmp_path)
     result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': 0.06}]), OPERATOR))

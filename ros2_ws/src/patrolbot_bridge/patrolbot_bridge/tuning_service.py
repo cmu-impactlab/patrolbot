@@ -210,15 +210,24 @@ class TuningService:
         active_known = False
         effective_limits = None
         digest = None
+        desired_state = None
+        active_overrides = None
         if ready:
             # Existing saved state must never be replaced by YAML starting
             # values when its revision cannot be read or validated.
-            desired = self.store.desired_overrides()
-            if ready:
-                active_overrides = self.store.active_overrides()
+            # Validate each immutable revision once per response while holding
+            # the writer lock. Re-reading the same YAML/checksums for desired,
+            # committed values and digest used up the observation freshness
+            # budget. Nothing is cached across requests: corruption is still
+            # checked on every read.
+            desired_state = self.store.load_revision(state['desired_revision'])
+            desired = desired_state['overrides']
+            if state['active_revision'] is not None:
+                committed = (desired_state if state['active_revision'] == state['desired_revision']
+                             else self.store.load_revision(state['active_revision']))
+                active_overrides = committed['overrides']
                 if active_overrides is not None:
-                    digest = self.store.load_revision(state['active_revision'])['meta'][
-                        'generated_digest']
+                    digest = committed['meta']['generated_digest']
                     observed = self.runtime_readback() if self.runtime_readback else None
                     if (isinstance(observed, dict)
                             and observed.get('revision') == state['active_revision']
@@ -260,7 +269,7 @@ class TuningService:
             'hardware_session_generation': (
                 observed.get('hardware_session_generation') if active_known else None),
             'committed_active_revision': state.get('active_revision'),
-            'committed_active': self.store.active_overrides() if ready else None,
+            'committed_active': active_overrides,
             'last_known_good_revision': state.get('last_known_good'),
             'policy_required': ready,
             'desired': desired_full,
@@ -281,9 +290,7 @@ class TuningService:
             'safe_apply': safe_apply,
             'latest_job': job,
             'digest': digest,
-            'desired_digest': (
-                self.store.load_revision(state['desired_revision'])['meta']['generated_digest']
-                if ready else None),
+            'desired_digest': desired_state['meta']['generated_digest'] if ready else None,
             'compatibility': f'{CAPABILITY}:{self.store.registry_digest}',
         }
 

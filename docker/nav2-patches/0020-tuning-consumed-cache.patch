@@ -1,0 +1,265 @@
+--- a/nav2_regulated_pure_pursuit_controller/CMakeLists.txt
++++ b/nav2_regulated_pure_pursuit_controller/CMakeLists.txt
+@@ -8,6 +8,7 @@
+ find_package(nav2_costmap_2d REQUIRED)
+ find_package(nav2_util REQUIRED)
+ find_package(rclcpp REQUIRED)
++find_package(std_srvs REQUIRED)
+ find_package(geometry_msgs REQUIRED)
+ find_package(nav_msgs REQUIRED)
+ find_package(pluginlib REQUIRED)
+@@ -22,6 +23,7 @@
+ )
+ 
+ set(dependencies
++  std_srvs
+   rclcpp
+   geometry_msgs
+   nav2_costmap_2d
+@@ -77,4 +79,3 @@
+ pluginlib_export_plugin_description_file(nav2_core nav2_regulated_pure_pursuit_controller.xml)
+ 
+ ament_package()
+-
+--- a/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/parameter_handler.hpp
++++ b/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/parameter_handler.hpp
+@@ -22,6 +22,7 @@
+ #include <mutex>
+ 
+ #include "rclcpp/rclcpp.hpp"
++#include "std_srvs/srv/trigger.hpp"
+ #include "rclcpp_lifecycle/lifecycle_node.hpp"
+ #include "nav2_util/odometry_utils.hpp"
+ #include "nav2_util/geometry_utils.hpp"
+@@ -99,6 +100,7 @@
+ 
+   // Dynamic parameters handler
+   std::mutex mutex_;
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr tuning_cache_srv_;
+   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr dyn_params_handler_;
+   Parameters params_;
+   std::string plugin_name_;
+--- a/nav2_regulated_pure_pursuit_controller/package.xml
++++ b/nav2_regulated_pure_pursuit_controller/package.xml
+@@ -9,6 +9,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>std_srvs</depend>
+ 
+   <depend>angles</depend>
+   <depend>nav2_common</depend>
+--- a/nav2_regulated_pure_pursuit_controller/src/parameter_handler.cpp
++++ b/nav2_regulated_pure_pursuit_controller/src/parameter_handler.cpp
+@@ -18,6 +18,8 @@
+ #include <memory>
+ #include <vector>
+ #include <utility>
++#include <sstream>
++#include <iomanip>
+ 
+ #include "nav2_regulated_pure_pursuit_controller/parameter_handler.hpp"
+ 
+@@ -192,6 +194,31 @@
+     params_.use_cost_regulated_linear_velocity_scaling = false;
+   }
+ 
++  tuning_cache_srv_ = node->create_service<std_srvs::srv::Trigger>(
++    "~/" + plugin_name_ + "/tuning_cache", [this](
++      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++      std::lock_guard<std::mutex> lock(mutex_);
++      // Actual execution members, deliberately NOT GetParameters. In particular
++      // approach_velocity_scaling_dist remains constructor-only in 1.3.12.
++      std::ostringstream out;
++      out << std::setprecision(17)
++          << "{\"schema\":1,\"implementation\":\"nav2-1.3.12-rpp-cache-v1\",\"values\":{";
++      out << "\"desired_linear_vel\":" << params_.desired_linear_vel
++          << ",\"base_desired_linear_vel\":" << params_.base_desired_linear_vel
++          << ",\"lookahead_dist\":" << params_.lookahead_dist
++          << ",\"min_lookahead_dist\":" << params_.min_lookahead_dist
++          << ",\"max_lookahead_dist\":" << params_.max_lookahead_dist
++          << ",\"lookahead_time\":" << params_.lookahead_time
++          << ",\"rotate_to_heading_angular_vel\":" << params_.rotate_to_heading_angular_vel
++          << ",\"min_approach_linear_velocity\":" << params_.min_approach_linear_velocity
++          << ",\"approach_velocity_scaling_dist\":" << params_.approach_velocity_scaling_dist
++          << ",\"regulated_linear_scaling_min_speed\":" << params_.regulated_linear_scaling_min_speed
++          << "}}";
++      response->success = true;
++      response->message = out.str();
++    });
++
+   dyn_params_handler_ = node->add_on_set_parameters_callback(
+     std::bind(
+       &ParameterHandler::dynamicParametersCallback,
+@@ -200,6 +227,7 @@
+ 
+ ParameterHandler::~ParameterHandler()
+ {
++  tuning_cache_srv_.reset();
+   auto node = node_.lock();
+   if (dyn_params_handler_ && node) {
+     node->remove_on_set_parameters_callback(dyn_params_handler_.get());
+--- a/nav2_behaviors/CMakeLists.txt
++++ b/nav2_behaviors/CMakeLists.txt
+@@ -8,6 +8,7 @@
+ find_package(rclcpp_lifecycle REQUIRED)
+ find_package(rclcpp_components REQUIRED)
+ find_package(std_msgs REQUIRED)
++find_package(std_srvs REQUIRED)
+ find_package(nav2_behavior_tree REQUIRED)
+ find_package(nav2_util REQUIRED)
+ find_package(nav2_msgs REQUIRED)
+@@ -29,6 +30,7 @@
+ set(executable_name behavior_server)
+ 
+ set(dependencies
++  std_srvs
+   rclcpp
+   rclcpp_action
+   rclcpp_lifecycle
+--- a/nav2_behaviors/include/nav2_behaviors/plugins/spin.hpp
++++ b/nav2_behaviors/include/nav2_behaviors/plugins/spin.hpp
+@@ -21,6 +21,7 @@
+ 
+ #include "nav2_behaviors/timed_behavior.hpp"
+ #include "nav2_msgs/action/spin.hpp"
++#include "std_srvs/srv/trigger.hpp"
+ #include "geometry_msgs/msg/quaternion.hpp"
+ #include "geometry_msgs/msg/twist_stamped.hpp"
+ 
+@@ -84,6 +85,7 @@
+     geometry_msgs::msg::Pose2D & pose2d);
+ 
+   SpinAction::Feedback::SharedPtr feedback_;
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr tuning_cache_srv_;
+ 
+   double min_rotational_vel_;
+   double max_rotational_vel_;
+--- a/nav2_behaviors/package.xml
++++ b/nav2_behaviors/package.xml
+@@ -9,6 +9,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>std_srvs</depend>
+   <build_depend>nav2_common</build_depend>
+ 
+   <build_depend>rclcpp</build_depend>
+--- a/nav2_behaviors/plugins/spin.cpp
++++ b/nav2_behaviors/plugins/spin.cpp
+@@ -17,6 +17,8 @@
+ #include <algorithm>
+ #include <memory>
+ #include <utility>
++#include <sstream>
++#include <iomanip>
+ 
+ #include "nav2_behaviors/plugins/spin.hpp"
+ #include "tf2/utils.h"
+@@ -69,6 +71,19 @@
+     node,
+     "rotational_acc_lim", rclcpp::ParameterValue(3.2));
+   node->get_parameter("rotational_acc_lim", rotational_acc_lim_);
++  tuning_cache_srv_ = node->create_service<std_srvs::srv::Trigger>(
++    "~/spin/tuning_cache", [this](
++      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++      // These members are immutable between onConfigure and destruction.
++      std::ostringstream out;
++      out << std::setprecision(17)
++          << "{\"schema\":1,\"implementation\":\"nav2-1.3.12-spin-cache-v1\",\"values\":{";
++      out << "\"max_rotational_vel\":" << max_rotational_vel_
++          << ",\"min_rotational_vel\":" << min_rotational_vel_ << "}}";
++      response->success = true;
++      response->message = out.str();
++    });
+ }
+ 
+ ResultStatus Spin::onRun(const std::shared_ptr<const SpinActionGoal> command)
+--- a/nav2_velocity_smoother/CMakeLists.txt
++++ b/nav2_velocity_smoother/CMakeLists.txt
+@@ -4,6 +4,7 @@
+ find_package(ament_cmake REQUIRED)
+ find_package(nav2_common REQUIRED)
+ find_package(rclcpp REQUIRED)
++find_package(std_srvs REQUIRED)
+ find_package(rclcpp_components REQUIRED)
+ find_package(geometry_msgs REQUIRED)
+ find_package(nav2_util REQUIRED)
+@@ -22,6 +23,7 @@
+ set(library_name ${executable_name}_core)
+ 
+ set(dependencies
++  std_srvs
+   rclcpp
+   rclcpp_components
+   geometry_msgs
+--- a/nav2_velocity_smoother/include/nav2_velocity_smoother/velocity_smoother.hpp
++++ b/nav2_velocity_smoother/include/nav2_velocity_smoother/velocity_smoother.hpp
+@@ -30,6 +30,7 @@
+ #include "nav2_util/twist_subscriber.hpp"
+ #include "geometry_msgs/msg/twist.hpp"
+ #include "geometry_msgs/msg/twist_stamped.hpp"
++#include "std_srvs/srv/trigger.hpp"
+ 
+ namespace nav2_velocity_smoother
+ {
+@@ -137,6 +138,7 @@
+   std::unique_ptr<nav2_util::TwistPublisher> smoothed_cmd_pub_;
+   std::unique_ptr<nav2_util::TwistSubscriber> cmd_sub_;
+   rclcpp::TimerBase::SharedPtr timer_;
++  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr tuning_cache_srv_;
+ 
+   rclcpp::Clock::SharedPtr clock_;
+   geometry_msgs::msg::TwistStamped last_cmd_;
+--- a/nav2_velocity_smoother/package.xml
++++ b/nav2_velocity_smoother/package.xml
+@@ -8,6 +8,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>std_srvs</depend>
+   <build_depend>nav2_common</build_depend>
+   <depend>rclcpp</depend>
+   <depend>rclcpp_components</depend>
+--- a/nav2_velocity_smoother/src/velocity_smoother.cpp
++++ b/nav2_velocity_smoother/src/velocity_smoother.cpp
+@@ -18,6 +18,8 @@
+ #include <string>
+ #include <utility>
+ #include <vector>
++#include <sstream>
++#include <iomanip>
+ 
+ #include "nav2_velocity_smoother/velocity_smoother.hpp"
+ 
+@@ -152,6 +154,20 @@
+     "stamp_smoothed_velocity_with_smoothing_time", stamp_smoothed_velocity_with_smoothing_time_);
+ 
+   // Setup inputs / outputs
++  tuning_cache_srv_ = node->create_service<std_srvs::srv::Trigger>(
++    "~/tuning_cache", [this](
++      const std::shared_ptr<std_srvs::srv::Trigger::Request>,
++      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
++      // Default mutually-exclusive group also owns parameter/input/timer callbacks.
++      std::ostringstream out;
++      out << std::setprecision(17)
++          << "{\"schema\":1,\"implementation\":\"nav2-1.3.12-smoother-cache-v1\",\"values\":{";
++      out << "\"max_velocity\":[" << max_velocities_[0] << ',' << max_velocities_[1]
++          << ',' << max_velocities_[2] << "],\"min_velocity\":[" << min_velocities_[0]
++          << ',' << min_velocities_[1] << ',' << min_velocities_[2] << "]}}";
++      response->success = true;
++      response->message = out.str();
++    });
+   smoothed_cmd_pub_ = std::make_unique<nav2_util::TwistPublisher>(node, "cmd_vel_smoothed", 1);
+   cmd_sub_ = std::make_unique<nav2_util::TwistSubscriber>(
+     node,
+@@ -215,6 +231,7 @@
+ nav2_util::CallbackReturn
+ VelocitySmoother::on_cleanup(const rclcpp_lifecycle::State &)
+ {
++  tuning_cache_srv_.reset();
+   RCLCPP_INFO(get_logger(), "Cleaning up");
+   smoothed_cmd_pub_.reset();
+   odom_smoother_.reset();

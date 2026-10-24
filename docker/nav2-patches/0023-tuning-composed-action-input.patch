@@ -1,0 +1,250 @@
+--- /dev/null
++++ b/nav2_util/include/nav2_util/tuning_action_gate.hpp
+@@ -0,0 +1,57 @@
++// One input boundary for the fixed, single-process composed Nav2 deployment.
++// The existing BtNavigator maintenance endpoint owns its Boolean closure; this
++// adds no per-node service, lifecycle schedule, expiry, or signing authority.
++#ifndef NAV2_UTIL__TUNING_ACTION_GATE_HPP_
++#define NAV2_UTIL__TUNING_ACTION_GATE_HPP_
++
++#include <array>
++#include <cstdint>
++#include <mutex>
++#include <set>
++#include <utility>
++
++namespace nav2_util
++{
++struct TuningActionGate
++{
++  using GoalId = std::array<uint8_t, 16>;
++  using Key = std::pair<std::uintptr_t, GoalId>;
++  std::mutex mutex;
++  bool held{false};
++  bool core_held{true};
++  bool faulted{false};
++  std::set<Key> goals;
++  std::size_t workers{0};
++
++  bool beginGoal(const void * server, const GoalId & uuid)
++  {
++    std::lock_guard<std::mutex> lock(mutex);
++    return !held && !core_held && !faulted &&
++           goals.emplace(reinterpret_cast<std::uintptr_t>(server), uuid).second;
++  }
++
++  void endGoal(const void * server, const GoalId & uuid)
++  {
++    std::lock_guard<std::mutex> lock(mutex);
++    if (goals.erase(Key{reinterpret_cast<std::uintptr_t>(server), uuid}) != 1) {
++      faulted = true;
++    }
++  }
++
++  void beginWork()
++  {
++    std::lock_guard<std::mutex> lock(mutex);
++    ++workers;
++  }
++
++  void endWork()
++  {
++    std::lock_guard<std::mutex> lock(mutex);
++    if (workers == 0) {faulted = true;} else {--workers;}
++  }
++};
++
++// Defined in nav2_util_core, NOT a template/static singleton per plugin DSO.
++TuningActionGate & tuningActionGate();
++}  // namespace nav2_util
++#endif  // NAV2_UTIL__TUNING_ACTION_GATE_HPP_
+--- /dev/null
++++ b/nav2_util/src/tuning_action_gate.cpp
+@@ -0,0 +1,10 @@
++#include "nav2_util/tuning_action_gate.hpp"
++
++namespace nav2_util
++{
++TuningActionGate & tuningActionGate()
++{
++  static TuningActionGate gate;
++  return gate;
++}
++}  // namespace nav2_util
+--- a/nav2_util/src/CMakeLists.txt
++++ b/nav2_util/src/CMakeLists.txt
+@@ -9,6 +9,7 @@
+   node_thread.cpp
+   odometry_utils.cpp
+   array_parser.cpp
++  tuning_action_gate.cpp
+ )
+ target_include_directories(${library_name}
+   PUBLIC
+--- a/nav2_util/include/nav2_util/simple_action_server.hpp
++++ b/nav2_util/include/nav2_util/simple_action_server.hpp
+@@ -26,6 +26,7 @@
+ #include "rclcpp_action/rclcpp_action.hpp"
+ #include "nav2_util/node_thread.hpp"
+ #include "nav2_util/node_utils.hpp"
++#include "nav2_util/tuning_action_gate.hpp"
+ 
+ namespace nav2_util
+ {
+@@ -144,7 +145,7 @@
+    * @return GoalResponse response of the goal processed
+    */
+   rclcpp_action::GoalResponse handle_goal(
+-    const rclcpp_action::GoalUUID & /*uuid*/,
++    const rclcpp_action::GoalUUID & uuid,
+     std::shared_ptr<const typename ActionT::Goal>/*goal*/)
+   {
+     std::lock_guard<std::recursive_mutex> lock(update_mutex_);
+@@ -155,6 +156,12 @@
+         "Action server is inactive. Rejecting the goal.");
+       return rclcpp_action::GoalResponse::REJECT;
+     }
++    // Admission is counted BEFORE the accepted callback can run. Pending
++    // preemptions and not-yet-executed goals cannot disappear in an idle check.
++    if (!tuningActionGate().beginGoal(this, uuid)) {
++      debug_msg("Configuration maintenance rejects this goal; it is not queued.");
++      return rclcpp_action::GoalResponse::REJECT;
++    }
+ 
+     debug_msg("Received request for goal acceptance");
+     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+@@ -225,11 +232,23 @@
+ 
+       // Return quickly to avoid blocking the executor, so spin up a new thread
+       debug_msg("Executing goal asynchronously.");
+-      execution_future_ = std::async(
+-        std::launch::async, [this]() {
+-          setSoftRealTimePriority();
+-          work();
+-        });
++      tuningActionGate().beginWork();
++      try {
++        execution_future_ = std::async(
++          std::launch::async, [this]() {
++            try {
++              setSoftRealTimePriority();
++              work();
++            } catch (...) {
++              tuningActionGate().endWork();
++              throw;
++            }
++            tuningActionGate().endWork();
++          });
++      } catch (...) {
++        tuningActionGate().endWork();
++        throw;
++      }
+     }
+   }
+ 
+@@ -371,6 +391,7 @@
+     if (is_active(current_handle_) && current_handle_ != pending_handle_) {
+       debug_msg("Cancelling the previous goal");
+       current_handle_->abort(empty_result());
++      tuningActionGate().endGoal(this, current_handle_->get_goal_id());
+     }
+ 
+     current_handle_ = pending_handle_;
+@@ -506,6 +527,7 @@
+     if (is_active(current_handle_)) {
+       debug_msg("Setting succeed on current goal.");
+       current_handle_->succeed(result);
++      tuningActionGate().endGoal(this, current_handle_->get_goal_id());
+       current_handle_.reset();
+     }
+   }
+@@ -591,6 +613,7 @@
+         warn_msg("Aborting handle.");
+         handle->abort(result);
+       }
++      tuningActionGate().endGoal(this, handle->get_goal_id());
+       handle.reset();
+     }
+   }
+--- a/nav2_core/include/nav2_core/behavior_tree_navigator.hpp
++++ b/nav2_core/include/nav2_core/behavior_tree_navigator.hpp
+@@ -116,6 +116,8 @@
+       }
+     } else if (operation == "inspect") {
+       accepted = owner;
++    } else if (operation == "observe") {
++      accepted = true;
+     } else if (operation == "release") {
+       if (owner) {
+         retired_jobs_.insert(tuning_job_);
+--- a/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
++++ b/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
+@@ -18,6 +18,7 @@
+ 
+ #include <memory>
+ #include "std_srvs/srv/set_bool.hpp"
++#include "std_msgs/msg/bool.hpp"
+ #include "patrolbot_interfaces/srv/tuning_maintenance.hpp"
+ #include "std_srvs/srv/trigger.hpp"
+ #include <string>
+@@ -94,6 +95,7 @@
+   nav2_core::NavigatorMuxer plugin_muxer_;
+   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr tuning_hold_srv_;
+   rclcpp::Service<patrolbot_interfaces::srv::TuningMaintenance>::SharedPtr maintenance_srv_;
++  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr tuning_input_sub_;
+   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr navigation_idle_srv_;
+ 
+   // Odometry smoother object
+--- a/nav2_bt_navigator/src/bt_navigator.cpp
++++ b/nav2_bt_navigator/src/bt_navigator.cpp
+@@ -23,6 +23,7 @@
+ #include "nav2_util/node_utils.hpp"
+ #include "nav2_util/string_utils.hpp"
+ #include "nav2_util/robot_utils.hpp"
++#include "nav2_util/tuning_action_gate.hpp"
+ #include "nav2_behavior_tree/bt_utils.hpp"
+ 
+ #include "nav2_behavior_tree/plugins_list.hpp"
+@@ -40,13 +41,38 @@
+   RCLCPP_INFO(get_logger(), "Creating");
+   // Available while unconfigured and retained across plugin cleanup/configure.
++  tuning_input_sub_ = create_subscription<std_msgs::msg::Bool>(
++    "/patrolbot/tuning_hold", rclcpp::QoS(10),
++    [](std_msgs::msg::Bool::ConstSharedPtr message) {
++      auto & gate = nav2_util::tuningActionGate();
++      std::lock_guard<std::mutex> lock(gate.mutex);
++      gate.core_held = message->data;
++    });
+   maintenance_srv_ = create_service<patrolbot_interfaces::srv::TuningMaintenance>(
+     "~/tuning_maintenance", [this](
+       const std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Request> request,
+       std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Response> response) {
+-      response->accepted = plugin_muxer_.tuningMaintenance(
+-        request->operation, request->job_id, request->digest, request->plan_hash,
+-        response->evidence_json);
++      auto & gate = nav2_util::tuningActionGate();
++      std::lock_guard<std::mutex> lock(gate.mutex);
++      const bool busy = gate.faulted || !gate.goals.empty() || gate.workers != 0;
++      const bool may_acquire = !gate.faulted && (request->operation != "acquire" || !busy);
++      const bool accepted = plugin_muxer_.tuningMaintenance(
++        may_acquire ? request->operation : "inspect", request->job_id,
++        request->digest, request->plan_hash, response->evidence_json);
++      response->accepted = may_acquire && accepted && !gate.faulted;
++      if (response->accepted && request->operation == "acquire") {gate.held = true;}
++      if (response->accepted && request->operation == "release") {gate.held = false;}
++      if (!response->evidence_json.empty()) {
++        response->evidence_json.pop_back();
++        response->evidence_json += ",\"action_gate\":{\"implementation\":"
++          "\"nav2-1.3.12-composed-actions-v1\",\"held\":" +
++          std::string(gate.held ? "true" : "false") +
++          ",\"core_held\":" + std::string(gate.core_held ? "true" : "false") +
++          ",\"faulted\":" + std::string(gate.faulted ? "true" : "false") +
++          ",\"active_goals\":" + std::to_string(gate.goals.size()) +
++          ",\"workers\":" + std::to_string(gate.workers) + "}}";
++      }
+-      response->detail = response->accepted ? "navigator_lease_acknowledged" : "navigator_lease_refused";
++      response->detail = gate.faulted ? "recovery_required" :
++        (response->accepted ? "navigator_lease_acknowledged" : "navigator_lease_refused");
+     });
+ 
+   declare_parameter_if_not_declared(

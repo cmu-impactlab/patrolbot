@@ -57,6 +57,7 @@ class EpochRuntime(MapRuntimeMixin):
         self.tuning_hold = False
         self._tuning_hold_sources = {}
         self._tuning_hold_reason = ''
+        self._tuning_reservation_job = None
         self._lidar_reseed = False
         self._lidar_cancel = [
             node.create_client(CancelGoal, '/' + name + '/_action/cancel_goal')
@@ -98,10 +99,52 @@ class EpochRuntime(MapRuntimeMixin):
                 self.withdraw()
 
     def set_tuning_hold(self, held, reason=''):
-        self._set_tuning_hold_source('job', held, reason)
+        with self.lock:
+            current = self._tuning_hold_sources.get('job')
+            if not held and current is not None and current != str(reason or ''):
+                return False
+            if held and current is not None and current != str(reason or ''):
+                return False
+            self._set_tuning_hold_source('job', held, reason)
+            return True
 
     def set_tuning_policy_hold(self, held, reason=''):
         self._set_tuning_hold_source('policy', held, reason)
+
+    @property
+    def maintenance_reserved(self):
+        return self._tuning_reservation_job is not None
+
+    def reserve_tuning(self, job_id):
+        """Reserve existing hardware/lifecycle admission, without commanding it.
+
+        Native peer reservations follow this reversible local admission. A job
+        journal must already exist. Emergency disable remains independent.
+        """
+        from uuid import UUID
+        if str(UUID(job_id)) != job_id:
+            return False
+        with self.lock:
+            if self._tuning_reservation_job is not None:
+                return self._tuning_reservation_job == job_id
+            if (self._future is not None or self._failed or self._map_future is not None
+                    or self._map_goal is not None or self.undock_hold
+                    or self.node._undock_active or self.node._undock_goal_reserved):
+                return False
+            if not self.node._hardware_operation_lock.acquire(blocking=False):
+                return False
+            self._tuning_reservation_job = job_id
+            self._set_tuning_hold_source('reservation', True, job_id)
+            return True
+
+    def release_tuning_reservation(self, job_id):
+        with self.lock:
+            if self._tuning_reservation_job != job_id:
+                return False
+            self._tuning_reservation_job = None
+            self._set_tuning_hold_source('reservation', False, job_id)
+            self.node._hardware_operation_lock.release()
+            return True
 
     def _set_tuning_hold_source(self, source, held, reason=''):
         """
@@ -113,20 +156,29 @@ class EpochRuntime(MapRuntimeMixin):
         autonomy and manual DRIVE.
         """
         with self.lock:
+            was_held = self.tuning_hold
             if held:
                 self._tuning_hold_sources[source] = str(reason or '')
             else:
                 self._tuning_hold_sources.pop(source, None)
             self.tuning_hold = bool(self._tuning_hold_sources)
             self._tuning_hold_reason = '; '.join(self._tuning_hold_sources.values())
+            if was_held and not self.tuning_hold:
+                # Input received before/during maintenance is discarded, not a
+                # queue to replay once parameters are installed. Normal drive
+                # freshness gates still apply to every newly generated sample.
+                clock = getattr(self.node, 'get_clock', None)
+                self.node._tuning_motion_admission_after_ns = clock().now().nanoseconds if callable(clock) else 0
+                self.node._manual_active_at = self.node._web_teleop_active_at = 0.0
             publisher = getattr(self.node, '_tuning_hold_pub', None)
             if publisher is not None:
                 from std_msgs.msg import Bool
                 publisher.publish(Bool(data=self.tuning_hold))
             if held:
-                self._pending_pose = None
-                self._accepted_seed_stamp = None
-                self._navigation_ready = False
+                # Maintenance blocks command admission and lifecycle progress,
+                # not the accepted localization state. Necessary AMCL/map loss
+                # is invalidated explicitly by _tuning_require_seed; never save
+                # and replay an old pose merely to release a tuning hold.
                 self.node.get_logger().warning(
                     'Tuning activation hold engaged: ' + self._tuning_hold_reason)
 
@@ -304,7 +356,7 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed(self, message):
         with self.lock:
-            if self.tuning_hold:
+            if self.tuning_hold or self.maintenance_reserved:
                 return
             if self.undock_hold:
                 self.node._undock_turn.revoke('initial pose requested during undock')
@@ -480,6 +532,8 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed_accepted(self, message):
         with self.lock:
+            if self.tuning_hold or self.maintenance_reserved:
+                return
             if self.undock_hold:
                 return
             if not self.node._lidar_ready():
@@ -543,7 +597,7 @@ class EpochRuntime(MapRuntimeMixin):
 
     def tick(self):
         with self.lock:
-            if self.tuning_hold:
+            if self.tuning_hold or self.maintenance_reserved:
                 self.poll_navigation_idle()
                 return
             self.recovery.observe_clock(self.node.get_clock().now().nanoseconds)

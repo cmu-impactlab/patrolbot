@@ -40,6 +40,18 @@ def test_internal_zero_is_never_recorded_as_a_final_producer_observation():
     assert node._tuning_observations.velocities == {}
 
 
+def test_dictionary_metadata_keeps_exact_publisher_and_source_timestamp_binding():
+    node, _, msg, info = setup()
+    metadata = vars(info).copy()
+    node._tuning_velocity_observed('/cmd_vel', 'teleop_velocity_smoother', msg, metadata)
+    assert node._tuning_observations.velocities['/cmd_vel'][0]
+    # Older rclpy builds omit source GID. A sole graph endpoint is not a
+    # substitute for binding this received sample; remain unavailable.
+    del metadata['publisher_gid']
+    node._tuning_velocity_observed('/cmd_vel', 'teleop_velocity_smoother', msg, metadata)
+    assert '/cmd_vel' not in node._tuning_observations.velocities
+
+
 @pytest.mark.parametrize('fault', [
     'gid', 'namespace', 'name', 'type', 'stale', 'future', 'replay',
 ])

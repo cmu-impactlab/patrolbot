@@ -19,6 +19,8 @@ from lifecycle_msgs.srv import ChangeState, GetState
 import rclpy
 from rclpy.node import Node
 from std_srvs.srv import SetBool
+from patrolbot_interfaces.srv import TuningMaintenance
+from patrolbot_bridge.tuning_lease import MaintenanceLease, serve
 
 SMOOTHER = '/teleop_velocity_smoother'
 
@@ -30,14 +32,28 @@ class LifecycleManager(Node):
             ChangeState, SMOOTHER + '/change_state')
         self.get_cli = self.create_client(GetState, SMOOTHER + '/get_state')
         self._maintenance = False
+        self._legacy_maintenance = False
+        self._tuning_lease = MaintenanceLease()
         self._transition_busy = False
         self.create_service(SetBool, '~/tuning_maintenance', self._set_maintenance)
+        self.create_service(TuningMaintenance, '~/tuning_maintenance_v2', self._set_maintenance_v2)
 
     def _set_maintenance(self, request, response):
-        self._maintenance = bool(request.data)
+        self._legacy_maintenance = bool(request.data)
+        self._maintenance = self._legacy_maintenance or self._tuning_lease.held
         response.success = not self._transition_busy
         response.message = ('Lifecycle transition is still in flight' if self._transition_busy
                             else 'Tuning maintenance acknowledged')
+        return response
+
+    def _set_maintenance_v2(self, request, response):
+        # Runs on this manager's existing callback owner. A configure/activate
+        # operation in flight refuses reservation; no other job can release it.
+        response = serve(self._tuning_lease, request, response,
+                         idle=lambda: self._transition_busy is False,
+                         evidence=lambda: {'idle': not self._transition_busy,
+                                           'managed_nodes': ['teleop_velocity_smoother']})
+        self._maintenance = self._legacy_maintenance or self._tuning_lease.held
         return response
 
     def _durable_tuning_hold(self):

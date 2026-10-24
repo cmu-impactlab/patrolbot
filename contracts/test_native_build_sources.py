@@ -27,6 +27,21 @@ def test_every_native_patch_package_is_extracted_and_compiled():
     assert 'nav2_core' in selected(text)
 
 
+def test_composed_action_input_boundary_is_compiled_into_all_fixed_action_consumers():
+    # SimpleActionServer is a template: replacing nav2_util alone would leave
+    # old direct-action admission code baked into these consumers' binaries.
+    consumers = {'nav2_util', 'nav2_bt_navigator', 'nav2_behaviors', 'nav2_controller',
+                 'nav2_planner', 'nav2_smoother', 'nav2_route', 'nav2_waypoint_follower'}
+    text = recipe('Dockerfile.nav2-fixes')
+    assert consumers <= selected(text)
+    assert consumers <= set(re.findall(r'navigation2-1\.3\.12/(\w+)', text))
+    # No additional per-node input services or socket/signing protocol is needed.
+    patch = (ROOT / 'docker/nav2-patches/0023-tuning-composed-action-input.patch').read_text()
+    assert 'tuning_action_gate.cpp' in patch
+    assert 'tuning_action_gate.hpp' in patch
+    assert 'create_service' not in '\n'.join(line for line in patch.splitlines() if line.startswith('+'))
+
+
 def test_inherited_native_source_and_build_outputs_are_removed_before_extraction():
     text = recipe('Dockerfile.nav2-fixes')
     remove = text.index('rm -rf ')

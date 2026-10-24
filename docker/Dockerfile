@@ -8,6 +8,7 @@ RUN --mount=type=tmpfs,target=/var/cache/apt/archives \
     apt-get update && apt-get install -y --no-install-recommends \
       python3-colcon-common-extensions \
       python3-yaml \
+      python3-cryptography \
       cmake \
       build-essential \
       ros-${ROS_DISTRO}-nav2-bringup \

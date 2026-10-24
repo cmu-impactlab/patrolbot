@@ -20,5 +20,16 @@
   "evidence_max_age_s": 0.5,
   "joystick_policy_version": 1,
   "startup_policy": "Only committed ACTIVE artifacts; unresolved jobs retain motion hold. Desired settings are never activated by restart.",
-  "rearm_policy": "Configuration never arms input. F710 requires release and a new deadman press; web sessions must be explicitly restarted. Navigation requires a new operator seed."
+  "rearm_policy": "Configuration never arms input. F710 requires release and a new deadman press; web sessions must be explicitly restarted. A new operator seed is required only when necessary activation invalidates localization; unrelated maintenance preserves accepted localization without replay.",
+  "activation_review_version": 1,
+  "review_required": true,
+  "apply_admission": "Command idle with fresh non-odometry evidence; close the existing core command gate during installation and discard new input, never queue or replay it. Motors may be on or off. Odometry, localization and a universal selected map are not prerequisites. Runtime activation remains uncommissioned until independently verified.",
+  "apply_strategy": "hot_or_nav2_redeploy",
+  "nav2_redeploy": {
+    "services": ["navigation"],
+    "nodes": ["amcl", "behavior_server", "bt_navigator", "collision_monitor", "controller_server", "joy_node", "laser_static_tf", "lifecycle_manager_localization", "lifecycle_manager_navigation", "map_server", "nav2_container", "patrolbot_controller_feedback", "patrolbot_dock_manager", "patrolbot_joy_teleop", "patrolbot_safety_watchdog", "planner_server", "route_server", "smoother_server", "velocity_smoother", "waypoint_follower"],
+    "seed_required": true,
+    "image_rebuild": false,
+    "note": "If any changed Nav2 value requires reconstruction, restart this whole fixed container once. No per-node lifecycle choreography, core/bringup/dashboard/SBC restart or implicit image build."
+  }
 }

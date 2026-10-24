@@ -214,7 +214,7 @@ class MapRuntimeMixin:
 
     def _map_accept(self, request):
         with self.lock:
-            if getattr(self, 'tuning_hold', False):
+            if getattr(self, 'tuning_hold', False) or getattr(self, 'maintenance_reserved', False):
                 return GoalResponse.REJECT
             if self.undock_hold:
                 self.node._undock_turn.revoke('map localization requested during undock')

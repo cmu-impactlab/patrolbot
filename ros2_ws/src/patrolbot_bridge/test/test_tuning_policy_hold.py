@@ -41,12 +41,12 @@ def test_restoring_policy_never_clears_a_durable_job_hold():
     epoch.set_tuning_hold(True, 'durable job unknown')
     epoch.set_tuning_policy_hold(False)
     assert epoch.tuning_hold
-    epoch.set_tuning_hold(False)
+    epoch.set_tuning_hold(False, 'durable job unknown')
     assert not epoch.tuning_hold
     epoch.set_tuning_policy_hold(True, 'temporary read failure')
     epoch.set_tuning_policy_hold(False)
     assert not epoch.tuning_hold
-    assert not epoch._navigation_ready
+    assert epoch._navigation_ready
 
 
 def test_promote_and_policy_reads_share_one_revision_lock(tmp_path):

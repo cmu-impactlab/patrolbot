@@ -23,6 +23,7 @@ and polarity still require live confirmation before feature acceptance. If
 forward/back or left/right is reversed, flip the matching *_SIGN constant below and restart.
 """
 import math
+import json
 import os
 from uuid import uuid4
 
@@ -133,6 +134,19 @@ class JoyTeleop(Node):
         self._base_state_at = None
         self._lidar_generation = None
         self._tuning_hold = False
+        self._tuning_input_after_ns = 0
+        self._tuning_legacy_hold = False
+        self._tuning_lease = None
+        try:
+            from patrolbot_bridge.tuning_lease import MaintenanceLease
+            from patrolbot_interfaces.srv import TuningMaintenance
+            self._tuning_lease = MaintenanceLease()
+        except ImportError:
+            # Standalone legacy receivers cannot acknowledge reviewed apply.
+            pass
+        self._tuning_input_at = None
+        self._tuning_input_stamp = None
+        self._tuning_input_released = False
         self._tuning_require_release = os.environ.get('PATROLBOT_TUNING_ENABLED', '0') == '1'
         try:
             from patrolbot_bridge.tuning_startup import state_expected
@@ -143,6 +157,9 @@ class JoyTeleop(Node):
         except ImportError:
             # Legacy standalone receivers have no persistent tuning package.
             pass
+        # A replacement starts closed until it receives the core's current hold.
+        # This prevents a startup release/press pair from preceding that message.
+        self._tuning_hold = self._tuning_legacy_hold = self._tuning_require_release
         self._tuning_deadman_held = False
 
         self.create_subscription(Joy, '/joy', self.joy_cb, 10)
@@ -159,6 +176,8 @@ class JoyTeleop(Node):
         self.manual_pub = self.create_publisher(Bool, "/patrolbot/manual_active", 10)
         self.create_subscription(Bool, '/patrolbot/tuning_hold', self._tuning_hold_cb, 10)
         self.create_service(Trigger, '/patrolbot/joy_tuning_idle', self._tuning_idle)
+        if self._tuning_lease is not None:
+            self.create_service(TuningMaintenance, '/patrolbot/joy_tuning_maintenance', self._tuning_maintenance)
         self.nav_cancel = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal')
         self.lidar_power = self.create_client(
@@ -193,11 +212,13 @@ class JoyTeleop(Node):
                            <= values['max_linear_cap']
                            and values['min_angular'] <= values['max_angular']
                            <= values['max_angular_cap'])
-        # Never mutate a live proportional/ramped command underneath a held
-        # controller. Runtime tuning owns the stationary admission boundary.
-        valid = valid and self._tuning_hold and not (self.active or self._tuning_deadman_held
-                               or abs(self.lin_cmd) > 1e-9
-                               or abs(self.ang_cmd) > 1e-9 or self._takeover_pending)
+        # Initial admission requires released input. Once an exact maintenance
+        # lease blocks ingress, fresh button presses are discarded and must not
+        # abort installation. The local command path must still be drained, not
+        # merely a Boolean hold with a live ramp/pending operation underneath it.
+        blocked = bool(self._tuning_lease and self._tuning_lease.held)
+        valid = valid and self._tuning_hold and (
+            self._tuning_command_idle() or blocked and self._tuning_commands_drained())
         return SetParametersResult(successful=valid, reason='' if valid else
                                    'Joystick policy requires idle input and coherent safe caps')
 
@@ -218,9 +239,25 @@ class JoyTeleop(Node):
         self.active = False
         self.deadman_was_down = False
         self._last_joy = None
+        self._tuning_require_release = True
+
+    def _tuning_command_idle(self):
+        now = self.get_clock().now().nanoseconds / 1e9
+        released = (self._tuning_input_released and self._tuning_input_at is not None
+                    and self._tuning_input_stamp is not None
+                    and 0 <= now - self._tuning_input_at <= JOY_TIMEOUT
+                    and 0 <= now - self._tuning_input_stamp <= JOY_TIMEOUT)
+        return bool(released and not self._tuning_deadman_held and self._tuning_commands_drained())
+
+    def _tuning_commands_drained(self):
+        return not (self.active or self._takeover_pending or self._cancel_in_flight
+                    or self._lidar_toggle_pending or self._lidar_in_flight
+                    or any(value != 0.0 for value in
+                           (self.lin_tgt, self.ang_tgt, self.lin_cmd, self.ang_cmd)))
 
     def _tuning_hold_cb(self, message):
-        self._tuning_hold = bool(message.data)
+        self._tuning_legacy_hold = bool(message.data)
+        self._sync_tuning_hold()
         if self._tuning_hold:
             self._tuning_require_release = True
             self.active = False
@@ -229,10 +266,81 @@ class JoyTeleop(Node):
             # downstream velocity publisher. No saved input survives release.
             self.pub.publish(Twist())
 
+    def _sync_tuning_hold(self):
+        held = self._tuning_legacy_hold or bool(self._tuning_lease and self._tuning_lease.held)
+        if self._tuning_hold and not held:
+            # Ignore middleware-queued release/press pairs from maintenance.
+            # Only samples generated AFTER this final hold ends can rearm input.
+            self._tuning_input_after_ns = self.get_clock().now().nanoseconds
+            self._tuning_require_release = True
+            self._tuning_input_released = False
+            self._tuning_input_at = self._tuning_input_stamp = None
+            self._lidar_chord.reset()
+        self._tuning_hold = held
+
+    def _tuning_maintenance(self, request, response):
+        from patrolbot_bridge.tuning_lease import serve
+        def evidence():
+            return {'idle': self._tuning_command_idle(), 'input_released': self._tuning_command_idle(),
+                'input_blocked': self._tuning_hold, 'policy': {
+                'max_linear_cap': self.lin_cap, 'max_angular_cap': self.ang_cap,
+                'min_linear': self.min_lin, 'min_angular': self.min_ang,
+                'max_linear': self.max_lin, 'max_angular': self.max_ang},
+                'release_required': self._tuning_require_release,
+                'buffers': dict(linear_target=self.lin_tgt, angular_target=self.ang_tgt,
+                                linear_command=self.lin_cmd, angular_command=self.ang_cmd),
+                'policy_version': self.get_parameter('tuning_policy_version').value,
+                'operator_linear_trim': self._operator_linear_trim,
+                'operator_angular_trim': self._operator_angular_trim}
+        try:
+            # Refuse corrupt cache evidence before changing (especially releasing)
+            # ownership. Failed serialization must not accidentally drop a hold.
+            json.dumps(evidence(), allow_nan=False)
+            if request.operation == 'restore_trims':
+                from types import SimpleNamespace
+                from patrolbot_bridge.tuning_lease import request_context
+                from patrolbot_bridge.tuning_json import loads
+                value = request_context(request)
+                trims = loads(request.payload_json, 4096)
+                if (not self._tuning_lease.matches(value) or not self._tuning_hold
+                        or not self._tuning_commands_drained() or not isinstance(trims, dict)
+                        or not trims or not set(trims) <= {'max_linear', 'max_angular'}
+                        or any(type(v) not in (int, float) or not math.isfinite(v) or v < 0.
+                               for v in trims.values())):
+                    raise ValueError('held lower operator trims required')
+                if 'max_linear' in trims:
+                    self.max_lin = min(self.max_lin, trims['max_linear'])
+                    self._operator_linear_trim = True
+                if 'max_angular' in trims:
+                    self.max_ang = min(self.max_ang, trims['max_angular'])
+                    self._operator_angular_trim = True
+                return serve(self._tuning_lease, SimpleNamespace(operation='inspect', **value), response,
+                             idle=self._tuning_command_idle, evidence=evidence)
+            if request.operation == 'block':
+                # After the core has closed DRIVE admission, new button presses
+                # are ignored rather than treated as a competing motion owner.
+                # Do not claim those presses are 'released'; report blocked and
+                # keep release-before-rearm after installation completes.
+                from types import SimpleNamespace
+                from patrolbot_bridge.tuning_lease import request_context
+                value = request_context(request)
+                self._tuning_require_release = True
+                local_idle = self._tuning_legacy_hold and self._tuning_commands_drained()
+                return serve(self._tuning_lease, SimpleNamespace(operation='acquire', **value), response,
+                             idle=lambda: local_idle, evidence=evidence)
+            if self._tuning_lease.held or (request.operation == 'acquire' and self._tuning_command_idle()):
+                self._tuning_require_release = True
+            return serve(self._tuning_lease, request, response,
+                         idle=self._tuning_command_idle, evidence=evidence)
+        except (ValueError, TypeError, AttributeError) as exc:
+            self.get_logger().warn('Tuning maintenance refused: ' + str(exc)[:160])
+            response.accepted, response.detail, response.evidence_json = False, 'Invalid maintenance evidence', '{}'
+            return response
+        finally:
+            self._sync_tuning_hold()
+
     def _tuning_idle(self, request, response):
-        response.success = bool(self._tuning_hold and not self._tuning_deadman_held
-                                and not self.active and not self._takeover_pending
-                                and self.lin_cmd == 0.0 and self.ang_cmd == 0.0)
+        response.success = bool(self._tuning_hold and self._tuning_command_idle())
         response.message = 'Tuning idle acknowledged' if response.success else 'Manual input busy'
         return response
 
@@ -245,6 +353,8 @@ class JoyTeleop(Node):
             self.active = False
             self.deadman_was_down = False
             self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
+            self._tuning_input_released = False
+            self._tuning_input_at = self._tuning_input_stamp = None
         self._lidar_generation = message.session_generation
         self._base_state = message
         self._base_state_at = self.get_clock().now().nanoseconds / 1e9
@@ -396,20 +506,28 @@ class JoyTeleop(Node):
     def joy_cb(self, m):
         b = m.buttons
         a = m.axes
-        self._tuning_deadman_held = button_pressed(b, BTN_DEADMAN)
+        stamp_ns = m.header.stamp.sec * 1_000_000_000 + m.header.stamp.nanosec
+        if self._tuning_input_after_ns and stamp_ns <= self._tuning_input_after_ns:
+            return
+        now = self.get_clock().now().nanoseconds / 1e9
+        stamp = m.header.stamp.sec + m.header.stamp.nanosec / 1e9
+        toggle = self._lidar_chord.update(a, b, now=now, stamp=stamp)
+        valid = self._lidar_chord.valid
+        self._tuning_deadman_held = not valid or button_pressed(b, BTN_DEADMAN)
+        self._tuning_input_at = now if valid else None
+        self._tuning_input_stamp = stamp if valid else None
+        self._tuning_input_released = bool(valid and not any(b) and a[2] >= .5 and a[5] >= .5)
         if self._tuning_hold or self._tuning_require_release:
             self.active = False
             self.deadman_was_down = False
             self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
-            if not self._tuning_hold and not self._tuning_deadman_held:
+            self.prev_btns = list(b) if valid else []
+            if not self._tuning_hold and self._tuning_input_released:
                 self._tuning_require_release = False
             return
-        now = self.get_clock().now().nanoseconds / 1e9
         if self._last_joy is None or not 0 <= now - self._last_joy <= JOY_TIMEOUT:
             self._lidar_toggle_pending = False
         self._last_joy = now
-        stamp = m.header.stamp.sec + m.header.stamp.nanosec / 1e9
-        toggle = self._lidar_chord.update(a, b, now=now, stamp=stamp)
         if not self._lidar_chord.all_pressed:
             self._lidar_toggle_pending = False
         if not self._lidar_chord.valid:

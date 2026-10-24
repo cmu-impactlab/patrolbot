@@ -169,6 +169,34 @@ def test_admitted_manual_drive_is_written_while_commands_allowed_is_false():
     assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
 
 
+def test_maintenance_drops_even_owned_undock_commands_without_queueing_or_motor_commands():
+    bridge = make_bridge(tuning_hold=True, undock_busy=True, drive_allowed=True)
+    assert drive(bridge, angular=.3) == []
+    bridge._epoch.tuning_hold = False
+    # Nothing is replayed just because admission reopens.
+    assert bridge.sock.writes == []
+
+
+@pytest.mark.parametrize('metadata', [lambda value: NS(source_timestamp=value),
+                                    lambda value: {'source_timestamp': value}])
+def test_after_release_only_new_middleware_samples_can_reenter_normal_drive_gates(metadata):
+    bridge = make_bridge(commands_allowed=True)
+    bridge._tuning_motion_admission_after_ns = 1_000_000_000
+    bridge.get_clock = lambda: NS(now=lambda: NS(nanoseconds=1_200_000_000))
+    msg = NS(linear=NS(x=.05, y=0., z=0.), angular=NS(x=0., y=0., z=0.))
+    for info in (None, metadata(900_000_000), metadata(1_000_000_000)):
+        bridge.cmd_vel_callback(msg, info)
+    assert bridge.sock.writes == []
+    bridge.cmd_vel_callback(msg, metadata(1_100_000_000))
+    assert bridge.sock.writes == ['DRIVE:0.05:0.0\n']
+    # A genuinely new command still cannot bypass the original raw-odom gate.
+    bridge.sock.writes.clear()
+    bridge._epoch.commands_allowed = False
+    bridge._pose_received = False
+    bridge.cmd_vel_callback(msg, metadata(1_150_000_000))
+    assert bridge.sock.writes == []
+
+
 def test_admitted_manual_turn_is_written_while_commands_allowed_is_false():
     bridge = make_bridge(commands_allowed=False, manual_age=0.1)
     assert drive(bridge, angular=0.3) == ['DRIVE:0.0:0.3\n']

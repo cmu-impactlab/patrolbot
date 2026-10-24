@@ -1,0 +1,5 @@
+{
+  "enabled": false,
+  "image": "sha256:REPLACE_WITH_REVIEWED_LOCAL_NAVIGATION_IMAGE_ID",
+  "state_directory": "/var/lib/docker/volumes/patrolbot_patrolbot-state/_data/config"
+}

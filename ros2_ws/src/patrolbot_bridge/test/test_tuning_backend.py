@@ -119,7 +119,7 @@ def test_reload_keeps_exact_revision_selected_map_and_inactive_navigation(tmp_pa
 
 @pytest.mark.parametrize('facts', [
     {'physical_deadman_held': True}, {'autonomy_idle': None},
-    {'stationary': False}, {'hardware_ok': False}, {'web_deadman_fresh': False},
+    {'command_buffers_zero': False}, {'hardware_ok': False}, {'web_deadman_fresh': False},
 ])
 def test_busy_or_unknown_ownership_mutates_no_node(tmp_path, facts):
     _, transport, backend, _, digest = setup(tmp_path, lambda: idle(**facts))
@@ -154,33 +154,36 @@ def test_readback_mismatch_is_not_a_successful_parameter_response(tmp_path):
     assert seeds == []
 
 
-def test_coordinator_commits_verified_startup_and_releases_only_after_success(tmp_path):
+@pytest.mark.parametrize('operation', ['apply', 'redeploy', 'restore'])
+def test_legacy_native_execution_cannot_bypass_review(tmp_path, operation):
     store, transport, backend, _, _ = setup(tmp_path)
     owner = Owner()
     coordinator = ActivationCoordinator(store, owner, backend)
     result = coordinator.request(
-        operation='redeploy', request_id='22222222-2222-4222-8222-222222222222',
-        expected_revision=2, actor=ADMIN)
-    assert result['outcome'] == 'ok'
-    assert store.read_startup()['revision'] == 2
+        operation=operation, request_id='22222222-2222-4222-8222-222222222222',
+        expected_revision=2, actor=ADMIN, target_revision=1 if operation == 'restore' else None)
+    assert result['outcome'] == 'refused'
+    assert 'review_required' in result['detail']
+    assert store.read_startup()['revision'] == 1
     assert not owner.tuning_hold
-    assert transport.calls[-1] == ('smoother_hold', False)
+    assert transport.calls == []
 
 
-def test_unknown_job_survives_restart_without_reloading_or_releasing(tmp_path):
+def test_reviewed_but_unproven_scoped_plan_cannot_use_legacy_all_node_reload(tmp_path):
     store, transport, backend, _, _ = setup(tmp_path)
     transport.failure = 'amcl'
     coordinator = ActivationCoordinator(store, Owner(), backend)
+    coordinator.session_id = '11111111-1111-4111-8111-111111111111'
+    plan = coordinator.preview()
     result = coordinator.request(
         operation='apply', request_id='22222222-2222-4222-8222-222222222222',
-        expected_revision=2, actor=ADMIN)
-    assert result['outcome'] == 'unknown'
-    calls = list(transport.calls)
-    owner = Owner()
-    restored = ActivationCoordinator(RevisionStore(store.base, REGISTRY), owner, backend)
-    assert restored.recover()['state'] == 'unknown'
-    assert owner.tuning_hold
-    assert transport.calls == calls
+        expected_revision=2, actor=ADMIN,
+        review={'digest': plan['digest'], 'plan_hash': plan['plan_hash']})
+    assert result['outcome'] == 'refused'
+    assert 'implementation_unverified' in result['detail']
+    assert store.read_startup()['revision'] == 1
+    assert transport.calls == []
+    assert not coordinator.hold
 
 
 def test_request_id_cannot_be_repurposed_for_restore_or_another_actor(tmp_path):
@@ -189,7 +192,7 @@ def test_request_id_cannot_be_repurposed_for_restore_or_another_actor(tmp_path):
     request_id = '22222222-2222-4222-8222-222222222222'
     first = coordinator.request(operation='redeploy', request_id=request_id,
                                 expected_revision=2, actor=ADMIN)
-    assert first['outcome'] == 'ok'
+    assert first['outcome'] == 'refused'
     calls = list(transport.calls)
     changed = coordinator.request(operation='restore', request_id=request_id,
                                   expected_revision=2, actor=ADMIN, target_revision=1)
@@ -198,7 +201,7 @@ def test_request_id_cannot_be_repurposed_for_restore_or_another_actor(tmp_path):
     changed = coordinator.request(operation='redeploy', request_id=request_id,
                                   expected_revision=2, actor=dict(ADMIN, id=2))
     assert changed['outcome'] == 'refused'
-    assert store.get_request(request_id)['outcome'] == 'ok'
+    assert store.get_request(request_id)['outcome'] == 'refused'
 
 
 def test_hardware_generation_change_never_commits_a_runtime_success(tmp_path, monkeypatch):
@@ -250,17 +253,22 @@ def test_invalid_generated_domain_is_refused_before_acquiring_a_runtime_hold(tmp
     store.save(request_id='33333333-3333-4333-8333-333333333333', base_revision=2,
                changes=[{'id': 'max_linear_m_s', 'value': 0.}], actor=ADMIN)
     owner = Owner()
-    result = ActivationCoordinator(store, owner, backend).request(
-        operation='redeploy', request_id='44444444-4444-4444-8444-444444444444',
-        expected_revision=3, actor=ADMIN)
+    coordinator = ActivationCoordinator(store, owner, backend)
+    plan = coordinator.preview()
+    assert not plan['executable']
+    assert any('0.01' in reason['detail'] for reason in plan['reasons'])
+    result = coordinator.request(
+        operation='apply', request_id='44444444-4444-4444-8444-444444444444',
+        expected_revision=3, actor=ADMIN,
+        review={'digest': plan['digest'], 'plan_hash': plan['plan_hash']})
     assert result['outcome'] == 'refused'
-    assert '0.01' in result['detail']
+    assert 'implementation_unverified' in result['detail']
     assert transport.calls == []
     assert owner.tuning_hold is False
     assert store.read_startup()['revision'] == 1
 
 
-def test_new_navigation_goal_wins_reservation_without_being_cancelled_or_held(tmp_path):
+def test_unreviewed_request_never_reserves_or_cancels_navigation(tmp_path):
     store, transport, backend, _, _ = setup(tmp_path)
     owner = Owner()
     owner.navigation_ready = True
@@ -275,12 +283,12 @@ def test_new_navigation_goal_wins_reservation_without_being_cancelled_or_held(tm
         expected_revision=2, actor=ADMIN)
     assert result['outcome'] == 'refused'
     assert not owner.tuning_hold and owner.navigation_ready
-    assert store.latest_job()['state'] == 'failed'
+    assert store.latest_job() is None
     assert transport.calls == []
     assert store.read_startup()['revision'] == 1
 
 
-def test_unknown_navigation_reservation_is_journalled_before_retaining_hold(tmp_path):
+def test_unreviewed_request_never_calls_even_an_ambiguous_remote_reservation(tmp_path):
     store, transport, backend, _, _ = setup(tmp_path)
     owner = Owner()
 
@@ -293,9 +301,9 @@ def test_unknown_navigation_reservation_is_journalled_before_retaining_hold(tmp_
     result = ActivationCoordinator(store, owner, backend).request(
         operation='redeploy', request_id='55555555-5555-4555-8555-555555555555',
         expected_revision=2, actor=ADMIN)
-    assert result['outcome'] == 'unknown'
-    assert owner.tuning_hold
-    assert store.latest_job()['state'] == 'unknown'
+    assert result['outcome'] == 'refused'
+    assert not owner.tuning_hold
+    assert store.latest_job() is None
     assert transport.calls == []
 
 
@@ -309,25 +317,27 @@ def test_successful_reload_keeps_durable_post_restart_admission_gate(tmp_path):
     assert admission['map_identity'] == '1:2:100:200'
 
 
-def test_post_reservation_evidence_failure_releases_without_orphaning_gate(tmp_path):
+def test_changed_plan_refuses_before_remote_reservation(tmp_path):
     count = [0]
 
     def probe():
         count[0] += 1
-        return idle(stationary=count[0] < 3)
+        return idle(hardware_ok=count[0] < 3)
 
     store, transport, backend, _, _ = setup(tmp_path, probe)
     owner = Owner()
     result = ActivationCoordinator(store, owner, backend).request(
-        operation='redeploy', request_id='66666666-6666-4666-8666-666666666666',
-        expected_revision=2, actor=ADMIN)
-    assert result['outcome'] == 'refused'
-    assert transport.calls[-1] == ('navigation_hold', False)
+        operation='apply', request_id='66666666-6666-4666-8666-666666666666',
+        expected_revision=2, actor=ADMIN,
+        review={'digest': store.load_revision(2)['meta']['generated_digest'],
+                'plan_hash': 'sha256:' + '0' * 64})
+    assert result['outcome'] == 'conflict'
+    assert transport.calls == []
     assert not owner.tuning_hold
-    assert store.latest_job()['state'] == 'failed'
+    assert store.latest_job() is None
 
 
-def test_online_restore_does_not_relabel_the_rolled_back_revision_as_last_good(tmp_path):
+def test_unreviewed_restore_does_not_change_active_or_last_good(tmp_path):
     store, transport, backend, _, _ = setup(tmp_path)
     store.promote(revision=2, scopes=['bringup', 'navigation'], actor=ADMIN)
     store.save(request_id='33333333-3333-4333-8333-333333333333', base_revision=2,
@@ -335,5 +345,12 @@ def test_online_restore_does_not_relabel_the_rolled_back_revision_as_last_good(t
     result = ActivationCoordinator(store, Owner(), backend).request(
         operation='restore', request_id='77777777-7777-4777-8777-777777777777',
         expected_revision=3, actor=ADMIN, target_revision=1)
-    assert result['outcome'] == 'ok'
+    assert result['outcome'] == 'refused'
     assert store.require_ready()['last_known_good'] == 1
+    assert store.snapshot_state()['active_revision'] == 2
+
+
+@pytest.mark.parametrize('value', [None, False])
+def test_legacy_reload_final_verification_no_longer_requires_odometry(tmp_path, value):
+    _, _, backend, _, digest = setup(tmp_path, lambda: idle(raw_odom_fresh=value, stationary=value))
+    assert backend.reload(['bringup', 'navigation'], 2, digest).status == 'ok'

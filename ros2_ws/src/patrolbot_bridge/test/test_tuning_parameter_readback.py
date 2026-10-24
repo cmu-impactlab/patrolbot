@@ -132,12 +132,13 @@ def test_observation_worker_serializes_waits_outside_ros_executor():
     owner = NS(_stop_event=NS(is_set=lambda: stopped[0], wait=wait),
                _refresh_tuning_policy=lambda: calls.append('policy'),
                _parameter_observer=NS(poll=lambda: calls.append('observations')),
-               _poll_tuning_readback=lambda: calls.append('revision'))
+               _poll_tuning_readback=lambda: calls.append('revision'),
+               _tuning_transport=NS(poll_simple_capabilities=lambda: calls.append('capabilities')))
     method(owner)
-    assert calls == ['policy', 'observations', 'revision', ('wait', .5)]
+    assert calls == ['policy', 'observations', 'revision', 'capabilities', ('wait', .5)]
     source = (ROOT / 'ros2_ws/src/patrolbot_bridge/patrolbot_bridge/bridge_node.py').read_text()
     for callback in ('self._poll_tuning_readback', 'self._parameter_observer.poll',
-                     'self._refresh_tuning_policy'):
+                      'self._refresh_tuning_policy', 'self._tuning_transport.poll_simple_capabilities'):
         assert not any('create_timer(' in line and callback in line
                        for line in source.splitlines())
     assert 'self.tuning_thread,' in source

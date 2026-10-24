@@ -81,7 +81,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import BatteryState, LaserScan, PointCloud2, PointField
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from tf2_ros import TransformBroadcaster
 
 
@@ -1301,6 +1301,10 @@ class PatrolBotBridge(Node):
         power = command in (COMMAND_LIDAR_ON, COMMAND_LIDAR_OFF)
         response.request_id = request_id
         with self._epoch.lock:
+            if command != COMMAND_MOTOR_DISABLE and (
+                    self._epoch.tuning_hold or self._epoch.maintenance_reserved):
+                return self._fill_control_response(
+                    response, None, 3, 'configuration maintenance owns hardware mutations', started)
             motor_generation = getattr(self, '_motor_disable_generation', 0)
             if (
                 command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE)
@@ -1836,6 +1840,9 @@ class PatrolBotBridge(Node):
         self._tuning_source_stamps = {}
         self._tuning_source_generation = None
         self._tuning_hold_pub = self.create_publisher(Bool, '/patrolbot/tuning_hold', 10)
+        self._tuning_runtime_policy_binding = None
+        self._tuning_runtime_policy_pub = self.create_publisher(String, '/patrolbot/tuning_runtime_policy', 10)
+        self.create_timer(.1, self._publish_tuning_runtime_policy, callback_group=self._callbacks)
         self.create_subscription(
             Bool, '/patrolbot/web_teleop_session_active',
             lambda msg, info: self._tuning_deadman_observed(
@@ -1875,18 +1882,17 @@ class PatrolBotBridge(Node):
                 raise RuntimeError('tuning registry is not installed')
             registry = _read_registry(registry_path)
             store = RevisionStore(self._tuning_dir(), registry)
-            # No verified native parameter mutability and no approved fixed
-            # backend yet: every activation request is refused, never faked.
+            # Runtime Apply is operator-disabled by default. Even when enabled,
+            # real native support and fresh admission evidence remain mandatory.
             self._tuning_transport = RosParameterTransport(self)
             from patrolbot_bridge.tuning_readback import ParameterObserver
             self._parameter_observer = ParameterObserver(
                 store.index, self._tuning_transport.get_readonly,
                 lambda: self._session_generation)
-            backend = LifecycleBackend(
+            from .tuning_simple import SimpleApplyBackend
+            backend = SimpleApplyBackend(
                 store, self._tuning_transport, self._tuning_evidence,
-                self._tuning_require_seed,
                 enabled=os.environ.get('PATROLBOT_TUNING_RUNTIME_ENABLED', '0') == '1',
-                selected_map=self._tuning_selected_map,
                 generation=lambda: (self._session_generation, self._epoch.guard.generation))
             coordinator = ActivationCoordinator(store, self._epoch, backend)
             self._tuning_backend = backend
@@ -1945,6 +1951,40 @@ class PatrolBotBridge(Node):
                           and 0 <= now - self._flags_at <= .5)
         return linked, '' if linked else 'The SBC link is disconnected or stale.'
 
+    def _publish_tuning_runtime_policy(self):
+        """Publish actual held cache evidence without taking the revision writer.
+
+        This fixed local side channel breaks the apply-writer/read-service cycle;
+        it never publishes velocity, grants DRIVE or turns DESIRED into ACTIVE.
+        The web producer independently checks source identity, freshness and job.
+        """
+        binding = self._tuning_runtime_policy_binding
+        if not isinstance(binding, dict):
+            return
+        with self._epoch.lock:
+            if (not self._epoch.tuning_hold
+                    or self._epoch._tuning_reservation_job != binding['job_id']
+                    or self._session_generation != binding['hardware_session_generation']):
+                return
+            try:
+                value = {key: binding[key] for key in ('job_id', 'digest', 'plan_hash')}
+                if binding['phase'] == 'candidate':
+                    observed = self._tuning_policy.staged_evidence(value)
+                    if observed['limits'] != binding['effective_limits'] or observed['drive_blocked'] is not True:
+                        return
+                elif binding['phase'] == 'committed':
+                    if (self._tuning_policy.limits() != binding['effective_limits']
+                            or self._tuning_policy.generation != binding['policy_generation']):
+                        return
+                else:
+                    return
+                payload = {key: item for key, item in binding.items() if key != 'policy_generation'}
+                payload.update(runtime_verified=True, command_hold=True, observed_age_s=0.,
+                               committed_active_revision=(binding['revision'] if binding['phase'] == 'committed' else None))
+                self._tuning_runtime_policy_pub.publish(String(data=json.dumps(payload, sort_keys=True, allow_nan=False)))
+            except (ValueError, KeyError, TypeError):
+                return
+
     @staticmethod
     def _tuning_dir():
         base = os.environ.get('PATROLBOT_TUNING_DIR')
@@ -1991,6 +2031,7 @@ class PatrolBotBridge(Node):
                 if self._stop_event.is_set():
                     break
                 self._poll_tuning_readback()
+                self._tuning_transport.poll_simple_capabilities()
                 next_readback = time.monotonic() + .5
             self._stop_event.wait(.5)
 
@@ -2009,19 +2050,10 @@ class PatrolBotBridge(Node):
 
     def _tuning_evidence(self):
         """
-        Collect runtime evidence for a future approved backend.
-
-        Unused while the shipped backend is :class:`UnavailableBackend`, but
-        wired so the predicate cannot silently default to permissive.
+        Collect fresh command/hardware evidence without borrowing localization
+        or odometry readiness. Unknown required evidence never grants admission.
         """
         now = time.monotonic()
-        with self._pose_lock:
-            odom_age = now - self._pose_at
-            raw_odom_fresh = bool(
-                self._pose_received and math.isfinite(odom_age)
-                and 0.0 <= odom_age <= self._odom_tf_timeout
-            )
-            stationary = bool(abs(self._vx) <= 0.005 and abs(self._vth) <= 0.01)
         with self._state_lock:
             session_generation = self._session_generation
             hardware_fresh = (
@@ -2042,19 +2074,27 @@ class PatrolBotBridge(Node):
         epoch = self._epoch
         with epoch.lock:
             facts = {
-                'raw_odom_fresh': raw_odom_fresh,
-                'stationary': stationary,
                 'hardware_ok': bool(hardware_fresh and epoch.guard.ready
                                     and session_generation == self._session_generation),
                 'dock_ok': dock_ok,
                 'faults_clear': faults_clear,
                 'autonomy_idle': bool(not epoch.navigation_idle_problem()
-                                      and not epoch._navigation_status
-                                      and not getattr(epoch, '_tuning_nav_pending', False)),
-                'maps_clear': bool(not epoch.map_hold and epoch._map_goal is None
-                                   and epoch._map_future is None),
+                                      and not epoch._navigation_status),
+                # No selected map and a quiet seed barrier are navigation
+                # readiness states, not map mutation owners. Unknown/failed map
+                # subsystem state still refuses; normal map_hold is unchanged.
+                'maps_clear': bool(not epoch._map_error and epoch.maps is not None
+                                   and epoch.maps.stage in ('idle', 'ready')
+                                   and not epoch.maps.hold and epoch._map_goal is None
+                                   and epoch._map_future is None
+                                   and getattr(epoch, '_tuning_map_probe', None) is None),
                 'undock_clear': undock_clear,
-                'lifecycle_clear': bool(not epoch._failed and epoch._future is None),
+                'lifecycle_clear': bool(not epoch._failed and epoch._future is None
+                                        and (not self._hardware_operation_lock.locked()
+                                             or epoch.maintenance_reserved)
+                                        and not self._lidar_pending
+                                        and epoch.recovery.stage in (epoch.recovery.READY, epoch.recovery.WAIT_SEED,
+                                                                      epoch.recovery.WAIT_POSE)),
             }
         return self._tuning_observations.evidence(**facts)
 
@@ -2081,12 +2121,15 @@ class PatrolBotBridge(Node):
             return False
         try:
             endpoints = self.get_publishers_info_by_topic(topic)
+            gid = info.get('publisher_gid') if isinstance(info, dict) else info.publisher_gid
             if (len(endpoints) != 1 or endpoints[0].node_name != publisher
                     or endpoints[0].node_namespace != '/'
                     or endpoints[0].topic_type != type_name
-                    or bytes(endpoints[0].endpoint_gid) != bytes(info.publisher_gid)):
+                    or gid is None or bytes(endpoints[0].endpoint_gid) != bytes(gid)):
                 return False
-            stamp = info.source_timestamp
+            stamp = info.get('source_timestamp') if isinstance(info, dict) else info.source_timestamp
+            if type(stamp) is not int or stamp <= 0:
+                return False
             age = (self.get_clock().now().nanoseconds - stamp) / 1e9
             if (stamp <= self._tuning_source_stamps.get(topic, 0)
                     or not 0 <= age <= .5):
@@ -2173,6 +2216,7 @@ class PatrolBotBridge(Node):
         if not self._tuning_readback_lock.acquire(blocking=False):
             return
         try:
+            started = time.monotonic()
             # Verifying running values is read-only: it must not depend on
             # authorization to activate/reconfigure those nodes.
             if self._epoch.tuning_hold:
@@ -2186,6 +2230,9 @@ class PatrolBotBridge(Node):
             digest = self._tuning_store.load_revision(revision)['meta']['generated_digest']
             generation = self._session_generation
             _, actual = self._tuning_backend.inspect(revision, digest)
+            if self._epoch.tuning_hold or generation != self._session_generation:
+                self._tuning_readback = None
+                return
             values = {}
             for pid, entry in self._tuning_store.index.items():
                 if not entry.get('accepts_edits') or entry.get('protected'):
@@ -2200,7 +2247,9 @@ class PatrolBotBridge(Node):
                 'hardware_session_generation': generation,
                 'effective_limits': {'max_linear_m_s': values['max_linear_m_s'],
                                      'max_angular_rad_s': values['max_angular_rad_s']}}
-            self._tuning_readback_at = time.monotonic()
+            # Charge the whole native read interval, not only time since its
+            # last reply. A slow read must not renew stale runtime evidence.
+            self._tuning_readback_at = started
         except Exception:
             self._tuning_readback = None
         finally:
@@ -2340,6 +2389,17 @@ class PatrolBotBridge(Node):
             with self._epoch.lock, self.sock_lock:
                 undock_drive = False
                 if msg.linear.x != 0.0 or msg.angular.z != 0.0:
+                    # The existing core is the sole SBC DRIVE boundary. Close
+                    # it before installation, including the undock/manual paths;
+                    # incoming commands are ignored, never buffered for replay.
+                    if self._epoch.tuning_hold or getattr(self._epoch, 'maintenance_reserved', False):
+                        return
+                    after = getattr(self, '_tuning_motion_admission_after_ns', 0)
+                    if after:
+                        stamp = info.get('source_timestamp') if isinstance(info, dict) else getattr(info, 'source_timestamp', None)
+                        if (type(stamp) is not int or stamp <= after
+                                or not 0 <= (self.get_clock().now().nanoseconds - stamp) / 1e9 <= .5):
+                            return
                     if self._undock_turn.busy:
                         if not (self._undock_turn.drive_allowed and pure_angular(msg)):
                             return

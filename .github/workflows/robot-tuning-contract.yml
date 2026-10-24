@@ -31,10 +31,12 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: contracts/requirements-test.txt
+          cache-dependency-path: |
+            contracts/requirements-test.txt
+            docker/tuning-host/requirements-test.txt
 
       - name: Install offline test dependencies
-        run: python -m pip install --disable-pip-version-check -r contracts/requirements-test.txt
+        run: python -m pip install --disable-pip-version-check -r contracts/requirements-test.txt -r docker/tuning-host/requirements-test.txt
 
       - name: Validate standard deployment configuration
         env:

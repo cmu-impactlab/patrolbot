@@ -1,0 +1,2 @@
+# Host Ed25519 protocol tests; separate from the shared tuning wire contract.
+cryptography==50.0.2

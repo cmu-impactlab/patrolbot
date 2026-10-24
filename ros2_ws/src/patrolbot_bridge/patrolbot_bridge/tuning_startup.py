@@ -69,6 +69,56 @@ def resolve(default_file, scope, *, enabled=None, state_dir=None, registry_file=
     return path
 
 
+def resolve_candidate(default_file, scope, *, store, authorization, public_key,
+                      launch_receipt, now, host_boot_id):
+    """Explicit host-authorized candidate API, NEVER called by ordinary resolve.
+
+    Returns (temporary YAML path, exact boot binding). The caller must establish
+    retained command maintenance before launching consumers, authenticate their
+    new identities and verify the complete revision before promotion/release.
+    Shipped tuning_run intentionally does not use this until those hooks exist.
+    """
+    from .tuning_candidate_boot import authorize
+    binding = authorize(store, scope=scope, authorization=authorization,
+                        public_key=public_key, launch_receipt=launch_receipt,
+                        now=now, host_boot_id=host_boot_id)
+    defaults = strict_yaml_load(_read_bytes(Path(default_file), 1024 * 1024).decode('utf-8'))
+    document = merge(defaults, strict_yaml_load(binding['artifact']))
+    fd, path = tempfile.mkstemp(prefix='patrolbot-candidate-' + scope + '-', suffix='.yaml')
+    with os.fdopen(fd, 'w') as stream:
+        stream.write(strict_yaml_dump(document))
+    return path, {key: value for key, value in binding.items() if key != 'artifact'}
+
+
+def navigation_boot(default_file, *, state_dir, registry_file, boot_reply):
+    """Validate the fixed helper's one-use boot reply; never select DESIRED.
+
+    Only tuning_run calls this after receiving data from its private boot socket.
+    The old three-container signed-candidate API above is not used by this path.
+    """
+    if not isinstance(boot_reply, dict) or boot_reply.get('ok') is not True:
+        raise StoreUnavailable('navigation_boot_unavailable')
+    if boot_reply.get('state') == 'active' and set(boot_reply) == {'ok', 'state'}:
+        return resolve(default_file, 'navigation', state_dir=state_dir, registry_file=registry_file)
+    from .tuning_nav2 import candidate_for_job
+    from .tuning_store import _canonical_uuid
+    keys = {'ok', 'state', 'job_id', 'digest', 'plan_hash', 'revision', 'artifact', 'boot_id'}
+    if (set(boot_reply) != keys or boot_reply['state'] != 'candidate'
+            or not _canonical_uuid(boot_reply['boot_id'])):
+        raise StoreUnavailable('invalid_navigation_boot_binding')
+    registry = loads(_read_bytes(Path(registry_file), 512 * 1024).decode(), 512 * 1024)
+    store = RevisionStore(state_dir, registry)
+    candidate = candidate_for_job(store, {key: boot_reply[key] for key in ('job_id', 'digest', 'plan_hash')})
+    if any(boot_reply[key] != value for key, value in candidate.items()):
+        raise StoreUnavailable('navigation_boot_candidate_mismatch')
+    defaults = strict_yaml_load(_read_bytes(Path(default_file), 1024 * 1024).decode())
+    document = merge(defaults, strict_yaml_load(candidate['artifact']))
+    fd, path = tempfile.mkstemp(prefix='patrolbot-nav2-boot-', suffix='.yaml')
+    with os.fdopen(fd, 'w') as stream:
+        stream.write(strict_yaml_dump(document))
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scope', required=True, choices=['bringup', 'navigation'])

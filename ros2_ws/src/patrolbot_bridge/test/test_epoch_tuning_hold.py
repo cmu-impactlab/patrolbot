@@ -4,8 +4,8 @@ Regression tests for the EpochRuntime tuning activation hold.
 These drive the real EpochRuntime admission boundary rather than a stand-in
 owner. Engaging the hold must refuse commands even when autonomy is otherwise
 ready, must stop a held seed/tick from injecting a pose or issuing lifecycle
-transitions, must clear pending seed/navigation readiness, and clearing it must
-not silently rearm that cleared state. The fixture mirrors
+transitions, must preserve unaffected accepted localization in place, and must
+not accept a seed during maintenance. The fixture mirrors
 test_epoch_runtime.py: a plain Node carrying the fields the callbacks read, a
 Client whose call_async resolves synchronously, and real ROS messages.
 """
@@ -183,10 +183,7 @@ def test_hold_blocks_commands_even_when_fully_ready():
     node.logger.warning.assert_called_with(
         'Tuning activation hold engaged: pending activation job')
 
-    # set_tuning_hold also clears navigation readiness; put every *other*
-    # admission gate back to ready so the hold flag is the only thing left that
-    # can refuse the command.
-    runtime._navigation_ready = True
+    assert runtime._navigation_ready is True
     with runtime.node._pose_lock:
         runtime.node._pose_received = True
         runtime.node._pose_at = time.monotonic()
@@ -210,9 +207,12 @@ def test_held_seed_and_tick_issue_no_pose_or_lifecycle_action():
     change_before = len(runtime._change.calls)
     stage_before = runtime.recovery.stage
     seed_ns_before = runtime.recovery._seed_ns
+    accepted_before = runtime._accepted_seed_stamp
+    pose_before = runtime._pending_pose
 
     node.now = 130
     runtime.seed(pose(130))
+    runtime.seed_accepted(pose(130))
     for _ in range(5):
         runtime.tick()
 
@@ -221,40 +221,74 @@ def test_held_seed_and_tick_issue_no_pose_or_lifecycle_action():
     seeded.assert_not_called()
     assert runtime.recovery.stage == stage_before
     assert runtime.recovery._seed_ns == seed_ns_before
-    assert runtime._pending_pose is None
+    assert runtime._pending_pose is pose_before
+    assert runtime._accepted_seed_stamp == accepted_before
     assert len(runtime._navigation.calls) == nav_before
     assert len(runtime._change.calls) == change_before
-    assert runtime._navigation_ready is False
+    assert runtime._navigation_ready is True
     assert not runtime.commands_allowed
 
 
-def test_engaging_hold_clears_pending_seed_and_navigation_readiness():
+def test_engaging_hold_preserves_accepted_localization_without_copying_or_replaying():
     _, runtime = ready_runtime()
     assert runtime._navigation_ready is True
     assert runtime._pending_pose is not None
     assert runtime._accepted_seed_stamp == 110
 
+    pose_before = runtime._pending_pose
+    anchor_before = runtime._pose_anchor
     runtime.set_tuning_hold(True, 'pending activation job')
+    assert runtime._pending_pose is pose_before
+    assert runtime._pose_anchor is anchor_before
+    assert runtime._accepted_seed_stamp == 110
+    assert runtime._navigation_ready is True
 
-    assert runtime._pending_pose is None
-    assert runtime._accepted_seed_stamp is None
-    assert runtime._navigation_ready is False
 
-
-def test_clearing_hold_does_not_rearm_stale_seed_or_navigation():
+def test_release_preserves_localization_but_never_bypasses_normal_fresh_odometry_gate():
     _, runtime = ready_runtime()
     stale_pose = runtime._pending_pose
     assert stale_pose is not None
 
     runtime.set_tuning_hold(True, 'pending activation job')
-    runtime.set_tuning_hold(False, '')
-
-    # Dropping the flag is not enough to restore what the hold cleared; a fresh
-    # seed and lifecycle round-trip must be earned again.
+    runtime.node._pose_at = time.monotonic() - 1
+    assert runtime.set_tuning_hold(False, 'wrong-job') is False
+    assert runtime.tuning_hold
+    assert runtime.set_tuning_hold(False, 'pending activation job') is True
     assert runtime.tuning_hold is False
-    assert runtime._navigation_ready is False
-    assert runtime._pending_pose is None
-    assert runtime._accepted_seed_stamp is None
+    assert runtime._navigation_ready is True
+    assert runtime._pending_pose is stale_pose
+    assert runtime._accepted_seed_stamp == 110
     assert not runtime.commands_allowed
-    # The stale pose is gone, not merely hidden behind the flag.
-    assert runtime._pending_pose is not stale_pose
+    assert runtime.node.cmd_vel_callback.call_count == 0
+
+
+def test_job_hold_cannot_overwrite_another_owner_or_clear_policy_hold():
+    _, runtime = ready_runtime()
+    assert runtime.set_tuning_hold(True, 'job-1') is True
+    assert runtime.set_tuning_hold(True, 'job-2') is False
+    runtime.set_tuning_policy_hold(True, 'active policy unknown')
+    assert runtime.set_tuning_hold(False, 'job-1') is True
+    assert runtime.tuning_hold
+    runtime.set_tuning_policy_hold(False)
+    assert not runtime.tuning_hold
+
+
+def test_local_reservation_blocks_new_seed_and_hardware_mutation_without_invalidating_localization():
+    node, runtime = ready_runtime()
+    node._hardware_operation_lock = threading.Lock()
+    node._undock_active = node._undock_goal_reserved = False
+    runtime._map_future = runtime._map_goal = None
+    job = '11111111-1111-4111-8111-111111111111'
+    old_pose, old_seed = runtime._pending_pose, runtime._accepted_seed_stamp
+    assert runtime.reserve_tuning(job)
+    assert node._hardware_operation_lock.locked()
+    before = len(runtime._navigation.calls)
+    runtime.seed(pose(130))
+    runtime.seed_accepted(pose(130))
+    runtime.tick()
+    assert runtime._pending_pose is old_pose and runtime._accepted_seed_stamp == old_seed
+    assert len(runtime._navigation.calls) == before
+    assert not runtime.release_tuning_reservation('22222222-2222-4222-8222-222222222222')
+    assert node._hardware_operation_lock.locked()
+    assert runtime.release_tuning_reservation(job)
+    assert not node._hardware_operation_lock.locked()

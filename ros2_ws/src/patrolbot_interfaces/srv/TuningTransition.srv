@@ -1,0 +1,12 @@
+# Private manager-authority operation, never a browser-selected node/transition.
+# Only configure(1), cleanup(2), activate(3), deactivate(4); no shutdown/reset.
+string job_id
+string digest
+string plan_hash
+string node_name
+uint8 transition_id
+uint8 expected_state
+---
+bool accepted
+string detail
+string evidence_json

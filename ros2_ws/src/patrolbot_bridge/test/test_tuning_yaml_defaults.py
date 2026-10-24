@@ -64,6 +64,10 @@ class _StubCoordinator:
     """Offline stand-in; activation is never supported in these tests."""
 
     activation_supported = False
+    backend = None
+
+    def preview(self, **kwargs):
+        return None
 
     def safe_apply_state(self):
         return {'allowed': False, 'reason': 'not initialized'}

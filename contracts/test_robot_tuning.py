@@ -59,6 +59,18 @@ def _codes(payload, schema_ref=None, base_values=None, context=None):
 # Schema / file hygiene
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("operation", ["apply", "redeploy", "restore"])
+def test_exact_activation_review_shape(operation):
+    extra = {"restore_revision": 1, "target": "last_known_good"} if operation == "restore" else {}
+    request = _envelope(operation, expected_revision=2, **extra,
+                        review={"digest": "sha256:" + "a" * 64, "plan_hash": "sha256:" + "b" * 64})
+    assert _codes(request, "#/$defs/" + operation + "_request")[0] == []
+    for malformed in ({}, {"digest": "latest", "plan_hash": "sha256:" + "b" * 64},
+                      {"digest": "sha256:" + "a" * 64, "plan_hash": "sha256:" + "b" * 64, "node": "amcl"}):
+        request["review"] = malformed
+        assert _codes(request, "#/$defs/" + operation + "_request")[0]
+
+
 def test_schema_is_valid_draft_2020_12():
     import jsonschema
     jsonschema.Draft202012Validator.check_schema(SCHEMA)

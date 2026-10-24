@@ -76,6 +76,8 @@ services:
       - patrolbot-secrets:/run/patrolbot-secrets:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
+      # Fixed Apply helper only; no Docker socket/credentials in this container.
+      - /run/patrolbot-tuning/core:/run/patrolbot-tuning/core:ro
 
   # Read-only telemetry bridge for the web dashboard (patrolbot-dashboard
   # repo). Opt-in: it only starts when named explicitly —
@@ -187,6 +189,8 @@ services:
       - patrolbot-state:/var/lib/patrolbot:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/navigation:/root/.ros/log
+      # Boot-only socket cannot request restart, reset, motion or promotion.
+      - /run/patrolbot-tuning/boot:/run/patrolbot-tuning/boot:ro
       - /dev/input:/dev/input:rw
     device_cgroup_rules:
       - "c 13:* rw"

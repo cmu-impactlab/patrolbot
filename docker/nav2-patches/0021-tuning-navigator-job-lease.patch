@@ -1,0 +1,158 @@
+--- a/nav2_core/include/nav2_core/behavior_tree_navigator.hpp
++++ b/nav2_core/include/nav2_core/behavior_tree_navigator.hpp
+@@ -19,6 +19,10 @@
+ #include <string>
+ #include <vector>
+ #include <mutex>
++#include <algorithm>
++#include <sstream>
++#include <iomanip>
++#include <set>
+ 
+ #include "nav2_util/odometry_utils.hpp"
+ #include "tf2_ros/buffer.h"
+@@ -79,26 +83,75 @@
+   bool tryStartNavigating(const std::string & navigator_name)
+   {
+     std::scoped_lock l(mutex_);
+-    if (tuning_hold_ || !current_navigator_.empty()) {return false;}
++    if (tuning_hold_ || !tuning_job_.empty() || !current_navigator_.empty()) {return false;}
+     current_navigator_ = navigator_name;
+     return true;
+   }
+ 
++  // Separate from the legacy/seed Boolean hold. Cleanup/configure cannot destroy
++  // this token because the muxer belongs to BtNavigator, not its loaded plugins.
++  bool tuningMaintenance(
++    const std::string & operation, const std::string & job,
++    const std::string & digest, const std::string & plan, std::string & evidence)
++  {
++    std::scoped_lock l(mutex_);
++    const auto valid = [](const std::string & value, bool hash) {
++        if (value.empty() || value.size() > 128 || (hash && value.size() != 64)) {return false;}
++        return std::all_of(value.begin(), value.end(), [hash](unsigned char c) {
++          return hash ? ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) :
++                 ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
++                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.');
++        });
++      };
++    if (!valid(job, false) || !valid(digest, true) || !valid(plan, true)) {return false;}
++    const bool owner = job == tuning_job_ && digest == tuning_digest_ && plan == tuning_plan_;
++    bool accepted = false;
++    if (operation == "acquire") {
++      if (owner) {
++        accepted = true;
++      } else if (tuning_job_.empty() && current_navigator_.empty() &&
++        !retired_jobs_.count(job) && retired_jobs_.size() < 1024) {
++        tuning_job_ = job; tuning_digest_ = digest; tuning_plan_ = plan;
++        accepted = true;
++      }
++    } else if (operation == "inspect") {
++      accepted = owner;
++    } else if (operation == "release") {
++      if (owner) {
++        retired_jobs_.insert(tuning_job_);
++        released_job_ = tuning_job_; released_digest_ = tuning_digest_; released_plan_ = tuning_plan_;
++        tuning_job_.clear(); tuning_digest_.clear(); tuning_plan_.clear();
++        accepted = true;
++      } else {
++        accepted = tuning_job_.empty() && job == released_job_ &&
++          digest == released_digest_ && plan == released_plan_;
++      }
++    }
++    std::ostringstream out;
++    out << "{\"schema\":1,\"implementation\":\"nav2-1.3.12-navigator-lease-v1\","
++        << "\"all_action_paths_excluded\":false,\"held\":" << (tuning_job_.empty() ? "false" : "true")
++        << ",\"navigator_idle\":" << (current_navigator_.empty() ? "true" : "false")
++        << ",\"legacy_hold\":" << (tuning_hold_ ? "true" : "false")
++        << ",\"job_id\":" << std::quoted(tuning_job_)
++        << ",\"digest\":" << std::quoted(tuning_digest_)
++        << ",\"plan_hash\":" << std::quoted(tuning_plan_) << '}';
++    evidence = out.str();
++    return accepted;
++  }
++
+   /**
+    * @brief Start navigating with a given navigator
+    * @param string Name of the navigator to start
+    */
+   void startNavigating(const std::string & navigator_name)
+   {
+-    std::scoped_lock l(mutex_);
+-    if (!current_navigator_.empty()) {
++    if (!tryStartNavigating(navigator_name)) {
+       RCLCPP_ERROR(
+         rclcpp::get_logger("NavigatorMutex"),
+         "Major error! Navigation requested while another navigation"
+         " task is in progress! This likely occurred from an incorrect"
+         "implementation of a navigator plugin.");
+     }
+-    current_navigator_ = navigator_name;
+   }
+ 
+   /**
+@@ -123,6 +176,9 @@
+   std::string current_navigator_;
+   std::mutex mutex_;
+   bool tuning_hold_{false};
++  std::string tuning_job_, tuning_digest_, tuning_plan_;
++  std::string released_job_, released_digest_, released_plan_;
++  std::set<std::string> retired_jobs_;
+ };
+ 
+ /**
+--- a/nav2_bt_navigator/CMakeLists.txt
++++ b/nav2_bt_navigator/CMakeLists.txt
+@@ -4,6 +4,7 @@
+ find_package(ament_cmake REQUIRED)
+ find_package(nav2_common REQUIRED)
+ find_package(rclcpp REQUIRED)
++find_package(patrolbot_interfaces REQUIRED)
+ find_package(rclcpp_action REQUIRED)
+ find_package(rclcpp_lifecycle REQUIRED)
+ find_package(rclcpp_components REQUIRED)
+@@ -36,6 +37,7 @@
+ set(library_name ${executable_name}_core)
+ 
+ set(dependencies
++  patrolbot_interfaces
+   rclcpp
+   rclcpp_action
+   rclcpp_lifecycle
+--- a/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
++++ b/nav2_bt_navigator/include/nav2_bt_navigator/bt_navigator.hpp
+@@ -18,6 +18,7 @@
+ 
+ #include <memory>
+ #include "std_srvs/srv/set_bool.hpp"
++#include "patrolbot_interfaces/srv/tuning_maintenance.hpp"
+ #include "std_srvs/srv/trigger.hpp"
+ #include <string>
+ #include <vector>
+@@ -92,6 +93,7 @@
+   std::vector<pluginlib::UniquePtr<nav2_core::NavigatorBase>> navigators_;
+   nav2_core::NavigatorMuxer plugin_muxer_;
+   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr tuning_hold_srv_;
++  rclcpp::Service<patrolbot_interfaces::srv::TuningMaintenance>::SharedPtr maintenance_srv_;
+   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr navigation_idle_srv_;
+ 
+   // Odometry smoother object
+--- a/nav2_bt_navigator/src/bt_navigator.cpp
++++ b/nav2_bt_navigator/src/bt_navigator.cpp
+@@ -38,6 +38,16 @@
+   class_loader_("nav2_core", "nav2_core::NavigatorBase")
+ {
+   RCLCPP_INFO(get_logger(), "Creating");
++  // Available while unconfigured and retained across plugin cleanup/configure.
++  maintenance_srv_ = create_service<patrolbot_interfaces::srv::TuningMaintenance>(
++    "~/tuning_maintenance", [this](
++      const std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Request> request,
++      std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Response> response) {
++      response->accepted = plugin_muxer_.tuningMaintenance(
++        request->operation, request->job_id, request->digest, request->plan_hash,
++        response->evidence_json);
++      response->detail = response->accepted ? "navigator_lease_acknowledged" : "navigator_lease_refused";
++    });
+ 
+   declare_parameter_if_not_declared(
+     this, "plugin_lib_names", rclcpp::ParameterValue(std::vector<std::string>{}));

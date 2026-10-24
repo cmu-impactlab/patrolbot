@@ -1,16 +1,15 @@
 """
-Offline activation / redeploy / restore state machine.
+Guarded activation / redeploy / restore state machine.
 
-This is the *safe* path by which a saved desired revision could one day become
-the running configuration. It is deliberately inert on a real robot: the only
-shipped backend is :class:`UnavailableBackend`, whose ``approved`` is ``False``,
-so every activation request is refused with ``activation_unavailable`` until a
-reviewed, evidence-backed fixed-operation backend is wired in and verified.
+Native execution requires an exact reviewed plan with proven scoped operation
+support. The shipped legacy lifecycle backend does not provide that proof, so
+its all-node reload is not an executor for reviewed activation. Offline fakes
+exercise the coordinator without contacting ROS or hardware.
 
 The logic itself is real and unit-tested with an offline fake backend. It
 proves the properties the plan requires, without touching ROS:
 
-* admission is gated on fresh stationary raw odometry, hardware/dock/fault
+* tuning admission uses command idle and fresh hardware/dock/fault
   state, zero command buffers, both physical *and* web deadman channels fresh
   and not held, authoritative idle autonomy, and clear map/undock/lifecycle
   state. Missing evidence is *busy*, never permission.
@@ -57,8 +56,6 @@ HOST_SERVICES = {
 # Evidence fields required before any activation. All are tri-state: ``True``
 # passes, ``False`` is busy, ``None`` is unknown (also busy).
 REQUIRED_FRESH = (
-    'raw_odom_fresh',
-    'stationary',
     'hardware_ok',
     'dock_ok',
     'faults_clear',
@@ -215,6 +212,7 @@ class ActivationCoordinator:
         self.id_factory = id_factory or _job_id
         self.plan = plan or FixedOperationPlan()
         self._held_job = None
+        self.session_id = None
         # Real integrations share EpochRuntime.lock; there is no second ROS
         # lifecycle coordinator. The local lock is for ROS-free test owners.
         self._owner_lock = getattr(owner, 'lock', threading.RLock())
@@ -223,10 +221,13 @@ class ActivationCoordinator:
     # Hold integration with the existing EpochRuntime owner
     # ------------------------------------------------------------------
     def _set_hold(self, held, job_id):
-        self._held_job = job_id if held else None
+        if not held and self._held_job != job_id:
+            return
         setter = getattr(self.owner, 'set_tuning_hold', None)
         if callable(setter):
-            setter(bool(held), job_id or '')
+            if setter(bool(held), job_id or '') is False:
+                raise RuntimeError('existing motion owner refused exact job hold change')
+        self._held_job = job_id if held else None
 
     @property
     def hold(self) -> bool:
@@ -251,16 +252,61 @@ class ActivationCoordinator:
         if job and job.get('state') in UNSETTLED_STATES:
             return {'allowed': False, 'reason': f'busy: {job["state"]} job {job["job_id"]}'}
         evidence = self.backend.probe()
-        allowed, reason = evaluate_evidence(evidence)
+        allowed, reason = self._evaluate(evidence)
         if not allowed:
             return {'allowed': False, 'reason': reason}
-        return {'allowed': True, 'reason': 'stationary and idle'}
+        return {'allowed': True, 'reason': 'command idle; physical standstill is not measured'}
+
+    def _evaluate(self, evidence):
+        predicate = getattr(self.backend, 'evaluate_admission', None)
+        return predicate(evidence) if callable(predicate) else evaluate_evidence(evidence)
+
+    def preview(self, *, candidate=None, active=None, desired_revision=None, operation='apply'):
+        """Read-only exact plan; absence of native proof never becomes support."""
+        from .tuning_plan import build_plan, canonical_digest
+        if candidate is None or active is None:
+            state = self.store.snapshot_state()
+            if state.get('active_revision') is None:
+                return None
+            desired_revision = state['desired_revision']
+            target = (self.store.require_ready()['last_known_good']
+                      if operation == 'restore' else desired_revision)
+            candidate = self.store.load_revision(target)
+            active = self.store.load_revision(state['active_revision'])
+        generation = getattr(self.backend, 'generation', lambda: None)()
+        if getattr(self.backend, 'plan_strategy', None) == 'hot_or_nav2_redeploy':
+            from .tuning_simple_plan import build_plan as build_simple_plan
+            capability = self.backend.preview_capabilities()
+            return build_simple_plan(candidate=candidate, active=active, index=self.store.index,
+                registry_digest=self.store.registry_digest, session_id=self.session_id, generation=generation,
+                desired_revision=desired_revision, operation=operation, states=capability.get('states', {}),
+                hot_support=capability.get('hot_support', ()),
+                nav2_redeploy_supported=capability.get('nav2_redeploy_supported', False),
+                policy_support=capability.get('policy_support', False),
+                implementation=(capability.get('implementation', 'unverified')
+                                if capability.get('ready') is True else 'unverified'))
+        plan = build_plan(candidate=candidate, active=active, index=self.store.index,
+                          registry_digest=self.store.registry_digest,
+                          session_id=self.session_id, generation=generation,
+                          desired_revision=desired_revision, operation=operation,
+                          support=getattr(self.backend, 'plan_support', None),
+                          implementation=getattr(self.backend, 'plan_implementation', 'unverified'),
+                          policy_support=getattr(self.backend, 'plan_policy_support', False))
+        if getattr(self.backend, 'requires_review', False) and not all(
+                callable(getattr(self.backend, name, None))
+                for name in ('reload_plan', 'verify_plan', 'committed_plan')):
+            plan['executable'] = False
+            plan['reasons'].append({'code': 'reviewed_executor_unavailable',
+                                    'detail': 'Exact-job scoped execution and full-revision/cache verification are not implemented.'})
+            plan['plan_hash'] = canonical_digest({key: value for key, value in plan.items()
+                                                  if key != 'plan_hash'})
+        return plan
 
     # ------------------------------------------------------------------
     # Requests
     # ------------------------------------------------------------------
     def request(self, *, operation, request_id, expected_revision, actor,
-                target_revision=None):
+                target_revision=None, review=None):
         if operation not in MUTATING_OPERATIONS:
             return self._finish(request_id, 'refused', f'unsupported_operation: {operation}',
                                 None, None)
@@ -269,6 +315,7 @@ class ActivationCoordinator:
             fingerprint = hashlib.sha256(json.dumps({
                 'operation': operation, 'expected_revision': expected_revision,
                 'target_revision': target_revision, 'actor': actor,
+                'review': review,
             }, sort_keys=True, allow_nan=False).encode()).hexdigest()
             existing = self.store.get_request(request_id)
             if existing is not None:
@@ -287,6 +334,12 @@ class ActivationCoordinator:
             })
 
             manifest = self.store.require_ready()
+            unsettled = self.store.latest_job()
+            if unsettled and unsettled.get('state') in UNSETTLED_STATES:
+                self._set_hold(True, unsettled['job_id'])
+                return self._finish(request_id, 'refused',
+                                    'recovery_required: an unsettled job still owns maintenance',
+                                    unsettled['job_id'], unsettled.get('revision'))
             if not self.activation_supported:
                 return self._finish(
                     request_id, 'refused',
@@ -307,6 +360,21 @@ class ActivationCoordinator:
                 revision = target_revision
             revision_state = self.store.load_revision(revision)
             digest = revision_state['meta']['generated_digest']
+            reviewed_plan = None
+            if getattr(self.backend, 'requires_review', False):
+                if operation == 'redeploy':
+                    return self._finish(request_id, 'refused',
+                                        'review_required: use Apply with a reviewed fixed execution plan', None, revision)
+                reviewed_plan = self.preview(operation=operation)
+                if (not isinstance(review, dict) or set(review) != {'digest', 'plan_hash'}):
+                    return self._finish(request_id, 'refused', 'review_required', None, revision)
+                if (reviewed_plan is None or review['digest'] != digest
+                        or review['plan_hash'] != reviewed_plan['plan_hash']
+                        or reviewed_plan['revision'] != revision):
+                    return self._finish(request_id, 'conflict', 'plan_changed: review again', None, revision)
+                if not reviewed_plan['executable']:
+                    return self._finish(request_id, 'refused',
+                                        'implementation_unverified: reviewed activation is unavailable', None, revision)
             preflight = getattr(self.backend, 'preflight', None)
             if preflight is not None:
                 try:
@@ -323,7 +391,7 @@ class ActivationCoordinator:
                     allowed, reason = False, 'busy: tuning owner held'
                 else:
                     evidence = self.backend.probe()
-                    allowed, reason = evaluate_evidence(evidence)
+                    allowed, reason = self._evaluate(evidence)
                     if allowed:
                         reserve = getattr(self.backend, 'reserve_navigation', None)
                         if reserve is not None:
@@ -331,8 +399,8 @@ class ActivationCoordinator:
                             # mutex. A crash/timeout cannot orphan an invisible
                             # navigator reservation.
                             self._journal_job(
-                                job_id, operation, expected_revision, revision, actor, digest,
-                                JOB_PENDING, 'reserving navigation admission')
+                                 job_id, operation, expected_revision, revision, actor, digest,
+                                 JOB_PENDING, 'reserving navigation admission', execution_plan=reviewed_plan)
                             journalled = True
                             try:
                                 reserve()
@@ -347,7 +415,7 @@ class ActivationCoordinator:
                                 return self._finish(
                                     request_id, 'unknown',
                                     'navigation reservation outcome unknown', job_id, revision)
-                            allowed, reason = evaluate_evidence(self.backend.probe())
+                            allowed, reason = self._evaluate(self.backend.probe())
                             if not allowed:
                                 try:
                                     self.backend.release_navigation_reservation()
@@ -366,10 +434,10 @@ class ActivationCoordinator:
                 return self._finish(request_id, 'refused', reason, None, revision)
             if not journalled:
                 self._journal_job(job_id, operation, expected_revision, revision, actor, digest,
-                                  JOB_PENDING, 'queued')
+                                  JOB_PENDING, 'queued', execution_plan=reviewed_plan)
 
             evidence = self.backend.probe()
-            allowed, reason = evaluate_evidence(evidence)
+            allowed, reason = self._evaluate(evidence)
             if not allowed:
                 release = getattr(self.backend, 'release_navigation_reservation', None)
                 if journalled and release is not None:
@@ -389,12 +457,28 @@ class ActivationCoordinator:
             self._update_job(job_id, JOB_RUNNING, 'reloading')
             try:
                 # Recheck immediately before invoking the fixed operation.
-                allowed, reason = evaluate_evidence(self.backend.probe())
+                allowed, reason = self._evaluate(self.backend.probe())
                 if not allowed:
-                    self._update_job(job_id, JOB_UNKNOWN, reason)
-                    return self._finish(
-                        request_id, 'unknown', reason + '; hold retained', job_id, revision)
-                result = self.backend.reload(sorted(SCOPES), revision, digest)
+                    # No reload has been invoked. A definitive refusal must
+                    # release this job's acknowledged reservation, not orphan it.
+                    release = getattr(self.backend, 'release_navigation_reservation', None)
+                    if journalled and release is not None:
+                        try:
+                            release()
+                        except Exception:
+                            self._update_job(job_id, JOB_UNKNOWN, 'reservation release outcome unknown')
+                            return self._finish(request_id, 'unknown',
+                                                'reservation release outcome unknown', job_id, revision)
+                    self._update_job(job_id, JOB_FAILED, reason)
+                    self._set_hold(False, job_id)
+                    return self._finish(request_id, 'refused', reason, job_id, revision)
+                self._update_job(job_id, JOB_RUNNING, 'mutating reviewed runtime', mutation_started=True)
+                if reviewed_plan is not None:
+                    # Never dispatch a reviewed subset through the old all-node
+                    # reload method. A backend must implement the reviewed path.
+                    result = self.backend.reload_plan(reviewed_plan, revision, digest, job_id=job_id)
+                else:
+                    result = self.backend.reload(sorted(SCOPES), revision, digest)
             except Exception as exc:  # an exception is ambiguous, never success
                 self._update_job(job_id, JOB_UNKNOWN,
                                  'reload raised: ' + exc.__class__.__name__)
@@ -402,24 +486,39 @@ class ActivationCoordinator:
                                     'reload outcome ambiguous; hold retained', job_id, revision)
 
             if result.status == 'ok':
+                commit_started = False
                 try:
+                    if reviewed_plan is not None:
+                        proof = self.backend.verify_plan(reviewed_plan, revision, digest, job_id=job_id)
+                        self._validate_reviewed_proof(proof, reviewed_plan, job_id)
+                        allowed, reason = self._evaluate(self.backend.probe())
+                        if not allowed:
+                            raise ValueError(reason)
+                        self._update_job(job_id, JOB_RUNNING, 'full revision verified', verification=proof)
+                    commit_started = True
                     self.store.promote(revision=revision, scopes=SCOPES, actor=actor,
                                        detail=f'job {job_id}')
                     if operation == 'restore':
                         self.store._write_manifest(dict(
                             self.store.require_ready(), last_known_good=revision))
-                    committed = getattr(self.backend, 'committed', None)
-                    if committed is not None:
-                        committed(revision, digest)
+                    if reviewed_plan is not None:
+                        if self.backend.committed_plan(reviewed_plan, job_id=job_id) is not True:
+                            raise ValueError('committed policy binding was not acknowledged')
+                    else:
+                        committed = getattr(self.backend, 'committed', None)
+                        if committed is not None:
+                            committed(revision, digest)
                     self._update_job(job_id, JOB_SUCCEEDED, result.detail or 'activated')
                 except Exception:
+                    detail = ('commit_outcome_unknown: hold retained' if commit_started
+                              else 'verification_mismatch: full revision unverified; hold retained')
                     try:
                         self._update_job(
-                            job_id, JOB_UNKNOWN, 'commit outcome unknown; hold retained')
+                            job_id, JOB_UNKNOWN, detail)
                     except Exception:
                         pass
                     return self._finish(
-                        request_id, 'unknown', 'commit outcome unknown; hold retained',
+                        request_id, 'unknown', detail,
                         job_id, revision)
                 self._set_hold(False, job_id)
                 return self._finish(request_id, 'ok', result.detail or 'activated',
@@ -455,7 +554,7 @@ class ActivationCoordinator:
     # Jobs
     # ------------------------------------------------------------------
     def _journal_job(self, job_id, operation, expected_revision, revision, actor, digest,
-                     state, detail):
+                     state, detail, execution_plan=None):
         job = {
             'job_id': job_id,
             'operation': operation,
@@ -467,6 +566,9 @@ class ActivationCoordinator:
             'detail': detail,
             'created_at': self.clock(),
             'updated_at': self.clock(),
+            'mutation_started': False,
+            'plan_hash': execution_plan['plan_hash'] if execution_plan is not None else None,
+            'execution_plan': execution_plan,
         }
         self.store.record_job(job)
         with self.store.writer():
@@ -477,15 +579,51 @@ class ActivationCoordinator:
                            'at': self.clock()})
         return job
 
-    def _update_job(self, job_id, state, detail):
+    def _update_job(self, job_id, state, detail, *, mutation_started=None, verification=None):
         job = self.store.get_job(job_id)
         if job is None:
             raise StoreError('unknown_job', job_id)
         job = dict(job, state=state, detail=detail, updated_at=self.clock())
+        if mutation_started is not None:
+            job['mutation_started'] = mutation_started
+        if verification is not None:
+            job['verification'] = verification
         self.store.record_job(job)
         self.store._audit({'event': 'job', 'job_id': job_id, 'state': state,
                            'revision': job.get('revision'), 'at': self.clock()})
         return job
+
+    def _validate_reviewed_proof(self, proof, plan, job_id):
+        """A changed node list is never sufficient proof for whole-revision commit.
+
+        The trusted backend must actually collect these observations under its
+        exact-job hold; this boundary checks completeness and immutable binding.
+        Native evidence collection is deliberately not implemented by the legacy
+        backend, so enabling a runtime flag cannot fabricate such a certificate.
+        """
+        from .tuning_backend import NODES, matching, parameter_plan
+        from .tuning_plan import canonical_digest
+        if (not isinstance(proof, dict) or proof.get('complete') is not True
+                or type(proof.get('revision')) is not int
+                or proof.get('job_id') != job_id or proof.get('revision') != plan['revision']
+                or proof.get('digest') != plan['digest'] or proof.get('plan_hash') != plan['plan_hash']
+                or proof.get('hardware_generation') != plan['hardware_generation']
+                or proof.get('scopes') != sorted(SCOPES)
+                or proof.get('verified_nodes') != sorted(NODES)
+                or proof.get('verified_policies') != ['core_clamp', 'f710_cache', 'web_sessions']
+                or proof.get('motion_paths_held') is not True
+                or proof.get('protected_invariants_verified') is not True
+                or proof.get('publisher_graph') != {
+                    '/cmd_vel_out': ['cmd_vel_mux'], '/cmd_vel': ['teleop_velocity_smoother']}
+                or canonical_digest(self.backend.generation()) != plan['hardware_generation']):
+            raise ValueError('incomplete or unbound full-revision verification')
+        expected = parameter_plan(self.store.load_revision(plan['revision']), self.store.index)
+        actual = proof.get('parameters')
+        if (not isinstance(actual, dict) or set(actual) != set(expected)
+                or any(not isinstance(actual[node], dict) or set(actual[node]) != set(values)
+                       or any(not matching(value, actual[node][key]) for key, value in values.items())
+                       for node, values in expected.items())):
+            raise ValueError('full-revision parameter readback mismatch')
 
     def status(self, job_id=None):
         if job_id is None:

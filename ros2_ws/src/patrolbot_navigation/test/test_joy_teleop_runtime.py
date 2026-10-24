@@ -1,6 +1,7 @@
 """Exercise the real teleop callbacks without ROS or a robot connection."""
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -11,6 +12,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(SCRIPTS.parents[1] / 'patrolbot_bridge'))
 
 
 def stamp(seconds):
@@ -134,7 +136,8 @@ def teleop(monkeypatch):
         'std_srvs': {}, 'std_srvs.srv': {'Trigger': SimpleNamespace(Request=SimpleNamespace)},
         'rcl_interfaces': {}, 'rcl_interfaces.msg': {'SetParametersResult': SimpleNamespace},
         'patrolbot_interfaces': {}, 'patrolbot_interfaces.msg': {'BaseState': object},
-        'patrolbot_interfaces.srv': {'SetLidarPower': SimpleNamespace(Request=SimpleNamespace)},
+        'patrolbot_interfaces.srv': {'SetLidarPower': SimpleNamespace(Request=SimpleNamespace),
+                                    'TuningMaintenance': SimpleNamespace(Request=SimpleNamespace)},
     }
     for name, attributes in modules.items():
         module = ModuleType(name)
@@ -159,6 +162,180 @@ def power_client(teleop):
     return teleop.clients['/patrolbot/set_lidar_power']
 
 
+def maintenance(teleop, operation='acquire', **changes):
+    values = dict(operation=operation, job_id='11111111-1111-4111-8111-111111111111',
+                  digest='sha256:' + 'a' * 64, plan_hash='sha256:' + 'b' * 64)
+    values.update(changes)
+    return teleop._tuning_maintenance(SimpleNamespace(**values), SimpleNamespace())
+
+
+def test_replacement_can_restore_only_lower_trims_under_the_exact_held_job(teleop):
+    payload = json.dumps({'max_linear': .1, 'max_angular': .2})
+    assert not maintenance(teleop, 'restore_trims', payload_json=payload).accepted
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    assert maintenance(teleop, 'block').accepted
+    assert not maintenance(teleop, 'restore_trims', payload_json=payload,
+                           digest='sha256:' + 'c' * 64).accepted
+    assert maintenance(teleop, 'restore_trims', payload_json=payload).accepted
+    assert (teleop.max_lin, teleop.max_ang) == (.1, .2)
+    assert teleop._operator_linear_trim and teleop._operator_angular_trim
+    assert maintenance(teleop, 'restore_trims', payload_json=json.dumps({'max_linear': .3})).accepted
+    assert teleop.max_lin == .1
+    assert teleop.get_parameter('max_linear').value == .3
+    assert not teleop.active and teleop._tuning_require_release
+
+
+@pytest.mark.parametrize('payload', ['{}', '{"path":"arbitrary"}', '{"max_linear":true}',
+                                    '{"max_angular":-1}', '{"max_linear":NaN}'])
+def test_trim_restoration_rejects_non_policy_payloads_without_mutating_a_cache(teleop, payload):
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    assert maintenance(teleop, 'block').accepted
+    assert not maintenance(teleop, 'restore_trims', payload_json=payload).accepted
+    assert (teleop.max_lin, teleop.max_ang) == (.3, .7)
+
+
+def test_maintenance_requires_an_explicit_fresh_complete_released_controller(teleop):
+    assert not maintenance(teleop).accepted  # Never received is not released.
+    teleop.joy_cb(joy(teleop.now))
+    teleop.now += .401
+    assert not maintenance(teleop).accepted
+    teleop.joy_cb(joy(teleop.now))
+    assert maintenance(teleop).accepted
+    assert teleop._tuning_hold
+    teleop.joy_cb(SimpleNamespace(header=SimpleNamespace(stamp=stamp(teleop.now)), buttons=[], axes=[]))
+    inspected = maintenance(teleop, 'inspect')
+    assert inspected.accepted
+    assert json.loads(inspected.evidence_json)['idle'] is False
+    assert teleop._tuning_hold  # Unknown input never expires ownership.
+
+
+@pytest.mark.parametrize('kind', ['stale', 'future', 'malformed', 'held', 'partial_chord', 'trim'])
+def test_maintenance_never_treats_invalid_or_held_input_as_release(teleop, kind):
+    message = joy(teleop.now)
+    if kind == 'stale':
+        message.header.stamp = stamp(teleop.now - .401)
+    elif kind == 'future':
+        message.header.stamp = stamp(teleop.now + .01)
+    elif kind == 'malformed':
+        message.axes[0] = float('nan')
+    elif kind == 'held':
+        message.buttons[5] = 1
+    elif kind == 'partial_chord':
+        message.buttons[4] = 1
+    else:
+        message.buttons[0] = 1
+    teleop.joy_cb(message)
+    assert not maintenance(teleop).accepted
+    assert not teleop._tuning_hold
+
+
+def test_maintenance_is_exact_job_digest_plan_and_release_requires_new_deadman(teleop):
+    teleop.joy_cb(joy(teleop.now))
+    assert maintenance(teleop).accepted
+    assert maintenance(teleop).accepted  # Idempotent exact acquisition.
+    for operation in ('acquire', 'inspect', 'release'):
+        for field in ('job_id', 'digest', 'plan_hash'):
+            foreign = ('22222222-2222-4222-8222-222222222222' if field == 'job_id'
+                       else 'sha256:' + 'c' * 64)
+            assert not maintenance(teleop, operation, **{field: foreign}).accepted
+            assert teleop._tuning_hold
+    teleop._tuning_hold_cb(SimpleNamespace(data=False))
+    assert teleop._tuning_hold  # Legacy false cannot drop a job's owner.
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    assert maintenance(teleop, 'release').accepted
+    assert maintenance(teleop, 'release').accepted
+    assert not maintenance(teleop).accepted  # Released job cannot reacquire.
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    teleop.tick()
+    assert not teleop.active and teleop.lin_cmd == 0.
+    teleop.now += .001
+    teleop.joy_cb(joy(teleop.now))
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    teleop.tick()
+    assert teleop.active and teleop.lin_cmd > 0.
+
+
+def test_inspect_reports_actual_consumed_caps_minima_trims_and_zero_buffers(teleop):
+    message = joy(teleop.now)
+    message.buttons[0] = 1
+    teleop.joy_cb(message)
+    teleop.joy_cb(joy(teleop.now))
+    assert maintenance(teleop).accepted
+    inspected = json.loads(maintenance(teleop, 'inspect').evidence_json)
+    assert inspected['policy']['max_linear'] == .25
+    assert teleop.get_parameter('max_linear').value == .30  # Parameter-only proof is insufficient.
+    assert inspected['policy']['max_linear_cap'] == .30
+    assert inspected['policy']['min_linear'] == .05
+    assert inspected['operator_linear_trim'] is True
+    assert inspected['release_required'] is True
+    assert set(inspected['buffers'].values()) == {0.0}
+    assert inspected['policy_version'] == 1
+    assert not power_client(teleop).calls  # Maintenance is not a hardware command.
+
+
+def test_unknown_corrupt_cache_evidence_retains_maintenance_hold(teleop):
+    teleop.joy_cb(joy(teleop.now))
+    assert maintenance(teleop).accepted
+    teleop.lin_cap = float('nan')
+    assert not maintenance(teleop, 'release').accepted
+    assert teleop._tuning_hold and teleop._tuning_lease.held
+
+
+def test_blocked_input_is_not_falsely_called_released_and_does_not_abort_policy_install(teleop):
+    assert maintenance(teleop, 'observe').accepted
+    assert not maintenance(teleop, 'block').accepted  # core closure not observed
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    assert maintenance(teleop, 'block').accepted
+    inspected = json.loads(maintenance(teleop, 'inspect').evidence_json)
+    assert inspected['input_blocked'] and not inspected['input_released']
+    result = teleop._validate_tuning_parameters([SimpleNamespace(name='max_linear', value=.2)])
+    assert result.successful
+    assert not teleop.active and teleop.lin_tgt == 0. and teleop.lin_cmd == 0.
+
+
+def test_queued_release_press_and_trim_cannot_replay_after_the_last_hold_ends(teleop):
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    assert maintenance(teleop, 'block').accepted
+    old_release = joy(teleop.now)
+    old_press = joy(teleop.now, rb=True, linear=1.)
+    old_trim = joy(teleop.now)
+    old_trim.buttons[0] = 1
+    assert maintenance(teleop, 'release').accepted
+    assert teleop._tuning_hold  # core hold still blocks; no premature release barrier
+    teleop.now += .001
+    teleop._tuning_hold_cb(SimpleNamespace(data=False))
+    for sample in (old_release, old_press, old_trim):
+        teleop.joy_cb(sample)
+    teleop.tick()
+    assert not teleop.active and teleop.lin_cmd == 0.
+    assert teleop.max_lin == .30 and teleop._tuning_require_release
+    assert not teleop._tuning_input_released
+    assert teleop.nav_cancel.calls == []
+    teleop.now += .001
+    teleop.joy_cb(joy(teleop.now))
+    teleop.now += .001
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
+    assert teleop.active and teleop.lin_tgt > 0.
+
+
+@pytest.mark.parametrize('field', ['active', '_takeover_pending', '_cancel_in_flight',
+                                 '_lidar_toggle_pending', '_lidar_in_flight', 'lin_tgt', 'ang_cmd'])
+def test_job_hold_never_excuses_a_live_buffer_or_pending_producer_operation(teleop, field):
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    assert maintenance(teleop, 'block').accepted
+    setattr(teleop, field, True if field not in ('lin_tgt', 'ang_cmd') else .1)
+    assert not teleop._validate_tuning_parameters([SimpleNamespace(name='max_linear', value=.2)]).successful
+
+
+def test_release_does_not_clear_unrelated_legacy_hold(teleop):
+    teleop.joy_cb(joy(teleop.now))
+    assert maintenance(teleop).accepted
+    teleop._tuning_hold_cb(SimpleNamespace(data=True))
+    assert maintenance(teleop, 'release').accepted
+    assert teleop._tuning_hold
+
+
 def test_tuning_hold_requires_release_then_a_new_deadman_press(teleop):
     teleop._tuning_hold_cb(SimpleNamespace(data=True))
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
@@ -171,6 +348,7 @@ def test_tuning_hold_requires_release_then_a_new_deadman_press(teleop):
     teleop.tick()
     assert not teleop.active
     assert teleop.lin_cmd == 0
+    teleop.now += .001
     teleop.joy_cb(joy(teleop.now, rb=False))
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))
     teleop.tick()
@@ -184,6 +362,9 @@ def test_tuning_enabled_restart_does_not_replay_an_already_held_controller(teleo
     restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
     restarted.tick()
     assert not restarted.active and restarted.lin_cmd == 0
+    # A replacement remains closed until the core publishes its current hold.
+    restarted._tuning_hold_cb(SimpleNamespace(data=False))
+    restarted.now += .001
     restarted.joy_cb(joy(restarted.now, rb=False))
     restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
     restarted.tick()
@@ -196,6 +377,7 @@ def test_tuning_policy_updates_cached_caps_only_under_acknowledged_idle_hold(tel
         'max_angular': .35, 'max_angular_cap': .35, 'min_angular': .1,
     }.items()]
     assert not teleop.validate_parameters(updates).successful
+    teleop.joy_cb(joy(teleop.now))
     teleop._tuning_hold_cb(SimpleNamespace(data=True))
     assert teleop._tuning_idle(None, SimpleNamespace()).success
     assert teleop.validate_parameters(updates).successful
@@ -210,6 +392,7 @@ def test_tuning_policy_updates_cached_caps_only_under_acknowledged_idle_hold(tel
 
 
 def test_lower_then_raise_updates_real_cached_targets_but_never_rearms(teleop):
+    teleop.joy_cb(joy(teleop.now))
     teleop._tuning_hold_cb(SimpleNamespace(data=True))
     for linear, angular in ((.15, .35), (.30, .70)):
         updates = [SimpleNamespace(name=name, value=value) for name, value in {
@@ -230,6 +413,7 @@ def test_administrator_cap_raise_preserves_explicit_lower_operator_trim(teleop):
     message.buttons[0] = 1  # A: lower the temporary linear trim.
     teleop.joy_cb(message)
     assert teleop.max_lin == .25 and teleop._operator_linear_trim
+    teleop.joy_cb(joy(teleop.now))
     teleop._tuning_hold_cb(SimpleNamespace(data=True))
     for linear in (.20, .30):
         updates = [SimpleNamespace(name=name, value=value) for name, value in {

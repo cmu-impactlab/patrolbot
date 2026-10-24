@@ -21,6 +21,7 @@ Properties this module guarantees (unit-tested without ROS):
 from __future__ import annotations
 
 import math
+import threading
 
 # Fixed, source-backed commissioned envelope. These are ceilings, never
 # commanded speeds, and are the fallback when no tuning policy is active.
@@ -43,36 +44,97 @@ class PolicyCache:
         self._generation = None
         self._limits = None
         self.required = required
+        self._lock = threading.RLock()
+        self._staged = None
+        self._refresh_epoch = 0
 
     @property
     def generation(self):
         return self._generation
 
     def refresh(self):
+        with self._lock:
+            # A retained candidate is never replaced by an ordinary background
+            # ACTIVE read while an exact-job commit is in progress. Commands
+            # remain zero-clamped until explicit committed binding below.
+            if self._staged is not None:
+                return False
+            epoch = self._refresh_epoch
         if self.probe is None:
             return False
         try:
+            # The probe takes the revision writer. Never hold the cache mutex
+            # across it: reviewed commit holds writer -> cache, and the worker
+            # must not establish the inverse cache -> writer ordering.
             generation, limits = self.probe()
         except Exception:
-            self._limits = None
-            self._generation = None
+            with self._lock:
+                if self._staged is None and self._refresh_epoch == epoch:
+                    self._limits = None
+                    self._generation = None
             return False
-        new_limits = self._sanitize(limits)
-        if new_limits is None or not isinstance(generation, str) or not generation:
-            self._limits = None
-            self._generation = None
-            return False
-        changed = generation != self._generation or new_limits != self._limits
-        self._generation = generation
-        self._limits = new_limits
-        return changed
+        with self._lock:
+            if self._staged is not None or self._refresh_epoch != epoch:
+                return False
+            new_limits = self._sanitize(limits)
+            if new_limits is None or not isinstance(generation, str) or not generation:
+                self._limits = None
+                self._generation = None
+                return False
+            changed = generation != self._generation or new_limits != self._limits
+            self._generation = generation
+            self._limits = new_limits
+            return changed
 
     def limits(self) -> dict:
-        if self._limits is not None:
-            return dict(self._limits)
-        if self.required:
-            return dict.fromkeys(POLICY_KEYS, 0.0)
-        return dict(self.hard)
+        with self._lock:
+            if self._staged is not None:
+                return dict.fromkeys(POLICY_KEYS, 0.0)
+            if self._limits is not None:
+                return dict(self._limits)
+            if self.required:
+                return dict.fromkeys(POLICY_KEYS, 0.0)
+            return dict(self.hard)
+
+    def stage(self, context, limits, *, maintenance_owned):
+        """Stage only under exact acknowledged ownership; it grants no DRIVE."""
+        from .tuning_lease import context as validate_context
+        context = validate_context(context)
+        value = self._sanitize(limits)
+        if maintenance_owned is not True or value is None or value != limits:
+            raise ValueError('candidate policy requires owned maintenance and exact safe limits')
+        with self._lock:
+            candidate = {'context': context, 'limits': value}
+            if self._staged is not None and self._staged != candidate:
+                raise ValueError('another staged policy owns maintenance')
+            self._staged = candidate
+            self._refresh_epoch += 1
+            return self.staged_evidence(context)
+
+    def staged_evidence(self, context):
+        from .tuning_lease import context as validate_context
+        context = validate_context(context)
+        with self._lock:
+            if self._staged is None or self._staged['context'] != context:
+                raise ValueError('exact candidate policy is not staged')
+            return {'context': dict(context), 'limits': dict(self._staged['limits']), 'drive_blocked': True}
+
+    def commit_staged(self, context, *, generation, committed_limits, maintenance_owned):
+        """Bind to already-committed ACTIVE, never DESIRED or a staged file."""
+        # Same writer/cache order as refresh: no store probe under cache mutex.
+        actual_generation, actual_limits = self.probe()
+        with self._lock:
+            evidence = self.staged_evidence(context)
+            if (maintenance_owned is not True or not isinstance(generation, str) or not generation
+                    or committed_limits != evidence['limits']):
+                raise ValueError('committed candidate policy binding differs')
+            # Probe reads committed ACTIVE through the existing store/lock path.
+            if actual_generation != generation or actual_limits != committed_limits:
+                raise ValueError('ACTIVE policy readback did not confirm candidate')
+            self._generation, self._limits = generation, dict(committed_limits)
+            self._staged = None
+            self._refresh_epoch += 1
+            return {'generation': self._generation, 'limits': dict(self._limits)}
 
     def _sanitize(self, limits):
         if not isinstance(limits, dict):

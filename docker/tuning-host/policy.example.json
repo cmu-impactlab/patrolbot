@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "candidate_runtime_integrated": false,
+  "services": ["bringup", "bridge", "navigation"],
+  "compose": "/etc/patrolbot/tuning-host/compose.yaml",
+  "environment": "/etc/patrolbot/tuning-host/compose.env",
+  "control": "/var/lib/patrolbot-tuning-host",
+  "state_volume": "patrolbot_patrolbot-state",
+  "operation": "recreate-existing-local-image-no-build-no-pull"
+}

@@ -212,6 +212,28 @@ class RevisionStore:
             current = current.parent
 
     @contextmanager
+    def reader(self):
+        """Shared snapshot lock usable by consumers with a read-only state mount.
+
+        Never creates a missing lock/store. Immutable candidate contents and
+        their mutable job/manifest binding must be read in one writer-free span.
+        """
+        with self._thread_lock:
+            if getattr(self._local, 'depth', 0):
+                yield
+                return
+            self._reject_links(self.base)
+            fd = os.open(self.lock_path, os.O_RDONLY | os.O_NONBLOCK
+                         | getattr(os, 'O_NOFOLLOW', 0))
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise StoreUnavailable('invalid_reader_lock')
+                fcntl.flock(fd, fcntl.LOCK_SH)
+                yield
+            finally:
+                os.close(fd)
+
+    @contextmanager
     def writer(self):
         """
         Single writer/transaction lock (flock + in-process reentrancy guard).
@@ -354,7 +376,39 @@ class RevisionStore:
             raise StoreUnavailable('checksum_mismatch', f'revision {revision} generated')
         if meta.get('generated_digest') != tuning_spec.artifacts_digest(generated):
             raise StoreUnavailable('checksum_mismatch', f'revision {revision} aggregate digest')
+        self._validate_artifact_types(generated)
         return {'revision': revision, 'overrides': overrides, 'meta': meta, 'generated': generated}
+
+    def _validate_artifact_types(self, generated):
+        """Reject historical ROS scalar type mismatches without rewriting history.
+
+        JSON 'number' accepts integral lexical values; ROS DOUBLE does not accept
+        INTEGER. New saves normalize only the submitted editable values. Existing
+        immutable artifacts must already have the expected ROS type or require an
+        explicit history-preserving migration, never reinterpretation on boot.
+        """
+        try:
+            documents = {name: strict_yaml_load(text) for name, text in generated.items()}
+        except (ValueError, RecursionError) as exc:
+            raise StoreUnavailable('corrupt_revision', 'invalid generated YAML') from exc
+        for pid, entry in self.index.items():
+            if (entry.get('accepts_edits') is not True or entry.get('protected')
+                    or entry.get('not_applicable')):
+                continue
+            source = entry['source']
+            scope = ('bringup' if source['node'] in tuning_spec.CONSUMER_SCOPES[
+                'bringup']['nodes'] else 'navigation')
+            try:
+                value = documents[scope + '.yaml'][source['node']]['ros__parameters']
+                for part in source['key'].split('.'):
+                    value = value[part]
+                if source.get('index') is not None:
+                    value = value[source['index']]
+            except (KeyError, TypeError, IndexError) as exc:
+                raise StoreUnavailable('incompatible_artifact_type', pid) from exc
+            expected = float if entry['type'] == 'number' else int
+            if type(value) is not expected:
+                raise StoreUnavailable('incompatible_artifact_type', pid)
 
     def desired_overrides(self) -> dict:
         manifest = self.require_ready()
@@ -693,7 +747,15 @@ class RevisionStore:
             revision = max([manifest['desired_revision'], *existing_revisions]) + 1
             if not _is_safe_revision(revision):
                 raise StoreUnavailable('revision_exhausted')
-            overrides = tuning_spec.merged_overrides(base, changes)
+            # Preserve the original request's validation and dedup fingerprint.
+            # Only NEW submitted editable JSON numbers become ROS DOUBLE values;
+            # integer counts and old immutable revision bytes remain untouched.
+            normalized_changes = [
+                dict(change, value=float(change['value']))
+                if self.index[change['id']].get('type') == 'number' else dict(change)
+                for change in changes
+            ]
+            overrides = tuning_spec.merged_overrides(base, normalized_changes)
             provenance = dict(manifest.get('provenance') or {})
             self._write_revision(revision, overrides, parent=manifest['desired_revision'],
                                  actor=actor, reason=reason, provenance=provenance)

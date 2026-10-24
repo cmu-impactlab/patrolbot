@@ -1,6 +1,27 @@
 # Save/apply commissioning: fresh-context implementation handoff
 
-**Prepared:** 2026-10-22. **Status:** agreed specifications; implementation not started.
+**Prepared:** 2026-10-22. **Status:** agreed specifications; local Phase B and
+Phase C and navigation-only restart are locally wired but uncommissioned.
+
+**Parked 2026-10-24:** resume from [save-apply-resume.md](save-apply-resume.md)
+on the paired `feat/save-apply-commissioning` branches. The handoff below retains
+historical source findings; the resume document identifies current state and gaps.
+
+**Operator simplification, 2026-10-23:** Apply has two choices: verified hot
+updates, or one restart of the complete `navigation` container if any changed
+Nav2 value needs reconstruction. Close input admission during installation and
+discard incoming commands; never queue/replay them. This supersedes the earlier
+per-node lifecycle and three-container fallback designs, not the live gates.
+See the current [operations and mutability matrix](save-apply-phase-c-operations.md).
+
+Current checkpoint and outstanding gates:
+[save-apply-local-progress.md](save-apply-local-progress.md). Nothing is commissioned
+or deployment-ready; all live authorization gates below remain unchanged.
+
+Local Phase A findings, complete editable-field dependency matrix and proposed
+state/protocol design: [save-apply-phase-a-design.md](save-apply-phase-a-design.md).
+This is a source-reviewed design candidate, not operator/native acceptance or
+authorization for a live operation. Historical handoff baselines below are retained.
 
 This document is a self-contained handoff for a new coding session. It records
 operator decisions, source/deployment baselines, implementation phases and
@@ -45,14 +66,18 @@ the corresponding live gate. Do not re-ask already settled specification choices
    physical/web manual inputs explicitly released; zero command buffers and an
    acknowledged exclusive hold across all motion command paths. Unknown required
    ownership/release/hardware evidence refuses admission.
-7. **Reload only affected nodes where supported.** Compute the dependency closure,
-   including derived limits and cached producer policies. Do not reload AMCL or
-   clear localization merely because a different node's parameter changed.
-8. **Full robot Docker redeploy is an allowed fallback** if scoped activation
-   cannot safely apply the revision. Identify this before confirmation, show its
-   disruption and seed implications, and bind that scope to the reviewed job.
-   This means the robot stack, not automatically the dashboard/SBC or a host reset.
-   Rebuild an image only if a source/image change actually requires it.
+7. **Use hot updates only where consumed without restart.** Compute the dependency
+   closure, including derived limits and cached producer policies, against the
+   pinned implementation and current lifecycle state. Successful ROS setters and
+   getters alone are not evidence of consumption. Hot-only edits preserve
+   unaffected localization and do not restart nodes or containers.
+8. **Any restart-required Nav2 value selects the whole Nav2 stack.** Review and
+   restart exactly Compose service `navigation` / container `patrolbot-navigation`,
+   including AMCL and its co-located producers. Do not hot-write that old stack
+   first. Core bridge, bringup, dashboard and SBC remain up. No per-node lifecycle
+   choreography or silent wider fallback. Show seed loss before confirmation.
+   Parameter-only Apply does not rebuild an image. Stop accepting commands during
+   installation and discard input rather than queueing/replaying it.
 9. **Localization after apply:** preserve existing valid localization when its
    dependencies are unaffected. If a necessary reload/redeploy invalidates it,
    navigation remains blocked until a fresh operator-supplied seed is accepted.

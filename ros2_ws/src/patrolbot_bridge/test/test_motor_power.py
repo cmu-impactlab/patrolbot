@@ -35,7 +35,8 @@ def bridge():
     b._vx = 0.2
     b._vth = 0.1
     b.CONTROL_TIMEOUT = 0.01
-    b._epoch = NS(lock=threading.RLock(), commands_allowed=False, maps=NS(hold=True))
+    b._epoch = NS(lock=threading.RLock(), commands_allowed=False, maps=NS(hold=True),
+                  tuning_hold=False, maintenance_reserved=False)
     b._undock_turn = NS(busy=False, revoke=Mock())
     b._lidar_ready = Mock(return_value=False)
     b.get_logger = Mock(return_value=Mock())
@@ -59,6 +60,21 @@ def test_disable_ignores_motion_faults_estop_and_recovery():
         MotorDisable.Request(request_id=ID), MotorDisable.Response()
     )
     assert result.success and not result.motors_enabled
+    assert b.sent == [f'MOTOR_DISABLE:{ID}\n'.encode()]
+
+
+@pytest.mark.parametrize('reserved', [False, True])
+def test_maintenance_blocks_enable_but_preserves_emergency_disable_priority(reserved):
+    b = bridge()
+    b._estop_pressed = False
+    b._epoch.tuning_hold = not reserved
+    b._epoch.maintenance_reserved = reserved
+    assert not b._motor_enable_callback(MotorEnable.Request(request_id=ID), MotorEnable.Response()).success
+    assert b.sent == []
+    # The tuning job may own the shared hardware lock. Emergency disable still
+    # bypasses that lock exactly as before; apply never issues this command.
+    b._hardware_operation_lock.acquire()
+    assert b._motor_disable_callback(MotorDisable.Request(request_id=ID), MotorDisable.Response()).success
     assert b.sent == [f'MOTOR_DISABLE:{ID}\n'.encode()]
 
 

@@ -26,7 +26,7 @@ def generate_launch_description():
     map_yaml_file = state.load()['path']
     nav2_params_file = os.path.join(pkg_dir, 'config', 'nav2_params.yaml')
     from patrolbot_bridge.tuning_startup import resolve as active_tuning_config
-    nav2_params_file = active_tuning_config(nav2_params_file, 'navigation')
+    nav2_params_file = os.environ.get('PATROLBOT_NAVIGATION_PARAMS_FILE') or active_tuning_config(nav2_params_file, 'navigation')
     # We do NOT use nav2_bringup's bringup_launch.py because its lifecycle
     # managers hard-code bond_timeout (4.0s) and never read our params file.
     # Inflating the large 3192x2205 map starves map_server's bond heartbeat

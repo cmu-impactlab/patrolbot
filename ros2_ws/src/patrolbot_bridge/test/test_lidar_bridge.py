@@ -48,6 +48,8 @@ def bridge():
     b._epoch = NS(
         lock=threading.RLock(),
         commands_allowed=True,
+        tuning_hold=False,
+        maintenance_reserved=False,
         maps=NS(hold=False),
         _map_goal=None,
         _future=None,
@@ -77,6 +79,15 @@ def bridge():
 def power(b, enabled):
     request = SetLidarPower.Request(request_id=ID, enabled=enabled)
     return b._set_lidar_power_callback(request, SetLidarPower.Response())
+
+
+@pytest.mark.parametrize('reserved', [False, True])
+def test_tuning_maintenance_excludes_lidar_mutation_without_changing_its_state(bridge, reserved):
+    bridge._epoch.tuning_hold = not reserved
+    bridge._epoch.maintenance_reserved = reserved
+    assert not power(bridge, False).success
+    assert bridge.sent == []
+    assert not bridge._lidar_pending
 
 
 def test_off_establishes_hold_before_send_and_requires_new_seed(bridge):

@@ -1,0 +1,360 @@
+--- a/nav2_lifecycle_manager/CMakeLists.txt
++++ b/nav2_lifecycle_manager/CMakeLists.txt
+@@ -13,6 +13,7 @@
+ find_package(rclcpp REQUIRED)
+ find_package(std_msgs REQUIRED)
+ find_package(std_srvs REQUIRED)
++find_package(patrolbot_interfaces REQUIRED)
+ find_package(tf2_geometry_msgs REQUIRED)
+ find_package(bondcpp REQUIRED)
+ find_package(diagnostic_updater REQUIRED)
+@@ -41,6 +42,7 @@
+   rclcpp_components
+   std_msgs
+   std_srvs
++  patrolbot_interfaces
+   tf2_geometry_msgs
+   bondcpp
+   diagnostic_updater
+--- a/nav2_lifecycle_manager/include/nav2_lifecycle_manager/lifecycle_manager.hpp
++++ b/nav2_lifecycle_manager/include/nav2_lifecycle_manager/lifecycle_manager.hpp
+@@ -18,6 +18,8 @@
+ 
+ #include <map>
+ #include <memory>
++#include <mutex>
++#include <set>
+ #include <string>
+ #include <thread>
+ #include <unordered_map>
+@@ -29,6 +31,8 @@
+ #include "std_srvs/srv/empty.hpp"
+ #include "nav2_msgs/srv/manage_lifecycle_nodes.hpp"
+ #include "std_srvs/srv/trigger.hpp"
++#include "patrolbot_interfaces/srv/tuning_maintenance.hpp"
++#include "patrolbot_interfaces/srv/tuning_transition.hpp"
+ #include "bondcpp/bond.hpp"
+ #include "diagnostic_updater/diagnostic_updater.hpp"
+ 
+@@ -69,6 +73,23 @@
+   ~LifecycleManager();
+ 
+ protected:
++  // Includes the Context shutdown callback, which is outside callback_group_.
++  std::recursive_mutex maintenance_mutex_;
++  std::string maintenance_job_, maintenance_digest_, maintenance_plan_;
++  std::string released_job_, released_digest_, released_plan_;
++  std::set<std::string> retired_jobs_;
++  bool maintenance_fault_{false};
++  std::map<std::string, unsigned int> maintenance_prior_states_;
++  rclcpp::Service<patrolbot_interfaces::srv::TuningMaintenance>::SharedPtr maintenance_srv_;
++  rclcpp::Service<patrolbot_interfaces::srv::TuningTransition>::SharedPtr transition_srv_;
++  void maintenanceCallback(
++    const std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Request> request,
++    std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Response> response);
++  void transitionCallback(
++    const std::shared_ptr<patrolbot_interfaces::srv::TuningTransition::Request> request,
++    std::shared_ptr<patrolbot_interfaces::srv::TuningTransition::Response> response);
++  std::string maintenanceEvidence();
++
+   // Callback group used by services and timers
+   rclcpp::CallbackGroup::SharedPtr callback_group_;
+   rclcpp::PreShutdownCallbackHandle preshutdown_callback_handle_;
+--- a/nav2_lifecycle_manager/package.xml
++++ b/nav2_lifecycle_manager/package.xml
+@@ -8,6 +8,7 @@
+   <license>Apache-2.0</license>
+ 
+   <buildtool_depend>ament_cmake</buildtool_depend>
++  <depend>patrolbot_interfaces</depend>
+ 
+   <build_depend>geometry_msgs</build_depend>
+   <build_depend>lifecycle_msgs</build_depend>
+--- a/nav2_lifecycle_manager/src/lifecycle_manager.cpp
++++ b/nav2_lifecycle_manager/src/lifecycle_manager.cpp
+@@ -19,6 +19,10 @@
+ #include <memory>
+ #include <string>
+ #include <vector>
++#include <algorithm>
++#include <sstream>
++#include <set>
++#include <iomanip>
+ 
+ #include "rclcpp/rclcpp.hpp"
+ 
+@@ -62,6 +66,12 @@
+   get_parameter("attempt_respawn_reconnection", attempt_respawn_reconnection_);
+ 
+   callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
++  maintenance_srv_ = create_service<patrolbot_interfaces::srv::TuningMaintenance>(
++    "~/tuning_maintenance", std::bind(&LifecycleManager::maintenanceCallback, this, _1, _2),
++    rclcpp::SystemDefaultsQoS(), callback_group_);
++  transition_srv_ = create_service<patrolbot_interfaces::srv::TuningTransition>(
++    "~/tuning_transition", std::bind(&LifecycleManager::transitionCallback, this, _1, _2),
++    rclcpp::SystemDefaultsQoS(), callback_group_);
+   manager_srv_ = create_service<ManageLifecycleNodes>(
+     get_name() + std::string("/manage_nodes"),
+     std::bind(&LifecycleManager::managerCallback, this, _1, _2, _3),
+@@ -91,13 +101,16 @@
+   init_timer_ = this->create_wall_timer(
+     0s,
+     [this]() -> void {
++      std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
+       init_timer_->cancel();
+       createLifecycleServiceClients();
+       if (autostart_) {
+         init_timer_ = this->create_wall_timer(
+           0s,
+           [this]() -> void {
++            std::lock_guard<std::recursive_mutex> autostart_lock(maintenance_mutex_);
+             init_timer_->cancel();
++            if (!maintenance_job_.empty()) {return;}
+             if (get_parameter("autostart_configure_only").as_bool()) {
+               configure();
+             } else {
+@@ -124,12 +137,188 @@
+   service_thread_.reset();
+ }
+ 
++namespace
++{
++bool validToken(const std::string & value, bool hash = false)
++{
++  if (value.empty() || value.size() > 128 || (hash && value.size() != 64)) {return false;}
++  return std::all_of(value.begin(), value.end(), [hash](unsigned char c) {
++    return hash ? ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) :
++           ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
++           (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.');
++  });
++}
++}
++
++std::string LifecycleManager::maintenanceEvidence()
++{
++  std::ostringstream out;
++  out << "{\"schema\":1,\"implementation\":\"nav2-1.3.12-scoped-manager-v1\","
++      << "\"held\":" << (maintenance_job_.empty() ? "false" : "true")
++      << ",\"faulted\":" << (maintenance_fault_ ? "true" : "false")
++      << ",\"all_action_paths_excluded\":false,\"job_id\":" << std::quoted(maintenance_job_)
++      << ",\"digest\":" << std::quoted(maintenance_digest_)
++      << ",\"plan_hash\":" << std::quoted(maintenance_plan_) << ",\"states\":{";
++  bool first = true;
++  for (const auto & entry : node_map_) {
++    if (!entry.second) {throw std::runtime_error("Lifecycle client unavailable");}
++    if (!first) {out << ',';}
++    first = false;
++    out << std::quoted(entry.first) << ':' << static_cast<unsigned int>(entry.second->get_state());
++  }
++  out << "},\"prior_states\":{";
++  first = true;
++  for (const auto & entry : maintenance_prior_states_) {
++    if (!first) {out << ',';}
++    first = false;
++    out << std::quoted(entry.first) << ':' << entry.second;
++  }
++  out << "}}";
++  return out.str();
++}
++
++void LifecycleManager::maintenanceCallback(
++  const std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Request> request,
++  std::shared_ptr<patrolbot_interfaces::srv::TuningMaintenance::Response> response)
++{
++  std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
++  response->accepted = false;
++  response->detail = "invalid_request";
++  if (!validToken(request->job_id) || !validToken(request->digest, true) ||
++    !validToken(request->plan_hash, true)) {return;}
++  const bool owner = request->job_id == maintenance_job_ &&
++    request->digest == maintenance_digest_ && request->plan_hash == maintenance_plan_;
++  try {
++    if (request->operation == "acquire") {
++      if (!maintenance_job_.empty()) {
++        response->detail = owner ? "already_owned" : "foreign_owner";
++        response->accepted = owner && !maintenance_fault_;
++      } else if (retired_jobs_.count(request->job_id)) {
++        response->detail = "job_already_released";
++      } else if (retired_jobs_.size() >= 1024) {
++        response->detail = "lease_history_full";
++      } else if (bond_respawn_timer_ || node_map_.size() != node_names_.size()) {
++        response->detail = "lifecycle_busy";
++      } else {
++        // Capture every sibling BEFORE ownership; no transitions or goal cancellation here.
++        std::map<std::string, unsigned int> prior;
++        for (const auto & entry : node_map_) {
++          if (!entry.second) {throw std::runtime_error("Lifecycle client unavailable");}
++          const auto state = entry.second->get_state();
++          if (state != State::PRIMARY_STATE_ACTIVE && state != State::PRIMARY_STATE_INACTIVE &&
++            state != State::PRIMARY_STATE_UNCONFIGURED)
++          {response->detail = "lifecycle_busy"; return;}
++          prior[entry.first] = state;
++        }
++        maintenance_prior_states_ = prior;
++        maintenance_job_ = request->job_id;
++        maintenance_digest_ = request->digest;
++        maintenance_plan_ = request->plan_hash;
++        maintenance_fault_ = false;
++        response->accepted = true;
++        response->detail = "acquired_manager_only";
++      }
++    } else if (request->operation == "inspect") {
++      response->accepted = owner && !maintenance_fault_;
++      response->detail = owner ? (maintenance_fault_ ? "recovery_required" : "owned") : "not_owner";
++    } else if (request->operation == "release") {
++      if (!owner) {
++        response->accepted = maintenance_job_.empty() && request->job_id == released_job_ &&
++          request->digest == released_digest_ && request->plan_hash == released_plan_;
++        response->detail = response->accepted ? "already_released" : "not_owner";
++      } else if (maintenance_fault_) {
++        response->detail = "recovery_required";
++      } else {
++        std::set<unsigned int> states;
++        for (const auto & entry : maintenance_prior_states_) {
++          const auto state = node_map_.at(entry.first)->get_state();
++          // Never activate previously inactive nodes. An active node may remain inactive
++          // when ordinary readiness is unavailable; this is not navigation readiness.
++          if (state != entry.second && !(state == State::PRIMARY_STATE_INACTIVE &&
++            (entry.second == State::PRIMARY_STATE_ACTIVE ||
++            entry.second == State::PRIMARY_STATE_UNCONFIGURED)))
++          {response->detail = "state_not_restored"; return;}
++          states.insert(state);
++        }
++        managed_nodes_state_ = states == std::set<unsigned int>{State::PRIMARY_STATE_ACTIVE} ?
++          NodeState::ACTIVE : states == std::set<unsigned int>{State::PRIMARY_STATE_INACTIVE} ?
++          NodeState::INACTIVE : states == std::set<unsigned int>{State::PRIMARY_STATE_UNCONFIGURED} ?
++          NodeState::UNCONFIGURED : NodeState::UNKNOWN;
++        released_job_ = maintenance_job_;
++        released_digest_ = maintenance_digest_;
++        released_plan_ = maintenance_plan_;
++        retired_jobs_.insert(maintenance_job_);
++        maintenance_job_.clear(); maintenance_digest_.clear(); maintenance_plan_.clear();
++        maintenance_prior_states_.clear();
++        response->accepted = true;
++        response->detail = "released";
++      }
++    }
++    response->evidence_json = maintenanceEvidence();
++  } catch (const std::exception & e) {
++    if (!maintenance_job_.empty()) {maintenance_fault_ = true;}
++    response->accepted = false;
++    response->detail = "state_outcome_unknown";
++    RCLCPP_ERROR(get_logger(), "Maintenance state read failed: %s", e.what());
++  }
++}
++
++void LifecycleManager::transitionCallback(
++  const std::shared_ptr<patrolbot_interfaces::srv::TuningTransition::Request> request,
++  std::shared_ptr<patrolbot_interfaces::srv::TuningTransition::Response> response)
++{
++  std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
++  response->accepted = false;
++  response->detail = "not_owner";
++  if (maintenance_job_.empty() || request->job_id != maintenance_job_ ||
++    request->digest != maintenance_digest_ || request->plan_hash != maintenance_plan_) {return;}
++  if (maintenance_fault_) {response->detail = "recovery_required"; return;}
++  static const std::set<std::string> allowed{
++    "teleop_velocity_smoother", "amcl", "controller_server", "velocity_smoother",
++    "behavior_server", "patrolbot_joy_teleop"};
++  auto client = node_map_.find(request->node_name);
++  if (!allowed.count(request->node_name) || client == node_map_.end() || !client->second) {
++    response->detail = "node_not_allowed"; return;
++  }
++  const auto transition = request->transition_id;
++  const auto expected = request->expected_state;
++  const bool valid =
++    (transition == Transition::TRANSITION_CONFIGURE && expected == State::PRIMARY_STATE_UNCONFIGURED) ||
++    (transition == Transition::TRANSITION_CLEANUP && expected == State::PRIMARY_STATE_INACTIVE) ||
++    (transition == Transition::TRANSITION_ACTIVATE && expected == State::PRIMARY_STATE_INACTIVE &&
++    maintenance_prior_states_.at(request->node_name) == State::PRIMARY_STATE_ACTIVE) ||
++    (transition == Transition::TRANSITION_DEACTIVATE && expected == State::PRIMARY_STATE_ACTIVE);
++  if (!valid) {response->detail = "transition_not_allowed"; return;}
++  try {
++    if (client->second->get_state() != expected) {response->detail = "state_conflict"; return;}
++    // The existing manager owns bond bookkeeping and exactly this one transition.
++    if (!changeStateForNode(request->node_name, transition)) {
++      maintenance_fault_ = true;
++      response->detail = "transition_outcome_unknown";
++    } else {
++      response->accepted = true;
++      response->detail = "transitioned";
++    }
++    response->evidence_json = maintenanceEvidence();
++  } catch (const std::exception & e) {
++    maintenance_fault_ = true;
++    response->accepted = false;
++    response->detail = "transition_outcome_unknown";
++    RCLCPP_ERROR(get_logger(), "Maintenance transition failed: %s", e.what());
++  }
++}
++
+ void
+ LifecycleManager::managerCallback(
+   const std::shared_ptr<rmw_request_id_t>/*request_header*/,
+   const std::shared_ptr<ManageLifecycleNodes::Request> request,
+   std::shared_ptr<ManageLifecycleNodes::Response> response)
+ {
++  std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
++  if (!maintenance_job_.empty()) {
++    response->success = false;
++    return;
++  }
+   switch (request->command) {
+     case ManageLifecycleNodes::Request::STARTUP:
+       response->success = startup();
+@@ -466,6 +655,8 @@
+ void
+ LifecycleManager::onRclPreshutdown()
+ {
++  std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
++  if (!maintenance_job_.empty()) {maintenance_fault_ = true;}
+   RCLCPP_INFO(
+     get_logger(), "Running Nav2 LifecycleManager rcl preshutdown (%s)",
+     this->get_name());
+@@ -488,7 +679,8 @@
+ void
+ LifecycleManager::checkBondConnections()
+ {
+-  if (!isActive() || !rclcpp::ok() || bond_map_.empty()) {
++  std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
++  if (!rclcpp::ok() || bond_map_.empty()) {
+     return;
+   }
+ 
+@@ -497,7 +689,9 @@
+       return;
+     }
+ 
+-    if (bond_map_[node_name]->isBroken()) {
++    auto bond = bond_map_.find(node_name);
++    if (bond == bond_map_.end()) {continue;}  // Intentionally inactive subset member.
++    if (bond->second->isBroken()) {
+       message(
+         std::string(
+           "Have not received a heartbeat from " + node_name + "."));
+@@ -508,13 +702,15 @@
+         "CRITICAL FAILURE: SERVER %s IS DOWN after not receiving a heartbeat for %i ms."
+         " Shutting down related nodes.",
+         node_name.c_str(), static_cast<int>(bond_timeout_.count()));
++      // Safety shutdown retains precedence; it invalidates the exact-job proof.
++      if (!maintenance_job_.empty()) {maintenance_fault_ = true;}
+       reset(true);  // hard reset to transition all still active down
+       // if a server crashed, it won't get cleared due to failed transition, clear manually
+       bond_map_.clear();
+ 
+       // Initialize the bond respawn timer to check if server comes back online
+       // after a failure, within a maximum timeout period.
+-      if (attempt_respawn_reconnection_) {
++      if (attempt_respawn_reconnection_ && maintenance_job_.empty()) {
+         bond_respawn_timer_ = this->create_wall_timer(
+           1s,
+           std::bind(&LifecycleManager::checkBondRespawnConnection, this),
+@@ -528,6 +724,8 @@
+ void
+ LifecycleManager::checkBondRespawnConnection()
+ {
++  std::lock_guard<std::recursive_mutex> lock(maintenance_mutex_);
++  if (!maintenance_job_.empty()) {return;}
+   // First attempt in respawn, start maximum duration to respawn
+   if (bond_respawn_start_time_.nanoseconds() == 0) {
+     bond_respawn_start_time_ = now();

@@ -52,9 +52,9 @@ _REQUEST_KEYS = {
     'read': _COMMON_REQUEST_KEYS,
     'status': _COMMON_REQUEST_KEYS | {'job_id'},
     'save': _COMMON_REQUEST_KEYS | {'base_revision', 'changes'},
-    'apply': _COMMON_REQUEST_KEYS | {'expected_revision'},
-    'redeploy': _COMMON_REQUEST_KEYS | {'expected_revision'},
-    'restore': _COMMON_REQUEST_KEYS | {'expected_revision', 'restore_revision', 'target'},
+    'apply': _COMMON_REQUEST_KEYS | {'expected_revision', 'review'},
+    'redeploy': _COMMON_REQUEST_KEYS | {'expected_revision', 'review'},
+    'restore': _COMMON_REQUEST_KEYS | {'expected_revision', 'restore_revision', 'target', 'review'},
 }
 
 
@@ -124,7 +124,7 @@ def parse_request(request) -> dict:
     if operation not in REQUEST_OPERATIONS:
         raise ServiceError('refused', 'unsupported_operation')
     allowed = _REQUEST_KEYS[operation]
-    required = allowed - ({'job_id'} if operation == 'status' else set())
+    required = allowed - {'review'} - ({'job_id'} if operation == 'status' else set())
     if not required.issubset(request) or set(request) - allowed:
         raise ServiceError('refused', 'unknown_field')
     if not _canonical_uuid(request.get('request_id')):
@@ -147,6 +147,13 @@ def parse_request(request) -> dict:
     if operation in ('apply', 'redeploy', 'restore'):
         if not _safe_revision(request.get('expected_revision')):
             raise ServiceError('refused', 'invalid_expected_revision')
+        if 'review' in request:
+            import re
+            review = request['review']
+            if (not isinstance(review, dict) or set(review) != {'digest', 'plan_hash'}
+                    or any(not isinstance(value, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', value)
+                           for value in review.values())):
+                raise ServiceError('refused', 'invalid_review')
     if operation == 'restore':
         if not _safe_revision(request.get('restore_revision')) \
                 or request.get('target') != 'last_known_good':
@@ -177,6 +184,7 @@ class TuningService:
         self.coordinator = coordinator
         self.clock = clock
         self.session_id = session_id or str(uuid.uuid4())
+        self.coordinator.session_id = self.session_id
         self.mutations_enabled = mutations_enabled is True
         self.runtime_readback = runtime_readback
         self.parameter_readback = parameter_readback
@@ -212,6 +220,8 @@ class TuningService:
         digest = None
         desired_state = None
         active_overrides = None
+        activation_plan = None
+        restore_plan = None
         if ready:
             # Existing saved state must never be replaced by YAML starting
             # values when its revision cannot be read or validated.
@@ -226,6 +236,16 @@ class TuningService:
                 committed = (desired_state if state['active_revision'] == state['desired_revision']
                              else self.store.load_revision(state['active_revision']))
                 active_overrides = committed['overrides']
+                activation_plan = self.coordinator.preview(
+                    candidate=desired_state, active=committed, desired_revision=state['desired_revision'])
+                last_good = state.get('last_known_good')
+                if last_good is not None:
+                    restore_state = (committed if last_good == state['active_revision']
+                                     else desired_state if last_good == state['desired_revision']
+                                     else self.store.load_revision(last_good))
+                    restore_plan = self.coordinator.preview(
+                        candidate=restore_state, active=committed,
+                        desired_revision=state['desired_revision'], operation='restore')
                 if active_overrides is not None:
                     digest = committed['meta']['generated_digest']
                     observed = self.runtime_readback() if self.runtime_readback else None
@@ -254,6 +274,11 @@ class TuningService:
             active_full[pid] = active.get(pid) if active_known else None
         safe_apply = self.coordinator.safe_apply_state() if ready else {
             'allowed': False, 'reason': 'Robot tuning has not been initialized.'}
+        reviewed_backend = getattr(self.coordinator.backend, 'requires_review', False)
+        activation_supported = ready and self.coordinator.activation_supported
+        if reviewed_backend and (activation_plan is None or not activation_plan['executable']):
+            activation_supported = False
+            safe_apply = {'allowed': False, 'reason': 'Reviewed scoped activation is not commissioned; saving targets remains available.'}
         job = self.store.latest_job() if ready else None
         save_allowed, save_reason = self._save_admission()
         write_reason = ('Robot tuning has not been initialized.' if not ready else
@@ -262,6 +287,8 @@ class TuningService:
                         save_reason if not save_allowed else None)
         return {
             'readback': self.parameter_readback() if self.parameter_readback else None,
+            'activation_plan': activation_plan,
+            'restore_plan': restore_plan,
             'write_disabled_reason': write_reason,
             'session_id': self.session_id if ready else None,
             'desired_revision': state.get('desired_revision'),
@@ -280,13 +307,13 @@ class TuningService:
             'catalog': [
                 _catalog_entry(
                     entry, starting_defaults.get(entry['id'], entry.get('default')),
-                    activation_supported=ready and self.coordinator.activation_supported)
+                     activation_supported=activation_supported)
                 for entry in registry['parameters']
             ],
             'writable': ready and self.mutations_enabled and save_allowed,
             'save_supported': ready and self.mutations_enabled and save_allowed,
             'advertised_capability': READ_CAPABILITY if ready else None,
-            'activation_supported': ready and self.coordinator.activation_supported,
+            'activation_supported': activation_supported,
             'safe_apply': safe_apply,
             'latest_job': job,
             'digest': digest,
@@ -378,6 +405,7 @@ class TuningService:
             expected_revision=request['expected_revision'],
             actor=actor,
             target_revision=target,
+            review=request.get('review'),
         )
         return {'outcome': outcome.get('outcome', 'failed'),
                 'detail': outcome.get('detail', ''),

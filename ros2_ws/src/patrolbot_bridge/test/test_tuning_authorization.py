@@ -79,3 +79,14 @@ def test_roles_and_nonfinite_payloads_are_never_signed():
     body['request']['changes'][0]['value'] = float('nan')
     with pytest.raises(AuthorizationError):
         sign(body, KEY, 'robot-1')
+
+
+@pytest.mark.parametrize('part', ['digest', 'plan_hash'])
+def test_reviewed_revision_and_scope_are_covered_by_the_signature(part):
+    body = copy.deepcopy(WRAPPER)
+    body['request'] = {'operation': 'apply', 'request_id': 'fixture', 'expected_revision': 2,
+                       'review': {'digest': 'sha256:' + 'a' * 64, 'plan_hash': 'sha256:' + 'b' * 64}}
+    signed = sign(body, KEY, 'robot-1', now=100)
+    signed['request']['review'][part] = 'sha256:' + 'c' * 64
+    with pytest.raises(AuthorizationError):
+        verify(signed, KEY, 'robot-1', now=101)

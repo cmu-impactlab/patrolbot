@@ -1,0 +1,16 @@
+# Private core-to-consumer maintenance protocol; not a browser mutation API.
+# Fixed operations only: acquire/block, observe/inspect, release, policy staging
+# and lower-trim restoration. A release names its exact
+# owner; timeout never expires or releases a possibly mutating job.
+string operation
+string job_id
+string digest
+string plan_hash
+# Used only by web stage/committed and physical restore_trims; fixed bounded
+# policy schemas at each consumer. Other operations require empty payload.
+string payload_json
+---
+bool accepted
+string detail
+# Bounded fixed consumer evidence, not arbitrary shell/service/path arguments.
+string evidence_json

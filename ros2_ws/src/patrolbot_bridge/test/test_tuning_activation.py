@@ -12,6 +12,7 @@ from patrolbot_bridge.tuning_activation import (
     FixedOperationPlan,
     ReloadResult,
     UnavailableBackend,
+    AdmissionRefused,
 )
 from patrolbot_bridge.tuning_store import RevisionStore, StoreError
 import pytest
@@ -82,7 +83,7 @@ def test_missing_evidence_is_busy_not_permission():
 
 
 @pytest.mark.parametrize('field', [
-    'raw_odom_fresh', 'stationary', 'hardware_ok', 'dock_ok', 'faults_clear',
+    'hardware_ok', 'dock_ok', 'faults_clear',
     'command_buffers_zero', 'physical_deadman_fresh', 'web_deadman_fresh',
     'autonomy_idle', 'maps_clear', 'undock_clear', 'lifecycle_clear',
 ])
@@ -99,6 +100,18 @@ def test_held_deadman_blocks(field):
 
 def test_full_evidence_allows():
     assert evaluate_evidence(good_evidence()) == (True, '')
+
+
+@pytest.mark.parametrize('value', [None, False])
+def test_command_idle_does_not_claim_or_require_measured_standstill(tmp_path, value):
+    evidence = good_evidence(raw_odom_fresh=value, stationary=value)
+    assert evaluate_evidence(evidence) == (True, '')
+    store, owner, coordinator = make(tmp_path, evidence=evidence)
+    result = request(coordinator)
+    assert result['outcome'] == 'ok'
+    assert store.read_startup()['revision'] == 2
+    assert not owner.held
+    assert 'stationary' not in coordinator.safe_apply_state()['reason']
 
 
 def test_successful_activation_promotes_and_releases_hold(tmp_path):
@@ -245,3 +258,50 @@ def test_evidence_from_runtime_treats_non_booleans_as_unknown():
     assert evidence.raw_odom_fresh is None
     assert evidence.stationary is True
     assert evidence.hardware_ok is None
+
+
+@pytest.mark.parametrize('failure_probe', [2, 3, 4])
+def test_every_post_reservation_pre_mutation_refusal_unwinds_acknowledged_hold(tmp_path, failure_probe):
+    """Offline owner race coverage, including the final check before reload."""
+    calls = []
+
+    class Reserved(FakeBackend):
+        probes = 0
+
+        def probe(self):
+            self.probes += 1
+            return good_evidence(hardware_ok=self.probes < failure_probe)
+
+        def reserve_navigation(self):
+            assert store.latest_job()['state'] == 'pending'
+            calls.append('reserve')
+
+        def release_navigation_reservation(self):
+            calls.append('release')
+
+    backend = Reserved(good_evidence(), record=calls)
+    store, owner, coordinator = make(tmp_path, backend=backend)
+    result = request(coordinator)
+    assert result['outcome'] == 'refused'
+    assert calls == ['reserve', 'release']
+    assert not owner.held and not coordinator.hold
+    assert store.latest_job()['state'] == 'failed'
+    assert store.read_startup()['revision'] == 1
+
+
+@pytest.mark.parametrize('ambiguous', [False, True])
+def test_remote_reservation_race_never_cancels_goal_or_orphans_unknown_owner(tmp_path, ambiguous):
+    class Reserved(FakeBackend):
+        def reserve_navigation(self):
+            assert store.latest_job()['state'] == 'pending'
+            if ambiguous:
+                raise TimeoutError('reservation may execute')
+            raise AdmissionRefused('existing navigation goal won the mutex')
+
+    store, owner, coordinator = make(tmp_path, backend=Reserved(good_evidence()))
+    result = request(coordinator)
+    assert result['outcome'] == ('unknown' if ambiguous else 'refused')
+    assert coordinator.hold is ambiguous
+    assert owner.held is ambiguous
+    assert store.latest_job()['state'] == ('unknown' if ambiguous else 'failed')
+    assert store.read_startup()['revision'] == 1

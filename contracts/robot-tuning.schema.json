@@ -80,6 +80,16 @@
         }
       }
     },
+    "activation_review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "plan_hash"],
+      "properties": {
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "plan_hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "$comment": "Exact core-produced preview binding, covered by the server signature. Legacy requests remain shape-readable but reviewed runtime backends MUST refuse execution without this binding. This shape is not authorization or native support."
+    },
     "apply_request": {
       "type": "object",
       "additionalProperties": false,
@@ -90,7 +100,8 @@
         "operation": { "const": "apply" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "generation": { "$ref": "#/$defs/generation" },
-        "expected_revision": { "$ref": "#/$defs/revision" }
+        "expected_revision": { "$ref": "#/$defs/revision" },
+        "review": { "$ref": "#/$defs/activation_review" }
       }
     },
     "redeploy_request": {
@@ -103,7 +114,8 @@
         "operation": { "const": "redeploy" },
         "request_id": { "$ref": "#/$defs/request_id" },
         "generation": { "$ref": "#/$defs/generation" },
-        "expected_revision": { "$ref": "#/$defs/revision" }
+        "expected_revision": { "$ref": "#/$defs/revision" },
+        "review": { "$ref": "#/$defs/activation_review" }
       }
     },
     "status_request": {
@@ -132,6 +144,7 @@
         "generation": { "$ref": "#/$defs/generation" },
         "expected_revision": { "$ref": "#/$defs/revision", "$comment": "The authoritative current desired/CAS revision (the same value context.current_revision compares against, never the active runtime revision); a mismatch means the reviewed rollback is stale." },
         "restore_revision": { "$ref": "#/$defs/revision", "$comment": "The exact immutable last-known-good revision to restore to. Required so approval binds a specific reviewed artifact; a moving 'latest' pointer would let the reviewed target change under the approver. Must not exceed expected_revision." },
+        "review": { "$ref": "#/$defs/activation_review" },
         "target": {
           "const": "last_known_good",
           "$comment": "Administrator-only restore. Rollback is a new audited activation, never history deletion."

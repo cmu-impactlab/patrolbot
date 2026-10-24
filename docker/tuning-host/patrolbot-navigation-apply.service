@@ -1,0 +1,19 @@
+[Unit]
+Description=PatrolBot fixed navigation-only Apply helper
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+RuntimeDirectory=patrolbot-tuning/core patrolbot-tuning/boot
+RuntimeDirectoryPreserve=yes
+StateDirectory=patrolbot-tuning-host/navigation
+Environment=PYTHONPATH=/home/ubuntu/patrolbot-repo/ros2_ws/src/patrolbot_bridge
+ExecStart=/usr/bin/python3 /home/ubuntu/patrolbot-repo/docker/tuning-host/navigation_supervisor.py
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

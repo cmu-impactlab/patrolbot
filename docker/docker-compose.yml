@@ -41,11 +41,16 @@ services:
       ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: bringup
       PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
+      SDL_JOYSTICK_DISABLE_UDEV: "1"
     command: ["ros2", "run", "patrolbot_bridge", "tuning_run", "--role", "bringup"]
     volumes:
       - patrolbot-state:/var/lib/patrolbot:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot-launch:/opt/patrolbot_ws/src/patrolbot-launch:ro
+      - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bringup:/root/.ros/log
+      - /dev/input:/dev/input:rw
+    device_cgroup_rules:
+      - "c 13:* rw"
 
   bridge:
     <<: *common
@@ -178,18 +183,11 @@ services:
       ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: navigation
       PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
-      # SDL's libudev netlink monitor never joins a multicast group without /run/udev,
-      # so no hotplug uevent arrives and joy_node only enumerates once at startup.
-      # Disable udev to poll /dev/input every ~3s and re-detect replugged gamepads.
-      SDL_JOYSTICK_DISABLE_UDEV: "1"
     command: ["ros2", "run", "patrolbot_bridge", "tuning_run", "--role", "navigation"]
     volumes:
       - patrolbot-state:/var/lib/patrolbot:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/navigation:/root/.ros/log
-      - /dev/input:/dev/input:rw
-    device_cgroup_rules:
-      - "c 13:* rw"
 
 volumes:
   patrolbot-state:

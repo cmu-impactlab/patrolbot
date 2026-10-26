@@ -116,49 +116,8 @@ def generate_launch_description():
         # Navigation after a short delay so it doesn't slow localization startup.
         TimerAction(period=20.0, actions=[navigation]),
 
-        Node(
-            package='joy',
-            executable='joy_node',
-            name='joy_node',
-            parameters=[{
-                'use_sim_time': False,
-                'device_id': 0,
-                'deadzone': 0.05,
-                'autorepeat_rate': 20.0,
-                'sticky_buttons': False,
-                'coalesce_interval_ms': 1,
-            }],
-            respawn=True,
-            respawn_delay=2.0,
-        ),
-        # Joystick teleop feeds twist_mux's 'input/joy' (priority 8 > nav's 5),
-        # so RB immediately overrides and cancels navigation. Releasing RB ramps
-        # to zero and never resumes the canceled goal automatically.
-        # respawn so a teleop crash self-heals; its own joy-loss watchdog drops the
-        # deadman if joy_node dies, so a crash can't leave the robot driving.
-        Node(package='patrolbot_navigation', executable='patrolbot_joy_teleop.py',
-             name='patrolbot_joy_teleop', output='screen',
-             parameters=[nav2_params_file],
-             remappings=[('/cmd_vel_joy', '/input/joy')],
-             respawn=True, respawn_delay=2.0),
-        # Alert-only controller feedback. Its sole publisher is joy_node's
-        # feedback input; it has no velocity, action, or motor-service client.
-        Node(
-            package='patrolbot_navigation',
-            executable='patrolbot_controller_feedback.py',
-            name='patrolbot_controller_feedback',
-            output='screen',
-            parameters=[nav2_params_file],
-            respawn=True,
-            respawn_delay=2.0,
-        ),
-        # Safety watchdog: holds the robot (zero Twist on twist_mux priority-10
-        # input/safety_controller) whenever /scan or /odom goes stale, and releases
-        # automatically when they return. Sensor-loss safe-hold for the whole stack.
-        Node(package='patrolbot_navigation', executable='patrolbot_safety_watchdog.py',
-             name='patrolbot_safety_watchdog', output='screen',
-             parameters=[nav2_params_file],
-             respawn=True, respawn_delay=2.0),
+        # Controller and hardware safety live in bringup's manual_control.launch.py,
+        # not in this crash/restart-coupled Nav2 launch. Never launch duplicates.
         # Guarded undock orchestration. It publishes no Twist and remains
         # fail-closed until bumper mapping and a verified dock pose are configured.
         Node(package='patrolbot_dock_manager', executable='dock_manager',

@@ -248,14 +248,14 @@ class SafetyContractTest(unittest.TestCase):
         fallback is what notices it.
         """
         compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
-        navigation = compose['services']['navigation']
+        navigation = compose['services']['bringup']
         self.assertEqual(
             navigation['environment']['SDL_JOYSTICK_DISABLE_UDEV'], '1')
         self.assertIn('/dev/input:/dev/input:rw', navigation['volumes'])
 
-    def test_rumble_permissions_are_scoped_to_navigation(self):
+    def test_rumble_permissions_are_scoped_to_manual_bringup(self):
         compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
-        navigation = compose['services']['navigation']
+        navigation = compose['services']['bringup']
         gimbal = compose['services']['gimbal']
         self.assertIn('/dev/input:/dev/input:rw', navigation['volumes'])
         self.assertEqual(navigation['device_cgroup_rules'], ['c 13:* rw'])
@@ -317,7 +317,7 @@ class SafetyContractTest(unittest.TestCase):
         })
         bringup = (
             PACKAGE_ROOT / 'launch' /
-            'bringup.launch.py').read_text(encoding='utf-8')
+            'manual_control.launch.py').read_text(encoding='utf-8')
         self.assertIn("executable='patrolbot_controller_feedback.py'", bringup)
         self.assertIn("name='patrolbot_controller_feedback'", bringup)
         notifier = (
@@ -456,7 +456,7 @@ class SafetyContractTest(unittest.TestCase):
             'patrolbot_joy_teleop.py').read_text(encoding='utf-8')
         bringup = (
             PACKAGE_ROOT / 'launch' /
-            'bringup.launch.py').read_text(encoding='utf-8')
+            'manual_control.launch.py').read_text(encoding='utf-8')
         mux = yaml.safe_load((
             LAUNCH_PACKAGE_ROOT / 'param' / 'defaults' /
             'mux.yaml').read_text(encoding='utf-8'))[
@@ -467,7 +467,7 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIn('CancelGoal.Request()', teleop)
         self.assertIn('self.active or moving or self._takeover_pending', teleop)
         self.assertIn("'device_id': 0", bringup)
-        self.assertIn("'autorepeat_rate': 20.0", bringup)
+        self.assertIn("'autorepeat_rate': 20.", bringup)
         self.assertIn("'sticky_buttons': False", bringup)
         self.assertEqual(mux['topics']['joy'], {
             'topic': 'input/joy', 'timeout': 0.5, 'priority': 8})
@@ -609,15 +609,16 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIn('DockPhysicalState dock_state', texts['protocol'])
         self.assertIn('DOCK_CLEAR_CONFIRMED', texts['protocol'])
 
-    def test_sbc_undock_never_commands_rotation(self):
-        """The collision-aware turn stays in Nav2, where the costmap is."""
+    def test_sbc_rotation_requires_explicit_manual_variant(self):
+        """Normal UNDOCK remains reverse-only; manual mode owns its local turn."""
         undock_text = UNDOCK_FILE.read_text(encoding='utf-8')
         self.assertNotIn('setRotVel', undock_text)
-        self.assertNotIn('commanded_angular', undock_text)
-        self.assertNotIn('turn_rad', undock_text)
+        self.assertIn('if (config_.manual_mode)', undock_text)
+        self.assertIn('enterPhase(UNDOCK_PHASE_MANUAL_TURN, now)', undock_text)
+        self.assertIn('out->commanded_angular = 0.0;', undock_text)
         server_text = SERVER_FILE.read_text(encoding='utf-8')
-        # The one rotational command in the undock path is an explicit zero.
-        self.assertIn('robot.setRotVel(0.0);', server_text)
+        self.assertIn('robot.setRotVel(out.commanded_angular * 180.0 / M_PI)', server_text)
+        self.assertIn('config.manual_mode = command.manual_mode', server_text)
 
     def test_sbc_undock_keeps_reversing_when_charge_reasserts_healthily(self):
         """Stopping on every re-latch lets the contacts settle back in."""

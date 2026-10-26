@@ -38,6 +38,7 @@ from rclpy.qos import qos_profile_action_status_default
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
+from patrolbot_bridge.manual_undock_policy import START_BUTTON, neutral_input
 
 from joystick_policy import (
     ANG_SIGN,
@@ -144,6 +145,9 @@ class JoyTeleop(Node):
             # Legacy standalone receivers have no persistent tuning package.
             pass
         self._tuning_deadman_held = False
+        self._manual_undock_active = False
+        self._undock_require_release = False
+        self._undock_input_after_ns = 0
 
         self.create_subscription(Joy, '/joy', self.joy_cb, 10)
         self.create_subscription(
@@ -158,6 +162,8 @@ class JoyTeleop(Node):
         # fails closed at the bridge within MANUAL_ACTIVE_TIMEOUT.
         self.manual_pub = self.create_publisher(Bool, "/patrolbot/manual_active", 10)
         self.create_subscription(Bool, '/patrolbot/tuning_hold', self._tuning_hold_cb, 10)
+        self.create_subscription(
+            Bool, '/patrolbot/manual_undock_active', self._manual_undock_cb, 10)
         self.create_service(Trigger, '/patrolbot/joy_tuning_idle', self._tuning_idle)
         self.nav_cancel = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal')
@@ -237,6 +243,8 @@ class JoyTeleop(Node):
         return response
 
     def _base_state_cb(self, message):
+        if getattr(message, 'undock_active', False):
+            self._block_undock_input()
         if ((self._lidar_generation is not None and
              message.session_generation != self._lidar_generation) or
                 not message.link_connected):
@@ -248,6 +256,23 @@ class JoyTeleop(Node):
         self._lidar_generation = message.session_generation
         self._base_state = message
         self._base_state_at = self.get_clock().now().nanoseconds / 1e9
+
+    def _block_undock_input(self):
+        self.active = self.deadman_was_down = False
+        self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.
+        self._lidar_toggle_pending = False
+        self._undock_require_release = True
+        self._last_joy = None
+        self.pub.publish(Twist())
+        self.manual_pub.publish(Bool(data=False))
+
+    def _manual_undock_cb(self, message):
+        held = bool(message.data)
+        if self._manual_undock_active and not held:
+            self._undock_input_after_ns = self.get_clock().now().nanoseconds
+        self._manual_undock_active = held
+        if held:
+            self._block_undock_input()
 
     def _try_lidar_toggle(self):
         if not self._lidar_toggle_pending or self._takeover_pending:
@@ -396,6 +421,21 @@ class JoyTeleop(Node):
     def joy_cb(self, m):
         b = m.buttons
         a = m.axes
+        stamp_ns = m.header.stamp.sec * 1_000_000_000 + m.header.stamp.nanosec
+        undock_active = self._manual_undock_active or bool(
+            self._base_state is not None and getattr(self._base_state, 'undock_active', False))
+        if undock_active or button_pressed(b, START_BUTTON):
+            self._block_undock_input()
+            return
+        if self._undock_require_release:
+            self._block_undock_input()
+            now_ns = self.get_clock().now().nanoseconds
+            if (stamp_ns > self._undock_input_after_ns
+                    and 0 <= now_ns - stamp_ns <= int(JOY_TIMEOUT * 1e9)
+                    and neutral_input(a, b)):
+                self._undock_require_release = False
+                self._lidar_chord.reset()
+            return
         self._tuning_deadman_held = button_pressed(b, BTN_DEADMAN)
         if self._tuning_hold or self._tuning_require_release:
             self.active = False

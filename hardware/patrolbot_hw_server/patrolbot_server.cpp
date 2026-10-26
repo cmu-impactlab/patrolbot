@@ -24,6 +24,7 @@
 #include "Aria.h"
 #include "protocol.hpp"
 #include "undock.hpp"
+#include "manual_turn_scan.hpp"
 #include "scan_timing.hpp"
 #include "lidar_power.hpp"
 
@@ -464,6 +465,8 @@ patrolbot::UndockInputs readUndockInputs(
   inputs.odometer_m = robot->getOdometerDistanceMeters();
   inputs.linear = robot->getVel() / 1000.0;
   inputs.angular = robot->getRotVel() * M_PI / 180.0;
+  const long packet_age = robot->getLastPacketTime().mSecSince();
+  inputs.hardware_fresh = robot->isConnected() && packet_age >= 0 && packet_age <= 500;
   robot->unlock();
   inputs.rear = readRearSonar(robot, profile);
   return inputs;
@@ -543,6 +546,7 @@ struct LaserSnapshot {
   LaserSnapshot() : age_ms(-1) {}
   long age_ms;
   std::vector<double> ranges;
+  std::vector<patrolbot::LocalScanPoint> local_points;
 };
 
 LaserSnapshot readLaser(ArLaser* laser) {
@@ -556,6 +560,11 @@ LaserSnapshot readLaser(ArLaser* laser) {
          it != readings->end(); ++it) {
       ages.push_back(*it ? (*it)->getTimeTaken().mSecSince() : -1);
       scan.ranges.push_back(*it ? (*it)->getRange() / 1000.0 : 0.0);
+      patrolbot::LocalScanPoint point;
+      point.x_m = *it ? (*it)->getLocalX() / 1000.0 : NAN;
+      point.y_m = *it ? (*it)->getLocalY() / 1000.0 : NAN;
+      point.range_m = *it ? (*it)->getRange() / 1000.0 : NAN;
+      scan.local_points.push_back(point);
     }
     scan.age_ms = patrolbot::oldestScanAgeMs(ages);
   }
@@ -961,6 +970,7 @@ void handleUndockRequest(const patrolbot::ParsedCommand& command,
   config.speed_mps = command.speed_mps;
   config.timeout_s = command.timeout_s;
   config.validation_mode = command.validation_mode;
+  config.manual_mode = command.manual_mode;
 
   int code = 0;
   std::string message;
@@ -1200,7 +1210,7 @@ int main(int argc, char** argv) {
         }
         laser->unlockDevice();
       }
-      const patrolbot::UndockInputs undock_inputs =
+      patrolbot::UndockInputs undock_inputs =
           readUndockInputs(&robot, profile, now_ms);
       dock_observer.update(undock_inputs, profile);
 
@@ -1234,12 +1244,16 @@ int main(int argc, char** argv) {
               continue;
             }
             const HardwareSnapshot state = readSnapshot(&robot);
-            const patrolbot::DriveDisposition drive =
+            patrolbot::DriveDisposition drive =
                 patrolbot::classifyDrive(
                     command.linear, command.angular, pending.active,
                     dock_observer.state(), state.motors_enabled,
                     state.estop_pressed, state.fault_flags,
                     profile.critical_fault_mask, false, lidar.ready());
+            if (patrolbot::bumperBlocksDrive(command.linear, command.angular,
+                                             state.stall_value, profile)) {
+              drive = patrolbot::DRIVE_REJECTED;
+            }
             const bool permitted = drive != patrolbot::DRIVE_REJECTED;
             const bool zero = drive == patrolbot::DRIVE_ALLOWED_ZERO;
             robot.lock();
@@ -1366,13 +1380,22 @@ int main(int argc, char** argv) {
       MotionAuthority authority =
           undock.active() ? AUTHORITY_UNDOCK : AUTHORITY_DRIVE;
       if (undock.active()) {
+        const long long snapshot_elapsed = clock.tick() - now_ms;
+        const HardwareSnapshot latest_hardware = readSnapshot(&robot);
+        undock_inputs.hardware_fresh = undock_inputs.hardware_fresh &&
+            latest_hardware.fresh && snapshot_elapsed >= 0 &&
+            snapshot_elapsed <= profile.lease_max_age_ms;
+        undock_inputs.turn_scan_valid = patrolbot::manualTurnScanValid(
+            scan.local_points, patrolbot::elapsedScanAgeMs(scan.age_ms, snapshot_elapsed));
+        undock_inputs.turn_scan_clear = patrolbot::manualTurnScanClear(
+            scan.local_points, patrolbot::elapsedScanAgeMs(scan.age_ms, snapshot_elapsed));
         const patrolbot::UndockOutputs out = undock.step(undock_inputs);
         applyUndockEffects(&robot, out, &applied_effect_seq);
         robot.lock();
         robot.setVel(out.commanded_linear * 1000.0);
-        // The SBC never rotates. The collision-aware turn away from the dock
-        // stays in Nav2 and runs after this operation hands authority back.
-        robot.setRotVel(0.0);
+        // Normal UNDOCK always supplies zero; only the explicit manual variant
+        // can supply its bounded, locally supervised encoder-based half-turn.
+        robot.setRotVel(out.commanded_angular * 180.0 / M_PI);
         robot.unlock();
         watchdog.renew();
         if (out.finished) {

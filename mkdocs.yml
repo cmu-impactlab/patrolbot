@@ -111,6 +111,7 @@ nav:
       - Safety Chain: safety/safety-chain.md
   - Operations:
       - Running the Robot: operations/running-the-robot.md
+      - Controller Manual Undocking: operations/controller-undocking.md
   - Troubleshooting:
       - Symptoms: troubleshooting/symptoms.md
   - Maintenance:

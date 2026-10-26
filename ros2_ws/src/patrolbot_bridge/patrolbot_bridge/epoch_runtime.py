@@ -182,6 +182,8 @@ class EpochRuntime(MapRuntimeMixin):
     @property
     def commands_allowed(self):
         with self.lock:
+            if self.undock_hold:
+                return False
             if self.tuning_hold:
                 return False
             if getattr(self, '_tuning_nav_pending', False):

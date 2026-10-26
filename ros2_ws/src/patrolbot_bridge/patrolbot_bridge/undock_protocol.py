@@ -63,6 +63,8 @@ UNDOCK_PHASES = frozenset(
         'VERIFYING_CLEARANCE',
         'HANDOFF_READY',
         'STOPPING',
+        'MANUAL_TURN',
+        'MANUAL_SETTLING',
     )
 )
 
@@ -165,6 +167,12 @@ def format_undock_cancel(target_request_id: str) -> bytes:
     if not valid_request_id(target_request_id):
         raise ValueError('target_request_id must be a canonical UUID')
     return f'{COMMAND_UNDOCK_CANCEL}:{target_request_id}\n'.encode('ascii')
+
+
+def format_manual_undock_request(request_id: str) -> bytes:
+    """Fixed local-controller profile; requires MANUAL_UNDOCK_V1 in HELLO."""
+    return format_undock_request(request_id, .53, .10, 45., False).replace(
+        b'UNDOCK:', b'MANUAL_UNDOCK:', 1)
 
 
 def format_dock_reset(request_id: str) -> bytes:

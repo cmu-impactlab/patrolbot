@@ -34,6 +34,7 @@ INDEX = vrt.registry_index(REGISTRY)
 
 LAUNCH_SOURCES = [
     REPO_ROOT / "ros2_ws/src/patrolbot_navigation/launch/bringup.launch.py",
+    REPO_ROOT / "ros2_ws/src/patrolbot_navigation/launch/manual_control.launch.py",
     REPO_ROOT / "ros2_ws/src/patrolbot_navigation/launch/patrolbot_localization_launch.py",
     REPO_ROOT / "ros2_ws/src/patrolbot_navigation/launch/patrolbot_navigation_launch.py",
     REPO_ROOT / "ros2_ws/src/patrolbot-launch/launch/bringup.xml",

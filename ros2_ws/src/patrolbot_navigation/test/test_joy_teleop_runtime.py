@@ -159,6 +159,44 @@ def power_client(teleop):
     return teleop.clients['/patrolbot/set_lidar_power']
 
 
+def manual_joy(teleop, *, start=False, rb=False, linear=0., stamp_at=None):
+    message = joy(teleop.now if stamp_at is None else stamp_at, rb=rb, linear=linear)
+    message.buttons.extend([0] * (11 - len(message.buttons)))
+    message.buttons[7] = int(start)
+    return message
+
+
+def test_start_suppresses_drive_and_requires_release_then_new_rb(teleop):
+    teleop.joy_cb(manual_joy(teleop, start=True))
+    teleop.tick()
+    assert not teleop.active and teleop.lin_cmd == 0.
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    assert not teleop.active
+    teleop.joy_cb(manual_joy(teleop))
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    teleop.tick()
+    assert teleop.active and teleop.lin_cmd > 0.
+
+
+def test_manual_operation_blocks_drive_and_old_released_input_cannot_rearm(teleop):
+    teleop._manual_undock_cb(SimpleNamespace(data=True))
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    teleop.tick()
+    assert not teleop.active and teleop.lin_cmd == 0.
+    old = teleop.now
+    teleop.now += .1
+    teleop._manual_undock_cb(SimpleNamespace(data=False))
+    teleop.joy_cb(manual_joy(teleop, stamp_at=old))
+    teleop.now += .05
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    assert not teleop.active
+    teleop.joy_cb(manual_joy(teleop))
+    teleop.now += .05
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    teleop.tick()
+    assert teleop.active and teleop.lin_cmd > 0.
+
+
 def test_tuning_hold_requires_release_then_a_new_deadman_press(teleop):
     teleop._tuning_hold_cb(SimpleNamespace(data=True))
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))

@@ -28,6 +28,7 @@ from patrolbot_bridge.control_protocol import (
 from patrolbot_bridge.epoch_runtime import EpochRuntime
 from patrolbot_bridge.lidar_state import LidarState
 from patrolbot_bridge.manual_active import manual_drive_bypass
+from patrolbot_bridge.manual_undock import ManualUndockRuntime
 from patrolbot_bridge.odom_covariance import OdomCovariance
 from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
 from patrolbot_bridge.safety_telemetry import (
@@ -357,6 +358,7 @@ class PatrolBotBridge(Node):
             RobotTuning, '/patrolbot/tuning', self._tuning_callback,
             callback_group=self._tuning_requests)
         self._tuning_policy.refresh()
+        self._manual_undock = ManualUndockRuntime(self)
 
         # Publish odom→base_link TF at 50 Hz from the spin thread.
         # This decouples TF from scan delivery — TF entries are always in the
@@ -719,7 +721,11 @@ class PatrolBotBridge(Node):
         with self._epoch.lock:
             if session is None:
                 session = self._epoch.guard.session
-            if not self._epoch.frame_allowed(session, line):
+            allowed = self._epoch.frame_allowed(session, line)
+            manual = getattr(self, '_manual_undock', None)
+            if manual is not None:
+                manual.observe(line, time.monotonic() if received_at is None else received_at, session)
+            if not allowed:
                 return
             self._parse_telemetry_guarded(line, received_at)
 
@@ -1643,7 +1649,7 @@ class PatrolBotBridge(Node):
                 'Hardware undock rejected: this SBC does not advertise ' 'FEATURES=UNDOCK.'
             )
             return GoalResponse.REJECT
-        with self._undock_goal_lock:
+        with self._epoch.lock, self._undock_goal_lock:
             if self._undock_goal_reserved:
                 self.get_logger().error('Hardware undock rejected: another goal is active.')
                 return GoalResponse.REJECT
@@ -2264,6 +2270,9 @@ class PatrolBotBridge(Node):
         return response
 
     def _manual_active_cb(self, msg, info=None):
+        manual = getattr(self, '_manual_undock', None)
+        if manual is not None and not manual.input_is_new(info):
+            return
         observations = getattr(self, '_tuning_observations', None)
         if observations is not None:
             self._tuning_deadman_observed(
@@ -2272,6 +2281,9 @@ class PatrolBotBridge(Node):
             self._manual_active_at = time.monotonic()
 
     def _web_teleop_active_cb(self, msg, info=None):
+        manual = getattr(self, '_manual_undock', None)
+        if manual is not None and not manual.input_is_new(info):
+            return
         observations = getattr(self, '_tuning_observations', None)
         if observations is not None:
             self._tuning_deadman_observed(
@@ -2294,6 +2306,9 @@ class PatrolBotBridge(Node):
                 and 0.0 <= odom_age <= self._odom_tf_timeout
             )
         epoch = self._epoch
+        manual = getattr(self, '_manual_undock', None)
+        if manual is not None:
+            raw_odom_ready = raw_odom_ready or manual.sensors_ready()
         # A settled map (ready or failed) or no map at all allows manual
         # DRIVE; an in-flight transaction or unknown map state does not.
         map_blocked = bool(
@@ -2340,6 +2355,9 @@ class PatrolBotBridge(Node):
             with self._epoch.lock, self.sock_lock:
                 undock_drive = False
                 if msg.linear.x != 0.0 or msg.angular.z != 0.0:
+                    manual_undock = getattr(self, '_manual_undock', None)
+                    if manual_undock is not None and manual_undock.busy:
+                        return
                     if self._undock_turn.busy:
                         if not (self._undock_turn.drive_allowed and pure_angular(msg)):
                             return
@@ -2377,6 +2395,8 @@ class PatrolBotBridge(Node):
     def destroy_node(self):
         if self._workers_stopped:
             return
+        self._stop_event.set()
+        self._manual_undock.destroy()
         self._undock_turn.destroy()
         try:
             self._undock_server.destroy()

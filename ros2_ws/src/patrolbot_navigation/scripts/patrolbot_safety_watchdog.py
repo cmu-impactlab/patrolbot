@@ -24,6 +24,8 @@ from patrolbot_interfaces.msg import BaseState
 from rclpy.qos import qos_profile_sensor_data
 from safety_policy import evaluate_safety, odometry_values_finite
 from sensor_msgs.msg import BatteryState, LaserScan
+from std_msgs.msg import Bool
+from patrolbot_bridge.local_source import LocalSource
 
 
 def undock_turn_owned(message):
@@ -66,6 +68,9 @@ class SafetyWatchdog(Node):
         # Use monotonic-ish ROS clock seconds for age math.
         self._last_scan = None
         self._last_odom = None
+        self._manual_sensor_at = None
+        self._manual_sensor_source = LocalSource('/patrolbot/manual_sensors_ready',
+                                                 'patrolbot_bridge', 'std_msgs/msg/Bool', .25)
         self._invalid_odom_count = 0
         self._last_battery = None
         self._battery_voltage = float('nan')
@@ -84,6 +89,8 @@ class SafetyWatchdog(Node):
         # /scan is BEST_EFFORT (sensor QoS); /odom is RELIABLE (default).
         self.create_subscription(LaserScan, '/scan', self._scan_cb, qos_profile_sensor_data)
         self.create_subscription(Odometry, '/odom', self._odom_cb, 10)
+        self.create_subscription(Bool, '/patrolbot/manual_sensors_ready',
+                                 self._manual_sensors_cb, 10)
         self.create_subscription(
             BatteryState, '/battery', self._battery_cb, 10)
         self.create_subscription(
@@ -106,6 +113,15 @@ class SafetyWatchdog(Node):
 
     def _scan_cb(self, _):
         self._last_scan = self._now()
+
+    def _manual_sensors_cb(self, message, info):
+        # This is actual raw encoder+scanner evidence, never AMCL readiness.
+        # A delayed Bool cannot renew freshness. This is local graph
+        # provenance, not cryptographic DDS authentication (see LocalSource).
+        valid = self._manual_sensor_source.accepts(self, info) and bool(message.data)
+        stamp = (info.get('source_timestamp') if isinstance(info, dict)
+                 else getattr(info, 'source_timestamp', None))
+        self._manual_sensor_at = stamp / 1e9 if valid else None
 
     def _odom_cb(self, message):
         orientation = message.pose.pose.orientation
@@ -149,10 +165,15 @@ class SafetyWatchdog(Node):
 
     def _reasons(self):
         now = self._now()
+        # Raw manual evidence expires after a bounded publishing grace. The bridge
+        # independently checks the original <=0.5 s acquisition/odom limits at
+        # DRIVE forwarding, so this cannot widen them or open autonomy.
+        manual_at = getattr(self, '_manual_sensor_at', None)
+        raw_ready = manual_at is not None and 0 <= now - manual_at <= .25
         return evaluate_safety(
             now=now,
-            scan_at=self._last_scan,
-            odom_at=self._last_odom,
+            scan_at=now if raw_ready else self._last_scan,
+            odom_at=now if raw_ready else self._last_odom,
             battery_at=self._last_battery,
             battery_voltage=self._battery_voltage,
             base_state_at=self._last_base_state,

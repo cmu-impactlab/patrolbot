@@ -7,6 +7,7 @@
 // bad assertion, so one run reports every regression.
 
 #include "../undock.hpp"
+#include "../manual_turn_scan.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -86,6 +87,7 @@ class FakeBase {
         rear_fresh(true),
         rear_near_field_unreliable(false),
         rear_bumper(false),
+        front_bumper(false),
         battery_voltage_override_v(NAN),
         estop(false),
         fault_flags(0),
@@ -94,6 +96,8 @@ class FakeBase {
         motor_enable_count(0),
         motor_disable_count(0),
         commanded_(0.0),
+        angular_command_(0.0),
+        manual_(false),
         charge_zero_at_(-1),
         charge_reassert_at_(-1),
         motor_enable_at_(-1),
@@ -104,6 +108,7 @@ class FakeBase {
     inputs.charge_state = 3;
     inputs.motors_enabled = false;
     inputs.odometer_m = 0.0;
+    inputs.hardware_fresh = inputs.turn_scan_valid = inputs.turn_scan_clear = true;
     refreshDerived();
   }
 
@@ -128,6 +133,7 @@ class FakeBase {
   bool rear_fresh;
   bool rear_near_field_unreliable;
   bool rear_bumper;
+  bool front_bumper;
   double battery_voltage_override_v;
   bool estop;
   unsigned int fault_flags;
@@ -159,7 +165,8 @@ class FakeBase {
     } else {
       inputs.linear = 0.0;
     }
-    inputs.angular = 0.0;
+    inputs.angular = inputs.motors_enabled && !wheels_locked ? angular_command_ : 0.;
+    inputs.enc_yaw_deg += inputs.angular * kTickMs / 1000.0 * 180.0 / M_PI;
 
     if (charge_zero_at_ >= 0 && inputs.now_ms >= charge_zero_at_) {
       inputs.charge_state = 0;
@@ -186,8 +193,10 @@ class FakeBase {
     refreshDerived();
     observer.update(inputs, profile);
     last = controller.step(inputs);
+    if (!manual_) CHECK(last.commanded_angular == 0.);
     applyEffects(last);
     commanded_ = last.commanded_linear;
+    angular_command_ = last.commanded_angular;
     return last;
   }
 
@@ -207,12 +216,14 @@ class FakeBase {
   }
 
   bool start(double clearance, double speed, double timeout, bool validation,
-             int* code, std::string* message) {
+             int* code, std::string* message, bool manual = false) {
     UndockConfig config;
     config.clearance_m = clearance;
     config.speed_mps = speed;
     config.timeout_s = timeout;
     config.validation_mode = validation;
+    config.manual_mode = manual;
+    manual_ = manual;
     return controller.request("11111111-2222-3333-4444-555555555555", config,
                               inputs, profile, &observer, code, message);
   }
@@ -221,6 +232,12 @@ class FakeBase {
     int code = 0;
     std::string message;
     return start(0.53, 0.10, 30.0, false, &code, &message);
+  }
+
+  bool startManual() {
+    int code = 0;
+    std::string message;
+    return start(.53, .10, 45., false, &code, &message, true);
   }
 
  private:
@@ -235,6 +252,7 @@ class FakeBase {
     unsigned int stall = 0;
     if (dock_holds_front_bumper && contactsMated()) stall |= 0x1800;
     if (rear_bumper) stall |= 0x0002;
+    if (front_bumper) stall |= 0x0200;
     if (stalled) stall |= 0x0101;
     inputs.stall_value = stall;
 
@@ -262,7 +280,8 @@ class FakeBase {
           break;
         case EFFECT_ENABLE_MOTORS:
           ++motor_enable_count;
-          if (out.commanded_linear != 0.0) velocity_with_enable_ = true;
+          if (out.commanded_linear != 0.0 || out.commanded_angular != 0.)
+            velocity_with_enable_ = true;
           if (!motor_enable_refused) {
             motor_enable_at_ = inputs.now_ms + motor_enable_latency_ms;
           }
@@ -279,6 +298,8 @@ class FakeBase {
   }
 
   double commanded_;
+  double angular_command_;
+  bool manual_;
   long long charge_zero_at_;
   long long charge_reassert_at_;
   long long motor_enable_at_;
@@ -1413,9 +1434,138 @@ void test_rear_sonar_status_usability() {
   CHECK(!rear.usable());
 }
 
+bool reachManualTurn(FakeBase* base) {
+  for (int i = 0; i < 600; ++i) {
+    const UndockOutputs out = base->tick();
+    if (out.phase == UNDOCK_PHASE_MANUAL_TURN) return true;
+    if (out.finished) return false;
+  }
+  return false;
+}
+
+void test_manual_undock_reverses_then_half_turns_without_nav2() {
+  FakeBase base;
+  settleDocked(&base);
+  CHECK(base.startManual());
+  CHECK(reachManualTurn(&base));
+  CHECK(base.progress() >= .53);
+  double peak = 0.;
+  for (int i = 0; i < 600; ++i) {
+    const UndockOutputs out = base.tick();
+    CHECK(out.commanded_linear == 0.);
+    CHECK(out.commanded_angular >= 0. && out.commanded_angular <= .7);
+    peak = std::fmax(peak, out.commanded_angular);
+    if (out.finished) {
+      CHECK(out.success);
+      CHECK(out.commanded_angular == 0.);
+      break;
+    }
+  }
+  CHECK(base.last.finished && base.last.success);
+  CHECK(peak > 0.);
+  CHECK(std::fabs(base.inputs.enc_yaw_deg - 180.) < 1.);
+  CHECK(base.inputs.motors_enabled);
+  CHECK(base.observer.state() == DOCK_CLEAR_CONFIRMED);
+  CHECK(!base.velocityWithEnable());
+}
+
+void test_manual_recoverable_turn_stops_leave_existing_motors_on() {
+  for (int cause = 0; cause < 4; ++cause) {
+    FakeBase base;
+    settleDocked(&base);
+    CHECK(base.startManual());
+    CHECK(reachManualTurn(&base));
+    base.settle(10);
+    const int enables = base.motor_enable_count;
+    if (cause == 0) base.rear_bumper = true;
+    if (cause == 1) base.front_bumper = true;
+    if (cause == 2) base.inputs.turn_scan_clear = false;
+    if (cause == 3) CHECK(base.controller.cancel("11111111-2222-3333-4444-555555555555"));
+    const UndockOutputs first = base.tick();
+    CHECK(first.commanded_linear == 0. && first.commanded_angular == 0.);
+    const UndockOutputs result = first.finished ? first : base.runToCompletion(100);
+    CHECK(result.finished && !result.success);
+    CHECK(base.inputs.motors_enabled);
+    CHECK(base.motor_enable_count == enables);
+    CHECK(base.observer.state() == DOCK_CLEAR_CONFIRMED);
+  }
+}
+
+void test_manual_faults_disable_without_reenable_and_partial_departure_is_not_clear() {
+  for (int cause = 0; cause < 9; ++cause) {
+    FakeBase base;
+    settleDocked(&base);
+    CHECK(base.startManual());
+    if (cause == 8) {
+      base.settle(20);  // Partial departure is NOT a safe manual handoff.
+      CHECK(base.controller.cancel("11111111-2222-3333-4444-555555555555"));
+    } else {
+      CHECK(reachManualTurn(&base));
+      base.settle(10);
+      if (cause == 0) base.estop = true;
+      if (cause == 1) base.fault_flags = 0x100;
+      if (cause == 2) base.stalled = true;
+      if (cause == 3) base.inputs.hardware_fresh = false;
+      if (cause == 4) { base.inputs.turn_scan_valid = false; base.inputs.turn_scan_clear = false; }
+      if (cause == 5) base.rear_fresh = false;
+      if (cause == 6) base.inputs.enc_yaw_deg += 90.;
+      if (cause == 7) base.wheels_locked = true;
+    }
+    const int enables = base.motor_enable_count;
+    const UndockOutputs result = base.runToCompletion(600);
+    CHECK(result.finished && !result.success);
+    CHECK(!base.inputs.motors_enabled);
+    CHECK(base.motor_enable_count == enables);
+    CHECK(base.observer.state() == DOCK_FAULT_STOPPED);
+    CHECK(result.commanded_angular == 0.);
+  }
+}
+
+void test_manual_scan_guard_keeps_existing_rotation_zone_and_freshness() {
+  std::vector<LocalScanPoint> points(8, LocalScanPoint{1., 0., 1.});
+  CHECK(manualTurnScanClear(points, 500));
+  CHECK(!manualTurnScanClear(points, 501));
+  CHECK(!manualTurnScanClear(points, -1));
+  for (int i = 0; i < 7; ++i) points[i] = LocalScanPoint{.2, .1, .224};
+  CHECK(manualTurnScanClear(points, 0));
+  points[7] = points[0];
+  CHECK(!manualTurnScanClear(points, 0));
+  points[7] = LocalScanPoint{NAN, .1, .2};
+  CHECK(!manualTurnScanValid(points, 0));
+}
+
+void test_manual_reverse_new_bumper_and_deviation_do_not_resume_or_enable() {
+  for (int cause = 0; cause < 4; ++cause) {
+    FakeBase base;
+    settleDocked(&base);
+    CHECK(base.startManual());
+    while (base.controller.active() && base.progress() < (cause == 0 ? .05 : .3))
+      base.tick();
+    const int enables = base.motor_enable_count;
+    if (cause == 0) base.front_bumper = true;  // New side panel, dock panels still held.
+    if (cause == 1) base.inputs.enc_y_mm += 70.;
+    if (cause == 2) base.inputs.enc_yaw_deg += 20.;
+    if (cause == 3) base.inputs.motors_enabled = false;
+    const UndockOutputs result = base.runToCompletion(100);
+    CHECK(result.finished && !result.success);
+    CHECK(!base.inputs.motors_enabled);
+    CHECK(base.motor_enable_count == enables);
+    CHECK(base.observer.state() == DOCK_FAULT_STOPPED);
+  }
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  RUN(test_manual_undock_reverses_then_half_turns_without_nav2);
+  RUN(test_manual_recoverable_turn_stops_leave_existing_motors_on);
+  RUN(test_manual_faults_disable_without_reenable_and_partial_departure_is_not_clear);
+  RUN(test_manual_scan_guard_keeps_existing_rotation_zone_and_freshness);
+  RUN(test_manual_reverse_new_bumper_and_deviation_do_not_resume_or_enable);
+  if (argc == 2 && std::string(argv[1]) == "--manual-only") {
+    std::fprintf(stderr, "manual_undock: %d checks, %d failures\n", g_checks, g_failures);
+    return g_failures ? 1 : 0;
+  }
   RUN(test_normal_undock_succeeds_with_motors_left_enabled);
   RUN(test_charge_reassert_with_healthy_motion_does_not_stop);
   RUN(test_repeated_charge_reassert_respects_resend_rate_limit);

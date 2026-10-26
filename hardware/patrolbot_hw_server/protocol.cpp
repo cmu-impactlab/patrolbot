@@ -66,7 +66,7 @@ std::string fixed4(double value) {
 
 ParsedCommand::ParsedCommand()
     : type(COMMAND_INVALID), linear(0.0), angular(0.0), clearance_m(0.0),
-      speed_mps(0.0), timeout_s(0.0), validation_mode(false) {}
+      speed_mps(0.0), timeout_s(0.0), validation_mode(false), manual_mode(false) {}
 
 LineBuffer::LineBuffer(std::size_t maximum_size)
     : maximum_size_(maximum_size) {}
@@ -222,7 +222,7 @@ ParsedCommand parseCommand(const std::string& line) {
     command.request_id = fields[1];
     return command;
   }
-  if (fields.size() == 6 && fields[0] == "UNDOCK") {
+  if (fields.size() == 6 && (fields[0] == "UNDOCK" || fields[0] == "MANUAL_UNDOCK")) {
     if (!isCanonicalUuid(fields[1])) {
       command.error = "request ID is not a canonical UUID";
       return command;
@@ -238,6 +238,11 @@ ParsedCommand parseCommand(const std::string& line) {
       return command;
     }
     command.validation_mode = fields[5] == "1";
+    command.manual_mode = fields[0] == "MANUAL_UNDOCK";
+    if (command.manual_mode && command.validation_mode) {
+      command.error = "manual undock cannot use validation mode";
+      return command;
+    }
     command.type = COMMAND_UNDOCK;
     command.request_id = fields[1];
     return command;
@@ -274,6 +279,15 @@ DriveDisposition classifyDrive(double linear, double angular,
   // that is refused however its charge state happens to read.
   if (dock_state != DOCK_CLEAR_CONFIRMED) return DRIVE_REJECTED;
   return DRIVE_ALLOWED_NORMAL;
+}
+
+bool bumperBlocksDrive(double linear, double angular, unsigned int stall_value,
+                       const UndockHardwareProfile& profile) {
+  if (!profile.bumper_mapping_valid) return false;
+  const bool front = (stall_value & profile.front_bumper_mask) != 0;
+  const bool rear = (stall_value & profile.rear_bumper_mask) != 0;
+  return (front && (linear > 0.0 || angular != 0.0)) ||
+         (rear && (linear < 0.0 || angular != 0.0));
 }
 
 bool motorEnableAllowed(DockPhysicalState /*dock_state*/, bool estop_pressed,
@@ -361,7 +375,7 @@ std::string formatHello(const std::string& odom_epoch) {
     throw std::invalid_argument("invalid odometry epoch UUID");
   }
   std::stringstream stream;
-  stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE";
+  stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1";
   if (!odom_epoch.empty()) stream << ":ODOM_EPOCH=" << odom_epoch;
   stream << "\n";
   return stream.str();

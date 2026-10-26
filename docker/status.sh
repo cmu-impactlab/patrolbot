@@ -398,7 +398,7 @@ else
     "${bumper_enforcement:-unavailable}"
 fi
 
-if docker exec patrolbot-navigation test -e /dev/input/js0 2>/dev/null; then
+if docker exec patrolbot-bringup test -e /dev/input/js0 2>/dev/null; then
   if topic_is_fresh /joy; then
     printf '  %-24s receiver present; /joy fresh\n' "manual control"
     record_check pi topic.joy pass "receiver present and fresh"

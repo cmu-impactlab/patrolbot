@@ -1,4 +1,5 @@
 <launch>
     <include file="$(find-pkg-share patrolbot-launch)/launch/mobile_base.xml"/>
     <include file="$(find-pkg-share patrolbot-launch)/launch/smoother.xml"/>
+    <include file="$(find-pkg-share patrolbot_navigation)/launch/manual_control.launch.py"/>
 </launch>

@@ -14,9 +14,9 @@
 //   DockObserver     persistent; decides whether the robot may be driven at all.
 //   UndockController bounded; owns motion for the duration of one UNDOCK request.
 //
-// The SBC never commands angular velocity. There is no turn phase and no
-// commanded_angular field: the collision-aware turn away from the dock stays in
-// Nav2, executed after this controller hands authority back.
+// Normal UNDOCK never rotates: its turn remains in Nav2. The explicit,
+// capability-gated MANUAL_UNDOCK variant additionally owns a fixed, bounded
+// encoder-based half-turn with local sensor supervision, independent of Nav2.
 
 #include <string>
 #include <vector>
@@ -63,7 +63,10 @@ enum UndockPhase {
   UNDOCK_PHASE_BACKING_OUT,
   UNDOCK_PHASE_VERIFYING_CLEARANCE,
   UNDOCK_PHASE_HANDOFF_READY,
-  UNDOCK_PHASE_STOPPING
+  UNDOCK_PHASE_STOPPING,
+  // Append: existing numeric wire phases must not change.
+  UNDOCK_PHASE_MANUAL_TURN,
+  UNDOCK_PHASE_MANUAL_SETTLING
 };
 
 inline const char* undockPhaseName(UndockPhase phase) {
@@ -75,6 +78,8 @@ inline const char* undockPhaseName(UndockPhase phase) {
     case UNDOCK_PHASE_VERIFYING_CLEARANCE: return "VERIFYING_CLEARANCE";
     case UNDOCK_PHASE_HANDOFF_READY:       return "HANDOFF_READY";
     case UNDOCK_PHASE_STOPPING:            return "STOPPING";
+    case UNDOCK_PHASE_MANUAL_TURN:         return "MANUAL_TURN";
+    case UNDOCK_PHASE_MANUAL_SETTLING:     return "MANUAL_SETTLING";
     default:                               return "IDLE";
   }
 }
@@ -231,6 +236,7 @@ struct UndockConfig {
   // against an uncommissioned profile, so the commissioning session itself can
   // exercise it.
   bool validation_mode;
+  bool manual_mode;
 };
 
 // ---------------------------------------------------------------------------
@@ -264,6 +270,12 @@ struct UndockInputs {
   double linear;   // m/s, reported
   double angular;  // rad/s, reported
 
+  // Required only by MANUAL_UNDOCK. Never substitute receipt of TCP AUX for
+  // a fresh base packet or an actually clear laser rotation zone.
+  bool hardware_fresh;
+  bool turn_scan_valid;
+  bool turn_scan_clear;
+
   RearSonarStatus rear;
 };
 
@@ -296,9 +308,9 @@ const unsigned int kMaxEffectsPerStep = 2;
 struct UndockOutputs {
   UndockOutputs();
 
-  // Commanded reverse velocity in m/s, always <= 0. There is no angular field:
-  // the SBC never rotates.
+  // Normal UNDOCK has angular == 0 throughout. Only MANUAL_UNDOCK may rotate.
   double commanded_linear;
+  double commanded_angular;
 
   // Edge-triggered. The caller applies effects[0..effect_count) exactly once for
   // each new effect_seq and never re-applies a sequence it has already seen, so a
@@ -422,6 +434,7 @@ class UndockController {
   void captureGuardPose(const UndockInputs& inputs);
   void computeProgress(const UndockInputs& inputs, UndockOutputs* out) const;
   bool safetyTripped(const UndockInputs& inputs, UndockOutputs* out);
+  bool manualRecoverySafe(const UndockInputs& inputs) const;
   void runPhase(const UndockInputs& inputs, UndockOutputs* out);
 
   bool active_;
@@ -465,6 +478,17 @@ class UndockController {
   long long motion_reference_ms_;
 
   int stationary_cycles_;
+  bool manual_clear_;
+  unsigned int front_ignored_bits_;
+  double turn_last_yaw_;
+  double turn_radians_;
+  double turn_speed_;
+  double turn_x_mm_;
+  double turn_y_mm_;
+  long long turn_started_ms_;
+  long long turn_last_ms_;
+  long long turn_motion_ms_;
+  double turn_motion_radians_;
 };
 
 }  // namespace patrolbot

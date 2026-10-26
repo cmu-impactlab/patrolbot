@@ -226,6 +226,17 @@ void test_line_buffer_reassembles_fragments() {
 }
 
 void test_control_frame_formatting() {
+  UndockHardwareProfile bumpers;
+  bumpers.bumper_mapping_valid = true;
+  bumpers.front_bumper_mask = 0x7e00;
+  bumpers.rear_bumper_mask = 0x007e;
+  CHECK(bumperBlocksDrive(.05, 0., 0x0200, bumpers));
+  CHECK(!bumperBlocksDrive(-.05, 0., 0x0200, bumpers));
+  CHECK(bumperBlocksDrive(-.05, 0., 0x0002, bumpers));
+  CHECK(!bumperBlocksDrive(.05, 0., 0x0002, bumpers));
+  CHECK(bumperBlocksDrive(0., .1, 0x0200, bumpers));
+  CHECK(bumperBlocksDrive(0., -.1, 0x0002, bumpers));
+  CHECK(!bumperBlocksDrive(0., 0., 0x7e7e, bumpers));
   CHECK(formatAck(COMMAND_MOTOR_ENABLE, kId, true) ==
         "ACK:MOTOR_ENABLE:" + kId + ":REPLAYED\n");
   CHECK(formatAck(COMMAND_UNDOCK, kId, false) ==
@@ -233,9 +244,13 @@ void test_control_frame_formatting() {
   CHECK(formatResult(COMMAND_CHARGE_RELEASE, kId, true, 0, "charge released", 0,
                      false, false) ==
         "RESULT:CHARGE_RELEASE:" + kId + ":OK:0:charge_released:0:0:0\n");
-  CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE\n");
+  CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1\n");
   CHECK(formatHello(kId) ==
-        "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE:ODOM_EPOCH=" + kId + "\n");
+        "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1:ODOM_EPOCH=" + kId + "\n");
+  const ParsedCommand manual = parseCommand("MANUAL_UNDOCK:" + kId + ":.53:.1:45:0");
+  CHECK(manual.type == COMMAND_UNDOCK && manual.manual_mode && !manual.validation_mode);
+  CHECK(parseCommand("UNDOCK:" + kId + ":.53:.1:45:0").manual_mode == false);
+  CHECK(parseCommand("MANUAL_UNDOCK:" + kId + ":.53:.1:45:1").type == COMMAND_INVALID);
   bool rejected = false;
   try { formatHello("bad:ODOM_EPOCH=injection"); }
   catch (const std::invalid_argument&) { rejected = true; }

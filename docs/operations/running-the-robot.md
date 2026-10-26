@@ -105,6 +105,10 @@ operation's job, not this one's.
 
 ## Undocking
 
+The controller Start-button, localization-independent variant is documented in
+[Controller manual undocking](controller-undocking.md). It is separate from the
+dashboard operation below and requires a matched, reviewed release before use.
+
 Contact separation is an exclusive SBC-owned operation exposed as an action:
 
 | Interface | Server | Purpose |

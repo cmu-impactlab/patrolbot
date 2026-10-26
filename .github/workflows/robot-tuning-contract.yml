@@ -72,7 +72,12 @@ jobs:
             ros2_ws/src/patrolbot_bridge/test/test_web_teleop_contract.py \
             ros2_ws/src/patrolbot_bridge/test/test_manual_active.py \
             ros2_ws/src/patrolbot_bridge/test/test_manual_drive_forwarding.py \
+            ros2_ws/src/patrolbot_bridge/test/test_local_source.py \
+            ros2_ws/src/patrolbot_bridge/test/test_manual_telemetry.py \
+            ros2_ws/src/patrolbot_bridge/test/test_manual_undock_policy.py \
+            ros2_ws/src/patrolbot_bridge/test/test_manual_undock_runtime.py \
             ros2_ws/src/patrolbot_navigation/test/test_joy_teleop_runtime.py \
+            ros2_ws/src/patrolbot_navigation/test/test_manual_sensor_watchdog.py \
             ros2_ws/src/patrolbot_navigation/test/test_joystick_policy.py \
             ros2_ws/src/patrolbot_navigation/test/test_safety_policy.py \
             ros2_ws/src/patrolbot_navigation/test/test_controller_feedback_policy.py \
@@ -80,3 +85,10 @@ jobs:
             ros2_ws/src/patrolbot_navigation/test/test_physical_calibration.py \
             ros2_ws/src/patrolbot_navigation/test/test_safety_contract.py \
             -q -p no:cacheprovider
+
+      - name: Run offline controller-undock hardware checks
+        working-directory: hardware/patrolbot_hw_server
+        run: |
+          make tests/protocol_test tests/undock_test
+          ./tests/protocol_test
+          ./tests/undock_test --manual-only

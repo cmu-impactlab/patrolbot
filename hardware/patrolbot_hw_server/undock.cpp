@@ -94,7 +94,7 @@ bool UndockHardwareProfile::commissioned() const {
 
 UndockConfig::UndockConfig()
     : clearance_m(0.0), speed_mps(0.0), timeout_s(0.0),
-      validation_mode(false) {}
+       validation_mode(false), manual_mode(false) {}
 
 UndockInputs::UndockInputs()
     : now_ms(0), charge_state(-1), battery_voltage_v(0.0),
@@ -102,10 +102,11 @@ UndockInputs::UndockInputs()
       // Fail closed: a snapshot that was never populated must not read as safe.
       estop_pressed(true), fault_flags(0), stall_value(0),
       enc_x_mm(0.0), enc_y_mm(0.0), enc_yaw_deg(0.0), odometer_m(0.0),
-      linear(0.0), angular(0.0) {}
+       linear(0.0), angular(0.0), hardware_fresh(false), turn_scan_valid(false),
+       turn_scan_clear(false) {}
 
 UndockOutputs::UndockOutputs()
-    : commanded_linear(0.0), effect_count(0), effect_seq(0),
+    : commanded_linear(0.0), commanded_angular(0.0), effect_count(0), effect_seq(0),
       phase(UNDOCK_PHASE_IDLE), phase_changed(false), active(false),
       finished(false), success(false), code(UNDOCK_OK),
       reverse_progress_m(0.0), lateral_error_m(0.0), heading_error_rad(0.0),
@@ -362,7 +363,16 @@ bool UndockController::request(const std::string& request_id,
     const double max_speed = config.validation_mode
                                  ? profile.validation_max_speed_mps
                                  : profile.max_speed_mps;
-    if (!(config.clearance_m > 0.0) || config.clearance_m > max_clearance) {
+    if (config.manual_mode && (config.validation_mode ||
+        std::fabs(config.clearance_m - 0.53) > 1e-6 ||
+        std::fabs(config.speed_mps - 0.10) > 1e-6 ||
+        std::fabs(config.timeout_s - 45.0) > 1e-6)) {
+      local_code = UNDOCK_INVALID_REQUEST;
+      local_message = "manual_undock_requires_fixed_profile";
+    } else if (config.manual_mode && !inputs.hardware_fresh) {
+      local_code = UNDOCK_PRECONDITION_FAILED;
+      local_message = "manual_undock_requires_fresh_commissioned_hardware";
+    } else if (!(config.clearance_m > 0.0) || config.clearance_m > max_clearance) {
       local_code = UNDOCK_INVALID_REQUEST;
       local_message = "clearance_out_of_range";
     } else if (!(config.speed_mps > 0.0) || config.speed_mps > max_speed) {
@@ -437,6 +447,9 @@ bool UndockController::request(const std::string& request_id,
   guard_captured_ = false;
   effective_clearance_m_ = config_.clearance_m;
   stationary_cycles_ = 0;
+  manual_clear_ = false;
+  front_ignored_bits_ = inputs.stall_value & profile_.front_bumper_mask;
+  turn_radians_ = turn_speed_ = 0.0;
   observer_->beginDeparture(inputs);
 
   if (code != NULL) *code = UNDOCK_OK;
@@ -573,10 +586,6 @@ bool UndockController::safetyTripped(const UndockInputs& inputs,
                                      UndockOutputs* out) {
   (void)out;
   if (phase_ == UNDOCK_PHASE_STOPPING) return false;
-  if (cancel_requested_) {
-    beginStopping(UNDOCK_CANCELED, "canceled", inputs.now_ms);
-    return true;
-  }
   if (inputs.estop_pressed) {
     beginStopping(UNDOCK_SAFETY_FAULT, "estop_asserted", inputs.now_ms);
     return true;
@@ -586,13 +595,34 @@ bool UndockController::safetyTripped(const UndockInputs& inputs,
                   inputs.now_ms);
     return true;
   }
+  if (config_.manual_mode && (!inputs.hardware_fresh ||
+      !std::isfinite(inputs.enc_x_mm) || !std::isfinite(inputs.enc_y_mm) ||
+      !std::isfinite(inputs.enc_yaw_deg) || !std::isfinite(inputs.linear) ||
+      !std::isfinite(inputs.angular))) {
+    beginStopping(UNDOCK_SAFETY_FAULT, "stale_or_invalid_hardware", inputs.now_ms);
+    return true;
+  }
+  if (cancel_requested_) {
+    beginStopping(UNDOCK_CANCELED, "canceled", inputs.now_ms);
+    return true;
+  }
+  // Grandfather only individual panels already held by the dock, and only
+  // until each releases. A newly pressed panel must stop even before all of
+  // the initial dock-held panels have released.
+  front_ignored_bits_ &= inputs.stall_value;
+  if (config_.manual_mode &&
+      (inputs.stall_value & profile_.front_bumper_mask & ~front_ignored_bits_)) {
+    beginStopping(UNDOCK_SAFETY_FAULT, "front_bumper_pressed", inputs.now_ms);
+    return true;
+  }
   if (rearBumperPressed(inputs, profile_)) {
     beginStopping(UNDOCK_SAFETY_FAULT, "rear_bumper_pressed", inputs.now_ms);
     return true;
   }
   // A wheel stall while reversing is a hard stop, never a release retry: it is
   // a different failure from the controller re-latching the charger.
-  if (phase_ == UNDOCK_PHASE_BACKING_OUT && wheelStalled(inputs)) {
+  if ((phase_ == UNDOCK_PHASE_BACKING_OUT ||
+       phase_ == UNDOCK_PHASE_MANUAL_TURN) && wheelStalled(inputs)) {
     beginStopping(UNDOCK_SAFETY_FAULT, "wheel_stall", inputs.now_ms);
     return true;
   }
@@ -604,9 +634,24 @@ bool UndockController::safetyTripped(const UndockInputs& inputs,
   return false;
 }
 
+bool UndockController::manualRecoverySafe(const UndockInputs& inputs) const {
+  // Never call enableMotors here. Incomplete physical separation, unknown
+  // hardware, stalled wheels and fatal faults keep the original motors-off path.
+  const bool recoverable = stop_code_ == UNDOCK_CANCELED ||
+      (stop_code_ == UNDOCK_SENSOR_BLOCKED && inputs.rear.usable()) ||
+      stop_message_ == "rear_bumper_pressed" || stop_message_ == "front_bumper_pressed";
+  return config_.manual_mode && manual_clear_ && recoverable &&
+      inputs.hardware_fresh && inputs.turn_scan_valid && inputs.motors_enabled && !inputs.estop_pressed &&
+      !(inputs.fault_flags & profile_.critical_fault_mask) && !wheelStalled(inputs) &&
+      std::isfinite(inputs.linear) && std::isfinite(inputs.angular) &&
+      std::isfinite(inputs.battery_voltage_v) &&
+      inputs.battery_voltage_v < profile_.redock_min_voltage_v;
+}
+
 void UndockController::runPhase(const UndockInputs& inputs,
                                 UndockOutputs* out) {
   out->commanded_linear = 0.0;
+  out->commanded_angular = 0.0;
   const long long now = inputs.now_ms;
 
   switch (phase_) {
@@ -665,7 +710,11 @@ void UndockController::runPhase(const UndockInputs& inputs,
         resetMotionReference(inputs);
         enterPhase(UNDOCK_PHASE_BACKING_OUT, now);
       } else if (now - phase_entered_ms_ > kPhaseAckTimeoutMs) {
-        enterRecovery(UNDOCK_MOTOR_STATE_FAILED, "motors_not_enabled", now);
+        if (config_.manual_mode) {
+          beginStopping(UNDOCK_MOTOR_STATE_FAILED, "motors_not_enabled", now);
+        } else {
+          enterRecovery(UNDOCK_MOTOR_STATE_FAILED, "motors_not_enabled", now);
+        }
       }
       break;
     }
@@ -673,16 +722,22 @@ void UndockController::runPhase(const UndockInputs& inputs,
     case UNDOCK_PHASE_BACKING_OUT: {
       // Motion actually interrupted: stop, release, enable, resume.
       if (!inputs.motors_enabled) {
-        enterRecovery(UNDOCK_RELEASE_FAILED, "motors_disabled_while_reversing",
-                      now);
+        if (config_.manual_mode) {
+          beginStopping(UNDOCK_MOTOR_STATE_FAILED, "motors_disabled_while_reversing", now);
+        } else {
+          enterRecovery(UNDOCK_RELEASE_FAILED, "motors_disabled_while_reversing", now);
+        }
         break;
       }
       if (inputs.odometer_m - motion_reference_odometer_m_ >=
           profile_.min_motion_m) {
         resetMotionReference(inputs);
       } else if (now - motion_reference_ms_ > profile_.motion_check_ms) {
-        enterRecovery(UNDOCK_MOTION_FAILED, "no_motion_after_reverse_command",
-                      now);
+        if (config_.manual_mode) {
+          beginStopping(UNDOCK_MOTION_FAILED, "no_motion_after_reverse_command", now);
+        } else {
+          enterRecovery(UNDOCK_MOTION_FAILED, "no_motion_after_reverse_command", now);
+        }
         break;
       }
 
@@ -700,6 +755,12 @@ void UndockController::runPhase(const UndockInputs& inputs,
           out->reverse_progress_m >= profile_.pose_guard_start_m) {
         captureGuardPose(inputs);
         computeProgress(inputs, out);
+      }
+      if (config_.manual_mode && guard_captured_ &&
+          (out->lateral_error_m > profile_.max_lateral_drift_m ||
+           out->heading_error_rad > profile_.max_departure_yaw_rad)) {
+        beginStopping(UNDOCK_MOTION_FAILED, "manual_reverse_deviation", now);
+        break;
       }
       if (out->reverse_progress_m < -kForwardMotionToleranceM) {
         beginStopping(UNDOCK_MOTION_FAILED, "forward_motion_detected", now);
@@ -763,7 +824,96 @@ void UndockController::runPhase(const UndockInputs& inputs,
       }
       stationary_cycles_ = 0;
       handoff_enable_issued_ = false;
-      enterPhase(UNDOCK_PHASE_HANDOFF_READY, now);
+      if (config_.manual_mode) {
+        // Full measured reverse and cleared contact, NOT charge_state alone,
+        // prove separation. The exclusive operation still owns all motion.
+        observer_->confirmClear(inputs);
+        manual_clear_ = true;
+        turn_last_yaw_ = inputs.enc_yaw_deg * M_PI / 180.0;
+        turn_radians_ = turn_speed_ = turn_motion_radians_ = 0.0;
+        turn_x_mm_ = inputs.enc_x_mm;
+        turn_y_mm_ = inputs.enc_y_mm;
+        turn_started_ms_ = turn_last_ms_ = turn_motion_ms_ = now;
+        enterPhase(UNDOCK_PHASE_MANUAL_TURN, now);
+      } else {
+        enterPhase(UNDOCK_PHASE_HANDOFF_READY, now);
+      }
+      break;
+    }
+
+    case UNDOCK_PHASE_MANUAL_TURN: {
+      if (observer_->state() != DOCK_CLEAR_CONFIRMED ||
+          !std::isfinite(inputs.battery_voltage_v) ||
+          inputs.battery_voltage_v >= profile_.redock_min_voltage_v) {
+        beginStopping(UNDOCK_SAFETY_FAULT, "physical_clearance_lost", now);
+        break;
+      }
+      if (!inputs.motors_enabled) {
+        beginStopping(UNDOCK_MOTOR_STATE_FAILED, "motors_disabled_during_turn", now);
+        break;
+      }
+      if (!inputs.rear.usable() || !inputs.turn_scan_valid || !inputs.turn_scan_clear ||
+          inputs.rear.minimum_obstacle_range_m < profile_.rear_stop_range_m) {
+        beginStopping(UNDOCK_SENSOR_BLOCKED, "turn_path_blocked", now);
+        break;
+      }
+      const double yaw = inputs.enc_yaw_deg * M_PI / 180.0;
+      const double delta = wrapToPi(yaw - turn_last_yaw_);
+      const double dt = (now - turn_last_ms_) / 1000.0;
+      if (dt < 0 || dt > profile_.lease_max_age_ms / 1000.0 ||
+          std::fabs(delta) > 0.70 * dt + 0.05 || delta < -0.01 ||
+          std::hypot(inputs.enc_x_mm - turn_x_mm_, inputs.enc_y_mm - turn_y_mm_) /
+              1000.0 > profile_.max_lateral_drift_m) {
+        beginStopping(UNDOCK_MOTION_FAILED, "invalid_turn_odometry", now);
+        break;
+      }
+      turn_radians_ += delta;
+      turn_last_yaw_ = yaw;
+      turn_last_ms_ = now;
+      if (turn_radians_ - turn_motion_radians_ >= 0.01) {
+        turn_motion_ms_ = now;
+        turn_motion_radians_ = turn_radians_;
+      }
+      if (now - turn_started_ms_ > 20000 ||
+          now - turn_motion_ms_ > profile_.motion_check_ms) {
+        beginStopping(UNDOCK_MOTION_FAILED, "turn_timeout_or_no_motion", now);
+        break;
+      }
+      const double remaining = M_PI - turn_radians_;
+      if (remaining <= 0.01) {
+        enterPhase(UNDOCK_PHASE_MANUAL_SETTLING, now);
+        stationary_cycles_ = 0;
+        break;
+      }
+      // Same maximum speed and final-stage acceleration/deceleration limits
+      // as behavior_server + smoother.yaml. Brake from measured remaining yaw.
+      turn_speed_ = std::fmin(0.70, std::fmin(turn_speed_ + 1.5 * dt,
+                                            std::sqrt(2.0 * 2.0 * remaining)));
+      out->commanded_angular = turn_speed_;
+      break;
+    }
+
+    case UNDOCK_PHASE_MANUAL_SETTLING: {
+      if (observer_->state() != DOCK_CLEAR_CONFIRMED ||
+          !std::isfinite(inputs.battery_voltage_v) ||
+          inputs.battery_voltage_v >= profile_.redock_min_voltage_v) {
+        beginStopping(UNDOCK_SAFETY_FAULT, "physical_clearance_lost", now);
+        break;
+      }
+      if (!inputs.motors_enabled) {
+        beginStopping(UNDOCK_MOTOR_STATE_FAILED, "motors_disabled_after_turn", now);
+      } else if (stationary(inputs)) {
+        if (++stationary_cycles_ >= kHandoffStationaryCycles) {
+          out->finished = out->success = true;
+          out->code = UNDOCK_OK;
+          out->message = "manual_undock_complete";
+          active_ = lease_set_ = false;
+        }
+      } else if (now - phase_entered_ms_ > kPhaseAckTimeoutMs) {
+        beginStopping(UNDOCK_MOTION_FAILED, "did_not_stop_after_turn", now);
+      } else {
+        stationary_cycles_ = 0;
+      }
       break;
     }
 
@@ -803,6 +953,17 @@ void UndockController::runPhase(const UndockInputs& inputs,
     }
 
     case UNDOCK_PHASE_STOPPING: {
+      if (!stop_disable_issued_ && manualRecoverySafe(inputs)) {
+        if (stationary(inputs)) {
+          out->finished = true;
+          out->success = false;
+          out->code = stop_code_;
+          out->message = stop_message_;
+          active_ = lease_set_ = false;
+          break;
+        }
+        if (now - phase_entered_ms_ <= kPhaseAckTimeoutMs) break;
+      }
       if (!stop_disable_issued_) {
         queueEffect(out, EFFECT_DISABLE_MOTORS);
         stop_disable_issued_ = true;

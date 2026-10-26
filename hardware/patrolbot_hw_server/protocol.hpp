@@ -62,6 +62,8 @@ struct ParsedCommand {
   double speed_mps;
   double timeout_s;
   bool validation_mode;
+  // Separate, capability-gated local-controller operation; normal UNDOCK is unchanged.
+  bool manual_mode;
   std::string error;
 };
 
@@ -114,7 +116,12 @@ DriveDisposition classifyDrive(double linear, double angular,
                                bool motors_enabled, bool estop_pressed,
                                unsigned int fault_flags,
                                unsigned int critical_fault_mask,
-                               bool undock_active, bool lidar_ready);
+                                bool undock_active, bool lidar_ready);
+
+// A confirmed manual recovery may keep motors live with a bumper pressed.
+// Allow escape only away from the pressed group; rotation contacts both arcs.
+bool bumperBlocksDrive(double linear, double angular, unsigned int stall_value,
+                       const UndockHardwareProfile& profile);
 
 // MOTOR_ENABLE never releases charging or authorizes movement.
 bool motorEnableAllowed(DockPhysicalState dock_state, bool estop_pressed,

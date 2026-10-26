@@ -13,15 +13,15 @@ EXPECTED_PROCESSES = {
         "twist_mux/twist_mux",
         "nav2_velocity_smoother/velocity_smoother",
         "lifecycle_mgr.py",
+        "joy/joy_node",
+        "patrolbot_joy_teleop.py",
+        "patrolbot_safety_watchdog.py",
     ),
     "bridge": (
         "patrolbot_bridge/bridge_node",
     ),
     "navigation": (
         "component_container_isolated",
-        "joy/joy_node",
-        "patrolbot_joy_teleop.py",
-        "patrolbot_safety_watchdog.py",
         "static_transform_publisher",
     ),
 }

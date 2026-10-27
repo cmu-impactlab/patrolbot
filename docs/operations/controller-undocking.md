@@ -88,7 +88,51 @@ This needs a **matched SBC server and Pi image/launch/Compose update**. A bridge
 connected to an older SBC refuses Start rather than falling back to a less guarded
 command. Update/recreate roles together to avoid duplicate `joy_node` publishers;
 an old navigation container plus new bringup would be an invalid mixed deployment.
-There is no new ROS message/action definition or dashboard protocol change.
+The initial Start implementation did not change ROS message/action definitions
+or the dashboard protocol; the fault-recovery follow-up below does.
+
+### Fault-recovery follow-up (2026-10-27, not deployed)
+
+The supervised attempt recognized Start, reversed approximately 0.559 m, then
+stopped with `turn_path_blocked`; it did **not** complete the half-turn. A fresh
+rear sonar return of 0.168 m was subsequently observed inside the commissioned
+0.20 m near-field floor. The operator later manually returned the robot to its
+charger. The earlier clearance evidence must not be reused for its new position.
+
+The follow-up regression distinguishes fresh, finite, positive near-field readings
+from missing/stale rear evidence **only for terminal handoff after proven full
+separation**. It does not treat the reading as clear, permit the automatic turn,
+add a special directional-escape mode, relax normal manual-drive safeguards, or
+enable disabled motors. A recoverable stopped operation retains existing motor
+power and the normal controller/dashboard manual-control path. E-stop, critical
+faults, stalls, stale evidence and incomplete separation retain fail-safe handling.
+
+This follow-up **does change `BaseState.msg`**: it adds
+`operation_fault_reason`, `operation_fault_request_id` and
+`operation_outcome_unknown`. Failed correlated undock results remain visible until
+explicit recovery acknowledges them. A companion dashboard branch adds a persistent
+fault banner, reason details and operator-confirmed `dock_reset` command using the
+existing zero-motion `/patrolbot/dock_reset` service. Update every interface consumer
+together; do not mix the old generated interface with the new publishers.
+
+Recovery requires fresh stationary hardware, ready scanner, released manual input,
+and no active/unknown operation, tuning or lifecycle owner. The dashboard uses
+session-bound raw measured motion, **not an AMCL/map pose**, for its stationary
+check. The robot repeats the hardware checks. Recovery never enables motors,
+restarts the maneuver, restores an old localization seed or resumes an old goal.
+It can acknowledge an already-clear/docked recoverable operation without changing
+physical state, or reset `FAULT_STOPPED` to observation. Docked is subsequently
+established from sustained physical charging evidence; reset does not fabricate it.
+
+No follow-up deployment or physical acceptance is claimed here. Require fresh
+stationary, motors-off/E-stop evidence and coordinated interface builds before
+deployment, then separately supervise the real undock/manual-handoff acceptance.
+
+Local follow-up verification: 1,511 focused manual-controller C++ assertions and
+116 protocol assertions pass; 142 isolated native ROS/loopback and recovery checks
+pass. The four affected ROS packages build with the additive message fields. The
+full C++ run still has the same six previously documented assertions failing in
+the lateral-drift and post-release-yaw tests; it is not a fully passing suite.
 
 Local ROS graph provenance checks require a stable sole expected publisher and
 fresh source timestamps. Jazzy dictionary metadata is supported; newer per-sample

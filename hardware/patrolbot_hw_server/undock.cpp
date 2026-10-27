@@ -45,6 +45,11 @@ bool RearSonarStatus::usable() const {
   return configured && all_required_sensors_fresh && !near_field_unreliable;
 }
 
+bool RearSonarStatus::freshForRecovery() const {
+  return configured && all_required_sensors_fresh &&
+      std::isfinite(minimum_obstacle_range_m) && minimum_obstacle_range_m > 0.0;
+}
+
 UndockHardwareProfile::UndockHardwareProfile()
     // Every physically validated fact starts false. A production undock is
     // refused until a commissioning file supplies real values.
@@ -275,8 +280,27 @@ void DockObserver::faultStop() {
 bool DockObserver::reset(const UndockInputs& inputs,
                          const UndockHardwareProfile& profile,
                          std::string* error) {
+  if (!inputs.hardware_fresh || !std::isfinite(inputs.linear) ||
+      !std::isfinite(inputs.angular) || !std::isfinite(inputs.enc_x_mm) ||
+      !std::isfinite(inputs.enc_y_mm) || !std::isfinite(inputs.enc_yaw_deg) ||
+      !std::isfinite(inputs.battery_voltage_v) || inputs.charge_state < 0 ||
+      !profile.commissioned() || !inputs.rear.freshForRecovery()) {
+    if (error != NULL) *error = "hardware_state_invalid_or_stale";
+    return false;
+  }
+  if (wheelStalled(inputs)) {
+    if (error != NULL) *error = "wheel_stall";
+    return false;
+  }
   if (state_ != DOCK_FAULT_STOPPED) {
-    if (error != NULL) *error = "not_faulted";
+    // Acknowledge an already-recovered operation without altering physical state.
+    if ((state_ == DOCK_CLEAR_CONFIRMED || state_ == DOCK_DOCKED_CONFIRMED) &&
+        !inputs.estop_pressed && stationary(inputs) &&
+        !(inputs.fault_flags & profile.precheck_blocking_fault_mask)) {
+      if (error != NULL) error->clear();
+      return true;
+    }
+    if (error != NULL) *error = "not_faulted_or_not_safe";
     return false;
   }
   if (inputs.estop_pressed) {
@@ -638,9 +662,10 @@ bool UndockController::manualRecoverySafe(const UndockInputs& inputs) const {
   // Never call enableMotors here. Incomplete physical separation, unknown
   // hardware, stalled wheels and fatal faults keep the original motors-off path.
   const bool recoverable = stop_code_ == UNDOCK_CANCELED ||
-      (stop_code_ == UNDOCK_SENSOR_BLOCKED && inputs.rear.usable()) ||
+      (stop_code_ == UNDOCK_SENSOR_BLOCKED && inputs.rear.freshForRecovery()) ||
       stop_message_ == "rear_bumper_pressed" || stop_message_ == "front_bumper_pressed";
   return config_.manual_mode && manual_clear_ && recoverable &&
+      observer_->state() == DOCK_CLEAR_CONFIRMED && inputs.rear.freshForRecovery() &&
       inputs.hardware_fresh && inputs.turn_scan_valid && inputs.motors_enabled && !inputs.estop_pressed &&
       !(inputs.fault_flags & profile_.critical_fault_mask) && !wheelStalled(inputs) &&
       std::isfinite(inputs.linear) && std::isfinite(inputs.angular) &&

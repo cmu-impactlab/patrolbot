@@ -285,6 +285,7 @@ class PatrolBotBridge(Node):
         self._undock_request_id = None
         self._undock_event = threading.Event()
         self._undock_result = None
+        self._operation_fault = ('', '')
         self._undock_feedback = None
         self._undock_accepted = False
         self._undock_session = 0
@@ -1244,6 +1245,14 @@ class PatrolBotBridge(Node):
         msg.undock_release_attempts = int(release_attempts)
         msg.minimum_rear_range = float(minimum_rear_range)
         msg.rear_sonar_usable = bool(rear_sonar_usable and dock_valid)
+        msg.operation_fault_reason, msg.operation_fault_request_id = getattr(
+            self, '_operation_fault', ('', ''))
+        manual = getattr(self, '_manual_undock', None)
+        msg.operation_outcome_unknown = bool(
+            (manual and manual.unknown) or getattr(self._undock_turn, 'unknown', False))
+        if msg.operation_outcome_unknown and not msg.operation_fault_reason:
+            msg.operation_fault_reason = (
+                getattr(self._undock_turn, 'reason', '') or 'undock terminal outcome unknown')
         # Fail closed: without a fresh DOCK section, treat docking as inhibited
         # and the profile as uncommissioned.
         msg.redock_inhibited = bool(redock_inhibited) if dock_valid else True
@@ -1274,9 +1283,19 @@ class PatrolBotBridge(Node):
         return self._control_service_guarded(COMMAND_MOTOR_DISABLE, request.request_id, response)
 
     def _dock_reset_callback(self, request, response):
+        fault_before = getattr(self, '_operation_fault', ('', ''))
         if valid_request_id(request.request_id):
             self._undock_turn.revoke('dock reset requested')
-        return self._control_service(COMMAND_DOCK_RESET, request.request_id, response)
+        result = self._control_service(COMMAND_DOCK_RESET, request.request_id, response)
+        if result.success:
+            if getattr(self, '_operation_fault', ('', '')) == fault_before:
+                self._operation_fault = ('', '')
+            with self._epoch.lock:
+                self._manual_active_at = self._web_teleop_active_at = 0.
+                manual = getattr(self, '_manual_undock', None)
+                if manual is not None:
+                    manual.input_after_ns = self.get_clock().now().nanoseconds
+        return result
 
     def _set_lidar_power_callback(self, request, response):
         if valid_request_id(request.request_id):
@@ -1410,6 +1429,25 @@ class PatrolBotBridge(Node):
                     return self._fill_control_response(
                         response, None, 6, 'hardware session changed', started
                     )
+                if command == COMMAND_DOCK_RESET:
+                    manual = getattr(self, '_manual_undock', None)
+                    now = time.monotonic()
+                    if (self._epoch.undock_hold or self._epoch.tuning_hold or
+                            self._epoch._failed or self._undock_turn.busy or
+                            getattr(self._undock_turn, 'unknown', False) or
+                            (manual and (manual.busy or manual.unknown or manual.web_session_active))
+                            or 0 <= now - self._manual_active_at <= .5
+                            or 0 <= now - self._web_teleop_active_at <= .5
+                            or self._undock_goal_reserved or self._undock_active
+                            or self._epoch._navigation_status
+                            or self._epoch._future is not None
+                            or self._epoch._map_goal is not None
+                            or self._epoch._map_future is not None
+                            or any(self._undock_turn.actions.values())):
+                        self._discard_pending_control(key, pending)
+                        return self._fill_control_response(
+                            response, None, 3,
+                            'release controls; recovery requires known terminal operations', started)
                 if command == COMMAND_MOTOR_ENABLE and motor_generation != getattr(
                     self, '_motor_disable_generation', 0
                 ):
@@ -1452,9 +1490,9 @@ class PatrolBotBridge(Node):
                     self._epoch.require_lidar_seed()
                     if self.sock is not None:
                         self.sock.sendall(b'DRIVE:0.0:0.0\n')
-                elif command not in (COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE) and (
-                    not self._lidar_ready() or not self._epoch.commands_allowed
-                ):
+                elif (command not in (
+                        COMMAND_MOTOR_DISABLE, COMMAND_MOTOR_ENABLE, COMMAND_DOCK_RESET) and
+                        (not self._lidar_ready() or not self._epoch.commands_allowed)):
                     self._discard_pending_control(key, pending)
                     return self._fill_control_response(
                         response, None, 3, 'odometry origin recovery required', started
@@ -1590,6 +1628,8 @@ class PatrolBotBridge(Node):
                 self.get_logger().warn(f'Ignoring unmatched UNDOCK_RESULT for {result.request_id}')
                 return
             self._undock_result = result
+            if not result.success:
+                self._operation_fault = (result.message, result.request_id)
         self._undock_event.set()
 
     def _fail_pending_undock(self, session_generation):

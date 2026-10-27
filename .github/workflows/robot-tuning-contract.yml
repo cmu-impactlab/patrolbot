@@ -76,6 +76,7 @@ jobs:
             ros2_ws/src/patrolbot_bridge/test/test_manual_telemetry.py \
             ros2_ws/src/patrolbot_bridge/test/test_manual_undock_policy.py \
             ros2_ws/src/patrolbot_bridge/test/test_manual_undock_runtime.py \
+            ros2_ws/src/patrolbot_bridge/test/test_fault_recovery_runtime.py \
             ros2_ws/src/patrolbot_navigation/test/test_joy_teleop_runtime.py \
             ros2_ws/src/patrolbot_navigation/test/test_manual_sensor_watchdog.py \
             ros2_ws/src/patrolbot_navigation/test/test_joystick_policy.py \

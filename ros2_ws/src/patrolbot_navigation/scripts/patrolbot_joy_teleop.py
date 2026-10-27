@@ -243,7 +243,8 @@ class JoyTeleop(Node):
         return response
 
     def _base_state_cb(self, message):
-        if getattr(message, 'undock_active', False):
+        if (getattr(message, 'undock_active', False) or
+                getattr(message, 'dock_state', '') == 'FAULT_STOPPED'):
             self._block_undock_input()
         if ((self._lidar_generation is not None and
              message.session_generation != self._lidar_generation) or

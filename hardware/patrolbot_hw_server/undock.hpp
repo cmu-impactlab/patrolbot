@@ -134,6 +134,10 @@ struct RearSonarStatus {
 
   // Usable only when configured, fully fresh and not reading into the near field.
   bool usable() const;
+  // Fresh finite positive readings distinguish an obstacle stop from missing
+  // evidence at terminal handoff. This does not authorize undock motion or
+  // relax any normal manual-drive interlock; near-field is never called clear.
+  bool freshForRecovery() const;
 };
 
 // ---------------------------------------------------------------------------

@@ -197,6 +197,19 @@ def test_manual_operation_blocks_drive_and_old_released_input_cannot_rearm(teleo
     assert teleop.active and teleop.lin_cmd > 0.
 
 
+def test_clearing_fault_does_not_replay_a_held_rb_or_stick(teleop):
+    teleop._base_state_cb(state(teleop.now, dock_state='FAULT_STOPPED'))
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    teleop._base_state_cb(state(teleop.now, dock_state='CLEAR_CONFIRMED'))
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    teleop.tick()
+    assert not teleop.active and teleop.lin_cmd == 0.
+    teleop.joy_cb(manual_joy(teleop))
+    teleop.joy_cb(manual_joy(teleop, rb=True, linear=1.))
+    teleop.tick()
+    assert teleop.active and teleop.lin_cmd > 0.
+
+
 def test_tuning_hold_requires_release_then_a_new_deadman_press(teleop):
     teleop._tuning_hold_cb(SimpleNamespace(data=True))
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.))

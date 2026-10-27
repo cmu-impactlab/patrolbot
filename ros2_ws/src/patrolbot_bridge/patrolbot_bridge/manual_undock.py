@@ -243,6 +243,7 @@ class ManualUndockRuntime:
                 f'motors={result.motors_enabled}; dock={result.dock_state}')
         except Exception as exc:
             self.unknown = True
+            n._operation_fault = (str(exc), request_id)
             self.emergency_disable()
             n.get_logger().error(f'Manual undock held: {exc}; explicit recovery required')
         finally:

@@ -1470,7 +1470,7 @@ void test_manual_undock_reverses_then_half_turns_without_nav2() {
 }
 
 void test_manual_recoverable_turn_stops_leave_existing_motors_on() {
-  for (int cause = 0; cause < 4; ++cause) {
+  for (int cause = 0; cause < 5; ++cause) {
     FakeBase base;
     settleDocked(&base);
     CHECK(base.startManual());
@@ -1481,6 +1481,13 @@ void test_manual_recoverable_turn_stops_leave_existing_motors_on() {
     if (cause == 1) base.front_bumper = true;
     if (cause == 2) base.inputs.turn_scan_clear = false;
     if (cause == 3) CHECK(base.controller.cancel("11111111-2222-3333-4444-555555555555"));
+    if (cause == 4) {
+      // Reproduce the live near-field rear return at the turn stop. This is
+      // blocked, not missing data: stop the maneuver, retain normal handoff.
+      base.rear_range_m = .168;
+      base.rear_near_field_unreliable = true;
+      base.inputs.turn_scan_clear = false;
+    }
     const UndockOutputs first = base.tick();
     CHECK(first.commanded_linear == 0. && first.commanded_angular == 0.);
     const UndockOutputs result = first.finished ? first : base.runToCompletion(100);
@@ -1488,11 +1495,13 @@ void test_manual_recoverable_turn_stops_leave_existing_motors_on() {
     CHECK(base.inputs.motors_enabled);
     CHECK(base.motor_enable_count == enables);
     CHECK(base.observer.state() == DOCK_CLEAR_CONFIRMED);
+    CHECK(!base.controller.active());
+    CHECK(result.commanded_linear == 0. && result.commanded_angular == 0.);
   }
 }
 
 void test_manual_faults_disable_without_reenable_and_partial_departure_is_not_clear() {
-  for (int cause = 0; cause < 9; ++cause) {
+  for (int cause = 0; cause < 12; ++cause) {
     FakeBase base;
     settleDocked(&base);
     CHECK(base.startManual());
@@ -1510,6 +1519,13 @@ void test_manual_faults_disable_without_reenable_and_partial_departure_is_not_cl
       if (cause == 5) base.rear_fresh = false;
       if (cause == 6) base.inputs.enc_yaw_deg += 90.;
       if (cause == 7) base.wheels_locked = true;
+      if (cause >= 9) {
+        base.inputs.turn_scan_clear = false;
+        base.rear_near_field_unreliable = true;
+        if (cause == 9) base.rear_range_m = NAN;
+        if (cause == 10) base.rear_range_m = 0.;
+        if (cause == 11) base.rear_fresh = false;
+      }
     }
     const int enables = base.motor_enable_count;
     const UndockOutputs result = base.runToCompletion(600);
@@ -1532,6 +1548,37 @@ void test_manual_scan_guard_keeps_existing_rotation_zone_and_freshness() {
   CHECK(!manualTurnScanClear(points, 0));
   points[7] = LocalScanPoint{NAN, .1, .2};
   CHECK(!manualTurnScanValid(points, 0));
+}
+
+void test_recovery_reset_requires_fresh_hardware_and_never_enables_motors() {
+  FakeBase base;
+  settleDocked(&base);
+  base.observer.faultStop();
+  std::string error;
+  UndockInputs inputs = base.inputs;
+  inputs.hardware_fresh = false;
+  CHECK(!base.observer.reset(inputs, base.profile, &error));
+  inputs = base.inputs;
+  inputs.linear = NAN;
+  CHECK(!base.observer.reset(inputs, base.profile, &error));
+  inputs = base.inputs;
+  inputs.stall_value |= 0x0101;
+  CHECK(!base.observer.reset(inputs, base.profile, &error));
+  inputs = base.inputs;
+  inputs.rear.all_required_sensors_fresh = false;
+  CHECK(!base.observer.reset(inputs, base.profile, &error));
+  inputs = base.inputs;
+  inputs.battery_voltage_v = NAN;
+  CHECK(!base.observer.reset(inputs, base.profile, &error));
+  CHECK(base.observer.state() == DOCK_FAULT_STOPPED);
+  CHECK(base.observer.reset(base.inputs, base.profile, &error));
+  CHECK(base.observer.state() == DOCK_UNKNOWN);
+  base.settle(100);
+  CHECK(base.observer.state() == DOCK_DOCKED_CONFIRMED);
+  CHECK(!base.inputs.motors_enabled);
+  CHECK(base.motor_enable_count == 0);
+  CHECK(base.observer.reset(base.inputs, base.profile, &error));
+  CHECK(base.observer.state() == DOCK_DOCKED_CONFIRMED);
 }
 
 void test_manual_reverse_new_bumper_and_deviation_do_not_resume_or_enable() {
@@ -1557,6 +1604,7 @@ void test_manual_reverse_new_bumper_and_deviation_do_not_resume_or_enable() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  RUN(test_recovery_reset_requires_fresh_hardware_and_never_enables_motors);
   RUN(test_manual_undock_reverses_then_half_turns_without_nav2);
   RUN(test_manual_recoverable_turn_stops_leave_existing_motors_on);
   RUN(test_manual_faults_disable_without_reenable_and_partial_departure_is_not_clear);

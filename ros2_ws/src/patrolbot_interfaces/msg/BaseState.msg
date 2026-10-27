@@ -49,6 +49,12 @@ uint16 undock_release_attempts
 float32 minimum_rear_range
 bool rear_sonar_usable
 
+# Last correlated failed undock; retained until explicit recovery/acknowledgment.
+# Diagnostic only: physical dock state and hardware interlocks remain separate.
+string operation_fault_reason
+string operation_fault_request_id
+bool operation_outcome_unknown
+
 # Auto-docking inhibition, published so higher-level battery or mission logic
 # cannot immediately redock the robot. This is advisory state from the SBC: the
 # SBC has no autonomous dock operation, so the Pi dock coordinator is what

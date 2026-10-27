@@ -46,6 +46,23 @@ def test_reset_client_does_not_gain_docker_or_ssh_credentials_or_implicit_comman
     assert 'supervisor.py' not in web['command'][0]
 
 
+def test_reset_mount_directory_is_created_before_docker_restores_containers():
+    policy = ROOT / 'docker/system-reset/patrolbot-system-reset.tmpfiles.conf'
+    entries = [line.split() for line in policy.read_text().splitlines()
+               if line.strip() and not line.lstrip().startswith('#')]
+    assert entries == [['d', '/run/patrolbot-system-reset', '0750',
+                        'ubuntu', 'patrolbot-reset', '-']]
+    unit = (ROOT / 'docker/system-reset/patrolbot-system-reset.service').read_text()
+    assert 'RuntimeDirectory=patrolbot-system-reset' in unit
+    assert 'RuntimeDirectoryMode=0750' in unit
+    assert 'RuntimeDirectoryPreserve=restart' in unit
+    # The tmpfiles policy creates no socket, issues no command and does not
+    # weaken the existing fail-closed Compose bind-mount requirement.
+    mount = next(v for v in deployment()['services']['web-bridge']['volumes']
+                 if isinstance(v, dict) and v['target'] == '/run/patrolbot-system-reset')
+    assert mount['bind']['create_host_path'] is False
+
+
 def test_env_template_requires_operator_resolved_group_without_a_root_fallback():
     template = (ROOT / 'docker/.env.example').read_text()
     assert '\nPATROLBOT_RESET_GID=\n' in template

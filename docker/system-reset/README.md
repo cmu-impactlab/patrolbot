@@ -25,6 +25,30 @@ its group ownership as `patrolbot-reset` with the host's systemd runtime
 directory policy before exposing it to the bridge. Restarting the listener
 preserves request progress in SQLite. An interrupted accepted/running request becomes uncertain, never automatically resumes. A process lock prevents competing supervisor instances.
 
+### Boot-time bind-mount prerequisite
+
+Install `patrolbot-system-reset.tmpfiles.conf` as
+`/etc/tmpfiles.d/patrolbot-system-reset.conf`, then run:
+
+```sh
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/patrolbot-system-reset.conf
+```
+
+This creates only the restricted `0750 ubuntu:patrolbot-reset` **directory** during
+sysinit, before Docker restores containers. It does not create a socket, start a
+supervisor or request a reset. The supervisor remains responsible for the socket
+and its `0660` permissions. Its existing `RuntimeDirectory` policy must preserve
+the same directory inode during service restarts.
+
+Without this policy, Docker may restore the web bridge before the supervisor
+creates `/run/patrolbot-system-reset`. The strict bind mount then fails with an
+OCI `no such file or directory` error, leaving the bridge exited (127) even after
+the supervisor subsequently starts. Do not fix this by enabling automatic bind
+directory creation or exposing Docker/SSH credentials to the container. After
+checking the real supervisor socket exists, starting that exited web bridge is
+sufficient; no core or SBC restart is needed. Boot-order acceptance requires a
+separately authorized reboot; installation alone is not proof of that experiment.
+
 ## Socket protocol
 
 Send one JSON object followed by newline; requests are limited to 4096 bytes.

@@ -12,12 +12,27 @@ Cleanup stops dispatch and joins the spin thread, cancels queued worker calls
 and drains running callbacks, then shuts down the ROS executor before destroying
 nodes and the context. Bridge stop signals are set and its manual/transport
 workers are joined before its node destructor can release handles.
-The worker-pool drain deliberately uses Jazzy rclpy's
-private `MultiThreadedExecutor._executor`: work submitted to that pool may not
+The TEST ONLY worker-pool drain deliberately uses rclpy's private
+`MultiThreadedExecutor._executor`, requiring a standard-library
+`ThreadPoolExecutor`: work submitted to that pool may not
 yet be counted by the executor's callback work tracker. Destroying task guards
 before that queue settles can leave a worker accessing an invalid handle.
-The parent native ROS run must validate this ordering against installed Jazzy;
-portable mocks alone do not prove that the observed InvalidHandle is fixed.
+The TEST ONLY task adapter supports the legacy `_tasks` list of
+`(task, entity, node)` tuples and the cached Jazzy 7.1.11 layout:
+`_pending_tasks` dict, `_ready_tasks` deque, and MultiThreadedExecutor's `_futures`
+list. It snapshots tasks before and after draining, including completed handlers
+retained only in `_futures`, and reports completed exceptions once per task.
+Idle or suspended async tasks are not resumed during teardown. Unknown storage
+or pool shapes fail explicitly and require an adapter review when rclpy changes.
+These private accesses are confined to fixture support; production rclpy is
+unchanged. Pool draining runs in a daemon thread joined with the fixture timeout.
+
+The extracted cached executor bypasses its work-tracker wait in `shutdown()`.
+The parent's controlled diagnostic returned True in 0.000096 seconds while a
+callback remained blocked; it did not reproduce InvalidHandle. The full baseline
+also passed once without the old intermittent warning. The parent native ROS run
+must validate this ordering against installed Jazzy; portable mocks alone do not
+prove that the intermittent warning is fixed.
 
 Each wait is bounded. A stuck dispatcher or callback fails teardown and retains
 ROS handles/context rather than freeing handles still in use; external fake and

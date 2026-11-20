@@ -3,6 +3,22 @@
 import signal
 import subprocess
 import threading
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+
+
+def executor_tasks(executor):
+    """TEST ONLY: snapshot the two known rclpy private task storage layouts."""
+    if isinstance(getattr(executor, '_tasks', None), list):
+        tasks = [task for task, _entity, _node in executor._tasks]
+    elif (isinstance(getattr(executor, '_pending_tasks', None), dict)
+          and isinstance(getattr(executor, '_ready_tasks', None), deque)
+          and isinstance(getattr(executor, '_futures', None), list)):
+        tasks = list(executor._pending_tasks) + list(executor._ready_tasks)
+    else:
+        raise RuntimeError('unsupported test executor task storage; update TEST ONLY adapter')
+    # Completed handlers may already be absent from the pending collection.
+    return tasks + list(getattr(executor, '_futures', ()))
 
 
 class NativeFixture:
@@ -84,20 +100,28 @@ class NativeFixture:
             if self.spin_thread is not None:
                 safe = attempt(lambda: join(self.spin_thread))
             if safe and self.executor is not None:
+                tasks = []
+                attempt(lambda: tasks.extend(executor_tasks(self.executor)))
                 # Jazzy may have submitted handlers not yet counted as active work.
-                # Drain/cancel that queue before ROS shutdown destroys task guards.
+                # TEST ONLY: drain the known private pool before destroying guards.
+                def drain_workers():
+                    pool = getattr(self.executor, '_executor', None)
+                    if not isinstance(pool, ThreadPoolExecutor):
+                        raise RuntimeError('unsupported test executor worker pool; '
+                                           'update TEST ONLY adapter')
+                    pool.shutdown(wait=True, cancel_futures=True)
+
                 drained = []
                 drain = threading.Thread(
-                    target=lambda: drained.append(attempt(
-                        lambda: self.executor._executor.shutdown(
-                            wait=True, cancel_futures=True))),
+                    target=lambda: drained.append(attempt(drain_workers)),
                     name='fixture-worker-drain', daemon=True)
                 safe = attempt(drain.start)
                 if safe:
                     safe = attempt(lambda: join(drain)) and drained == [True]
                 if safe:
+                    attempt(lambda: tasks.extend(executor_tasks(self.executor)))
                     def check_tasks():
-                        for task, _entity, _node in self.executor._tasks:
+                        for task in dict.fromkeys(tasks):
                             if task.done() and not task.cancelled():
                                 error = task.exception()
                                 if error is not None:

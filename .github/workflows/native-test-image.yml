@@ -1,0 +1,54 @@
+name: ROS test image build and focused smoke
+
+# Source/unit fixtures only; no robot operation or full native/lint claim.
+# No branch/path filters: stacked PRs must receive this check too.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-test-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build current ROS test image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull --progress=plain \
+            --file docker/Dockerfile.ros-tests \
+            --tag patrolbot-ros-tests:smoke . \
+            2>&1 | tee "$RUNNER_TEMP/native-test-image-build.log"
+
+      - name: Run 42 focused source and unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network=none --ipc=private \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --user 65534:65534 --read-only \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --env HOME=/tmp --env PATROLBOT_RUN_INTEGRATION=0 \
+            patrolbot-ros-tests:smoke \
+            ros2_ws/src/patrolbot_bridge/test/test_tuning_backend.py \
+            ros2_ws/src/patrolbot_bridge/test/test_tuning_recover.py \
+            ros2_ws/src/patrolbot_bridge/test/test_tuning_observation_source.py \
+            ros2_ws/src/patrolbot_bridge/test/test_tuning_map_gate.py \
+            ros2_ws/src/patrolbot_bridge/test/test_tuning_runtime_contract.py \
+            2>&1 | tee "$RUNNER_TEMP/native-test-image-smoke.log"
+
+      - name: Upload build and smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-test-image-logs
+          path: ${{ runner.temp }}/native-test-image-*.log
+          retention-days: 7

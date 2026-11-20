@@ -12,7 +12,7 @@ import pytest
 SOURCE = Path(__file__).resolve().parents[1] / 'patrolbot_bridge/bridge_node.py'
 
 
-def setup():
+def make_observation_source():
     tree = ast.parse(SOURCE.read_text())
     klass = next(node for node in tree.body if isinstance(node, ast.ClassDef)
                  and node.name == 'PatrolBotBridge')
@@ -35,7 +35,7 @@ def setup():
 
 
 def test_internal_zero_is_never_recorded_as_a_final_producer_observation():
-    node, _, msg, _ = setup()
+    node, _, msg, _ = make_observation_source()
     node._tuning_velocity_observed('/cmd_vel', 'teleop_velocity_smoother', msg, None)
     assert node._tuning_observations.velocities == {}
 
@@ -44,7 +44,7 @@ def test_internal_zero_is_never_recorded_as_a_final_producer_observation():
     'gid', 'namespace', 'name', 'type', 'stale', 'future', 'replay',
 ])
 def test_invalid_or_replayed_source_cannot_preserve_prior_zero_evidence(fault):
-    node, endpoint, msg, info = setup()
+    node, endpoint, msg, info = make_observation_source()
     node._tuning_velocity_observed('/cmd_vel', 'teleop_velocity_smoother', msg, info)
     assert node._tuning_observations.velocities['/cmd_vel'][0]
     if fault == 'gid':
@@ -64,7 +64,7 @@ def test_invalid_or_replayed_source_cannot_preserve_prior_zero_evidence(fault):
 
 
 def test_nonplanar_values_never_prove_zero_command_buffers():
-    node, _, msg, info = setup()
+    node, _, msg, info = make_observation_source()
     msg.angular.x = .1
     node._tuning_velocity_observed('/cmd_vel', 'teleop_velocity_smoother', msg, info)
     assert node._tuning_observations.velocities['/cmd_vel'][0] is False

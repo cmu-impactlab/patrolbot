@@ -33,7 +33,7 @@ class Client:
         return self.future
 
 
-def setup():
+def make_map_gate():
     tree = ast.parse(SOURCE.read_text())
     klass = next(item for item in tree.body if isinstance(item, ast.ClassDef))
     method = next(item for item in klass.body if isinstance(item, ast.FunctionDef)
@@ -56,7 +56,7 @@ def setup():
 
 
 def test_no_navigation_release_before_new_seed_and_exact_global_map_ack():
-    owner, tick = setup()
+    owner, tick = make_map_gate()
     tick()
     assert not owner._global_map.calls and not owner._tuning_nav_release.calls
     owner.recovery.stage = 'ready'
@@ -78,7 +78,7 @@ def test_no_navigation_release_before_new_seed_and_exact_global_map_ack():
 
 
 def test_hardware_or_origin_loss_prevents_even_a_late_release_ack():
-    owner, tick = setup()
+    owner, tick = make_map_gate()
     owner.recovery.stage = 'ready'
     owner._navigation_ready = True
     tick()
@@ -90,7 +90,7 @@ def test_hardware_or_origin_loss_prevents_even_a_late_release_ack():
 
 
 def test_bridge_restart_reacquires_persisted_navigation_gate_before_new_seed():
-    owner, tick = setup()
+    owner, tick = make_map_gate()
     owner._tuning_nav_reserved = False
     tick()
     assert owner._tuning_nav_release.calls[-1].data is True

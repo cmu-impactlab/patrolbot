@@ -15,7 +15,7 @@ ADMIN = {'id': 1, 'username': 'fixture', 'role': 'administrator'}
 JOB = '22222222-2222-4222-8222-222222222222'
 
 
-def setup(tmp_path):
+def make_recovery_store(tmp_path):
     store = RevisionStore(tmp_path / 'config', REGISTRY)
     store.initialize(actor=ADMIN, reason='unit fixture')
     store.save(request_id='11111111-1111-4111-8111-111111111111', base_revision=1,
@@ -32,7 +32,7 @@ def run(store, digest, **kwargs):
 
 
 def test_offline_last_good_restore_preserves_saved_pending_desired_state(tmp_path):
-    store, digest = setup(tmp_path)
+    store, digest = make_recovery_store(tmp_path)
     job = run(store, digest)
     assert job['state'] == 'failed'
     assert job['recovery']['runtime_verified'] is False
@@ -46,7 +46,7 @@ def test_offline_last_good_restore_preserves_saved_pending_desired_state(tmp_pat
 
 
 def test_running_consumer_excludes_offline_recovery(tmp_path):
-    store, digest = setup(tmp_path)
+    store, digest = make_recovery_store(tmp_path)
     before = store.manifest_path.read_bytes()
     with RuntimeGuard(store.base):
         with pytest.raises(BlockingIOError):
@@ -56,7 +56,7 @@ def test_running_consumer_excludes_offline_recovery(tmp_path):
 
 
 def test_wrong_digest_or_non_admin_never_promotes(tmp_path):
-    store, digest = setup(tmp_path)
+    store, digest = make_recovery_store(tmp_path)
     before = store.manifest_path.read_bytes()
     with pytest.raises(StoreUnavailable, match='digest'):
         run(store, 'sha256:' + '0' * 64)
@@ -67,7 +67,7 @@ def test_wrong_digest_or_non_admin_never_promotes(tmp_path):
 
 
 def test_offline_recovery_can_resolve_completed_reload_with_pending_navigation_admission(tmp_path):
-    store, digest = setup(tmp_path)
+    store, digest = make_recovery_store(tmp_path)
     store.record_job({'job_id': JOB, 'state': 'succeeded', 'revision': 2})
     state = store.load_revision(2)
     store.record_navigation_admission({

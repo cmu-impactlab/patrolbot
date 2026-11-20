@@ -84,7 +84,7 @@ class Owner:
         self.tuning_hold = held
 
 
-def setup(tmp_path, probe=idle):
+def make_backend(tmp_path, probe=idle):
     store = RevisionStore(tmp_path / 'config', REGISTRY)
     store.initialize(actor=ADMIN, reason='unit fixture')
     store.save(request_id='11111111-1111-4111-8111-111111111111', base_revision=1,
@@ -99,7 +99,7 @@ def setup(tmp_path, probe=idle):
 
 
 def test_reload_keeps_exact_revision_selected_map_and_inactive_navigation(tmp_path):
-    store, transport, backend, seeds, digest = setup(tmp_path)
+    store, transport, backend, seeds, digest = make_backend(tmp_path)
     result = backend.reload(['bringup', 'navigation'], 2, digest)
     assert result.status == 'ok'
     assert seeds == ['1:2:100:200']
@@ -122,13 +122,13 @@ def test_reload_keeps_exact_revision_selected_map_and_inactive_navigation(tmp_pa
     {'stationary': False}, {'hardware_ok': False}, {'web_deadman_fresh': False},
 ])
 def test_busy_or_unknown_ownership_mutates_no_node(tmp_path, facts):
-    _, transport, backend, _, digest = setup(tmp_path, lambda: idle(**facts))
+    _, transport, backend, _, digest = make_backend(tmp_path, lambda: idle(**facts))
     assert backend.reload(['bringup', 'navigation'], 2, digest).status == 'failed'
     assert transport.calls == []
 
 
 def test_wrong_digest_or_scope_never_touches_a_service(tmp_path):
-    _, transport, backend, _, digest = setup(tmp_path)
+    _, transport, backend, _, digest = make_backend(tmp_path)
     assert backend.reload(['navigation'], 2, digest).status == 'failed'
     assert backend.reload(['bringup', 'navigation'], 2, 'sha256:' + '0' * 64).status == 'failed'
     assert transport.calls == []
@@ -136,7 +136,7 @@ def test_wrong_digest_or_scope_never_touches_a_service(tmp_path):
 
 @pytest.mark.parametrize('failure', ['amcl', 'controller_server', 'teleop_velocity_smoother'])
 def test_partial_failure_never_commits_or_releases_the_hold(tmp_path, failure):
-    store, transport, backend, seeds, digest = setup(tmp_path)
+    store, transport, backend, seeds, digest = make_backend(tmp_path)
     transport.failure = failure
     assert backend.reload(['bringup', 'navigation'], 2, digest).status == 'unknown'
     assert store.read_startup()['revision'] == 1
@@ -147,7 +147,7 @@ def test_partial_failure_never_commits_or_releases_the_hold(tmp_path, failure):
 
 
 def test_readback_mismatch_is_not_a_successful_parameter_response(tmp_path):
-    store, transport, backend, seeds, digest = setup(tmp_path)
+    store, transport, backend, seeds, digest = make_backend(tmp_path)
     transport.bad_readback = True
     assert backend.reload(['bringup', 'navigation'], 2, digest).status == 'unknown'
     assert store.read_startup()['revision'] == 1
@@ -155,7 +155,7 @@ def test_readback_mismatch_is_not_a_successful_parameter_response(tmp_path):
 
 
 def test_coordinator_commits_verified_startup_and_releases_only_after_success(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     owner = Owner()
     coordinator = ActivationCoordinator(store, owner, backend)
     result = coordinator.request(
@@ -168,7 +168,7 @@ def test_coordinator_commits_verified_startup_and_releases_only_after_success(tm
 
 
 def test_unknown_job_survives_restart_without_reloading_or_releasing(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     transport.failure = 'amcl'
     coordinator = ActivationCoordinator(store, Owner(), backend)
     result = coordinator.request(
@@ -184,7 +184,7 @@ def test_unknown_job_survives_restart_without_reloading_or_releasing(tmp_path):
 
 
 def test_request_id_cannot_be_repurposed_for_restore_or_another_actor(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     coordinator = ActivationCoordinator(store, Owner(), backend)
     request_id = '22222222-2222-4222-8222-222222222222'
     first = coordinator.request(operation='redeploy', request_id=request_id,
@@ -202,7 +202,7 @@ def test_request_id_cannot_be_repurposed_for_restore_or_another_actor(tmp_path):
 
 
 def test_hardware_generation_change_never_commits_a_runtime_success(tmp_path, monkeypatch):
-    store, transport, backend, seeds, digest = setup(tmp_path)
+    store, transport, backend, seeds, digest = make_backend(tmp_path)
     generation = [1]
     backend.generation = lambda: generation[0]
     restore = transport.restore_map
@@ -220,7 +220,7 @@ def test_hardware_generation_change_never_commits_a_runtime_success(tmp_path, mo
 
 def test_manual_press_during_reload_keeps_hold_and_requires_explicit_recovery(tmp_path):
     state = {'held': False}
-    store, transport, backend, _, digest = setup(
+    store, transport, backend, _, digest = make_backend(
         tmp_path, lambda: idle(physical_deadman_held=state['held']))
     restore = transport.restore_map
 
@@ -246,7 +246,7 @@ def test_manager_definition_has_pinned_jazzy_configure_and_cleanup_commands():
 
 
 def test_invalid_generated_domain_is_refused_before_acquiring_a_runtime_hold(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     store.save(request_id='33333333-3333-4333-8333-333333333333', base_revision=2,
                changes=[{'id': 'max_linear_m_s', 'value': 0.}], actor=ADMIN)
     owner = Owner()
@@ -261,7 +261,7 @@ def test_invalid_generated_domain_is_refused_before_acquiring_a_runtime_hold(tmp
 
 
 def test_new_navigation_goal_wins_reservation_without_being_cancelled_or_held(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     owner = Owner()
     owner.navigation_ready = True
 
@@ -281,7 +281,7 @@ def test_new_navigation_goal_wins_reservation_without_being_cancelled_or_held(tm
 
 
 def test_unknown_navigation_reservation_is_journalled_before_retaining_hold(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     owner = Owner()
 
     def timeout(held):
@@ -300,7 +300,7 @@ def test_unknown_navigation_reservation_is_journalled_before_retaining_hold(tmp_
 
 
 def test_successful_reload_keeps_durable_post_restart_admission_gate(tmp_path):
-    store, _, backend, _, digest = setup(tmp_path)
+    store, _, backend, _, digest = make_backend(tmp_path)
     assert backend.reload(['bringup', 'navigation'], 2, digest).status == 'ok'
     reopened = RevisionStore(store.base, REGISTRY)
     admission = reopened.navigation_admission()
@@ -316,7 +316,7 @@ def test_post_reservation_evidence_failure_releases_without_orphaning_gate(tmp_p
         count[0] += 1
         return idle(stationary=count[0] < 3)
 
-    store, transport, backend, _, _ = setup(tmp_path, probe)
+    store, transport, backend, _, _ = make_backend(tmp_path, probe)
     owner = Owner()
     result = ActivationCoordinator(store, owner, backend).request(
         operation='redeploy', request_id='66666666-6666-4666-8666-666666666666',
@@ -328,7 +328,7 @@ def test_post_reservation_evidence_failure_releases_without_orphaning_gate(tmp_p
 
 
 def test_online_restore_does_not_relabel_the_rolled_back_revision_as_last_good(tmp_path):
-    store, transport, backend, _, _ = setup(tmp_path)
+    store, transport, backend, _, _ = make_backend(tmp_path)
     store.promote(revision=2, scopes=['bringup', 'navigation'], actor=ADMIN)
     store.save(request_id='33333333-3333-4333-8333-333333333333', base_revision=2,
                changes=[{'id': 'amcl.alpha2', 'value': .08}], actor=ADMIN)

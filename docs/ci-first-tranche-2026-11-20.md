@@ -35,7 +35,13 @@ Evidence is retained in `/tmp/opencode/ci-fixes/`, including
 
 Docker external DNS is unavailable. No clean apt/rosdep rebuild of the revised
 ROS image was established; cached-toolchain tests are not that evidence.
-Complete native lint, new hosted native gates, production-image acceptance,
+The PR-triggered `native-test-image.yml` now builds the actual recipe with
+`--pull` on an ephemeral Ubuntu 24.04 hosted runner, then uses its entrypoint
+for only the five focused bridge files (42 tests). The smoke container is
+offline, non-root and read-only with writable `/tmp`, private IPC, dropped
+capabilities and no new privileges. Build/smoke failures survive log capture;
+logs upload even after failure. Hosted execution remains pending validation.
+Complete native lint, broader hosted native gates, production-image acceptance,
 patch provenance, target architectures and hardware commissioning remain outside
 this tranche. No hosted run, main merge, push, robot connection or deployment
 was performed.

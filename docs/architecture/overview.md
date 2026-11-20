@@ -91,8 +91,9 @@ Verified live 2026-06-29 via SSH.
 
 ### Raspberry Pi (navigation computer)
 
-Verified directly against live source. Six packages build into the active image; one legacy
-direct-ARIA package remains source-only and is excluded:
+The checkout contains seven ROS packages: six selected by the Pi image and
+one source-only legacy direct-ARIA driver. This inventory does not establish
+what is installed or commissioned on the robot:
 
 | Package | Role | Status |
 |---|---|---|

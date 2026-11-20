@@ -777,6 +777,200 @@ void test_yaw_after_the_robot_is_free_still_aborts() {
   CHECK(false);
 }
 
+// A deviation must win over reaching the target, clearance verification, and
+// the final stationary handoff sample. It must also prevent motor re-enabling.
+void test_deviation_guards_cover_clearance_handoff_and_recovery() {
+  for (int manual = 0; manual < 2; ++manual) {
+    for (int stage = 0; stage < 5; ++stage) {
+      if (manual && stage > 1) continue;
+      for (int axis = 0; axis < 2; ++axis) {
+        for (int sign = -1; sign <= 1; sign += 2) {
+          FakeBase base;
+          if (stage == 4) base.motors_drop_at_progress = 0.35;
+          settleDocked(&base);
+          CHECK(manual ? base.startManual() : base.startDefault());
+
+          bool reached = false;
+          for (int i = 0; i < 1000; ++i) {
+            const UndockOutputs out = base.tick();
+            if (out.finished) break;
+            reached =
+                (stage == 0 && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+                 out.reverse_progress_m > 0.30) ||
+                (stage == 1 && out.phase == UNDOCK_PHASE_VERIFYING_CLEARANCE) ||
+                ((stage == 2 || stage == 3) &&
+                 out.phase == UNDOCK_PHASE_HANDOFF_READY) ||
+                (stage == 4 && out.phase == UNDOCK_PHASE_RELEASING &&
+                 out.reverse_progress_m > 0.30);
+            if (reached) break;
+          }
+          CHECK(reached);
+          if (!reached) continue;
+
+          // Stage 0 reaches final clearance on the same snapshot as the fault.
+          if (stage == 0) base.inputs.enc_x_mm = -530.0;
+          if (stage == 3) base.inputs.motors_enabled = false;
+          if (axis == 0) {
+            base.inputs.enc_y_mm +=
+                sign * (base.profile.max_lateral_drift_m + 0.01) * 1000.0;
+          } else {
+            base.inputs.enc_yaw_deg +=
+                sign * (base.profile.max_departure_yaw_rad + 0.05) *
+                180.0 / M_PI;
+          }
+          const int enables_before = base.motor_enable_count;
+          const int disables_before = base.motor_disable_count;
+          const int attempts_before = base.controller.releaseAttempts();
+          const UndockOutputs stopped = base.tick();
+          CHECK_EQ_INT(stopped.phase, UNDOCK_PHASE_STOPPING);
+          CHECK(stopped.commanded_linear == 0.0);
+          CHECK(!stopped.success);
+          CHECK_EQ_INT(stopped.effect_count, 1);
+          CHECK_EQ_INT(stopped.effects[0], EFFECT_DISABLE_MOTORS);
+          CHECK_EQ_INT(base.motor_disable_count, disables_before + 1);
+          CHECK_EQ_INT(base.motor_enable_count, enables_before);
+          CHECK_EQ_INT(base.controller.releaseAttempts(), attempts_before);
+          CHECK(!base.inputs.motors_enabled);
+
+          const UndockOutputs terminal =
+              stopped.finished ? stopped : base.runToCompletion(10);
+          CHECK(terminal.finished);
+          CHECK(!terminal.success);
+          CHECK_EQ_INT(terminal.code, UNDOCK_MOTION_FAILED);
+          CHECK(terminal.message ==
+                (manual ? "manual_reverse_deviation" :
+                 (axis == 0 ? "lateral_drift_exceeded" : "departure_yaw_exceeded")));
+          CHECK_EQ_INT(base.observer.state(), DOCK_FAULT_STOPPED);
+          CHECK(!base.controller.active());
+        }
+      }
+    }
+  }
+}
+
+void test_deviation_during_verification_deceleration_stops_immediately() {
+  for (int manual = 0; manual < 2; ++manual) {
+    for (int axis = 0; axis < 2; ++axis) {
+      FakeBase base;
+      settleDocked(&base);
+      CHECK(manual ? base.startManual() : base.startDefault());
+      for (int i = 0; i < 1000; ++i) {
+        if (base.tick().phase == UNDOCK_PHASE_VERIFYING_CLEARANCE) break;
+      }
+      CHECK_EQ_INT(base.controller.phase(), UNDOCK_PHASE_VERIFYING_CLEARANCE);
+
+      // Keep the snapshot moving: the safety check must not wait for the
+      // stationary prerequisite inside VERIFYING_CLEARANCE.
+      UndockInputs coasting = base.inputs;
+      coasting.now_ms += kTickMs;
+      coasting.linear = -0.02;
+      if (axis == 0) coasting.enc_y_mm += 100.0;
+      else coasting.enc_yaw_deg += 20.0;
+      const UndockOutputs out = base.controller.step(coasting);
+      CHECK_EQ_INT(out.phase, UNDOCK_PHASE_STOPPING);
+      CHECK(out.commanded_linear == 0.0);
+      CHECK(!out.finished);
+      CHECK(!out.success);
+      CHECK_EQ_INT(out.effect_count, 1);
+      CHECK_EQ_INT(out.effects[0], EFFECT_DISABLE_MOTORS);
+
+      // Acknowledge the emitted disable and the subsequent stationary snapshot.
+      coasting.now_ms += kTickMs;
+      coasting.linear = 0.0;
+      coasting.motors_enabled = false;
+      const UndockOutputs terminal = base.controller.step(coasting);
+      CHECK(terminal.finished);
+      CHECK(!terminal.success);
+      CHECK_EQ_INT(terminal.code, UNDOCK_MOTION_FAILED);
+      CHECK_EQ_INT(base.observer.state(), DOCK_FAULT_STOPPED);
+    }
+  }
+}
+
+void test_deviation_limits_use_the_requested_hardware_profile() {
+  for (int relaxed = 0; relaxed < 2; ++relaxed) {
+    for (int axis = 0; axis < 2; ++axis) {
+      FakeBase base;
+      base.profile.max_lateral_drift_m = relaxed ? 0.12 : 0.03;
+      base.profile.max_departure_yaw_rad = relaxed ? 0.40 : 0.08;
+      settleDocked(&base);
+      CHECK(base.startDefault());
+      for (int i = 0; i < 1000; ++i) {
+        const UndockOutputs out = base.tick();
+        if (out.phase == UNDOCK_PHASE_BACKING_OUT &&
+            out.reverse_progress_m > 0.30) break;
+      }
+      CHECK_EQ_INT(base.controller.phase(), UNDOCK_PHASE_BACKING_OUT);
+      base.inputs.enc_x_mm = -530.0;
+      if (axis == 0) {
+        // Tight: below the default cap, above the configured cap.
+        // Relaxed: above the default cap, below the configured cap.
+        base.inputs.enc_y_mm += relaxed ? 80.0 : 40.0;
+      } else {
+        base.inputs.enc_yaw_deg += (relaxed ? 0.25 : 0.12) * 180.0 / M_PI;
+      }
+      const UndockOutputs out = base.runToCompletion(20);
+      CHECK(out.finished);
+      CHECK(out.success == (relaxed != 0));
+      CHECK_EQ_INT(out.code, relaxed ? UNDOCK_OK : UNDOCK_MOTION_FAILED);
+      CHECK(base.inputs.motors_enabled == (relaxed != 0));
+    }
+  }
+}
+
+void test_exact_deviation_limits_are_allowed_in_both_directions() {
+  for (int sign = -1; sign <= 1; sign += 2) {
+    FakeBase base;
+    base.profile.max_departure_yaw_rad = 7.0 * M_PI / 180.0;
+    settleDocked(&base);
+    CHECK(base.startDefault());
+    for (int i = 0; i < 1000; ++i) {
+      const UndockOutputs out = base.tick();
+      if (out.phase == UNDOCK_PHASE_BACKING_OUT &&
+          out.reverse_progress_m > 0.30) break;
+    }
+    CHECK_EQ_INT(base.controller.phase(), UNDOCK_PHASE_BACKING_OUT);
+    // Hold the pose exactly on both limits, without another integration step.
+    base.wheels_locked = true;
+    base.inputs.enc_x_mm = -530.0;
+    base.inputs.enc_y_mm = sign * base.profile.max_lateral_drift_m * 1000.0;
+    base.inputs.enc_yaw_deg = sign * 7.0;
+    const UndockOutputs out = base.runToCompletion(20);
+    CHECK(out.finished);
+    CHECK(out.success);
+    CHECK_EQ_INT(out.code, UNDOCK_OK);
+    CHECK(out.lateral_error_m == base.profile.max_lateral_drift_m);
+    CHECK(out.heading_error_rad == base.profile.max_departure_yaw_rad);
+    CHECK(base.inputs.motors_enabled);
+  }
+}
+
+void test_fixture_lateral_offset_is_absorbed_only_at_guard_capture() {
+  FakeBase base;
+  settleDocked(&base);
+  CHECK(base.startDefault());
+  bool offset = false;
+  for (int i = 0; i < 1000; ++i) {
+    const UndockOutputs out = base.tick();
+    if (!offset && out.phase == UNDOCK_PHASE_BACKING_OUT &&
+        out.reverse_progress_m > 0.10) {
+      base.inputs.enc_y_mm += 200.0;
+      offset = true;
+    }
+    if (offset && out.reverse_progress_m < base.profile.pose_guard_start_m) {
+      CHECK(out.lateral_error_m == 0.0);
+    }
+    if (out.finished) {
+      CHECK(offset);
+      CHECK(out.success);
+      CHECK(out.lateral_error_m == 0.0);
+      CHECK(base.inputs.motors_enabled);
+      return;
+    }
+  }
+  CHECK(false);
+}
+
 // ---------------------------------------------------------------------------
 // 10-13. Rear sensing
 // ---------------------------------------------------------------------------
@@ -1632,6 +1826,11 @@ int main(int argc, char** argv) {
   RUN(test_stale_charge_does_not_change_pose_guard_start);
   RUN(test_moderate_yaw_after_the_robot_is_free_is_allowed);
   RUN(test_yaw_after_the_robot_is_free_still_aborts);
+  RUN(test_deviation_guards_cover_clearance_handoff_and_recovery);
+  RUN(test_deviation_during_verification_deceleration_stops_immediately);
+  RUN(test_deviation_limits_use_the_requested_hardware_profile);
+  RUN(test_exact_deviation_limits_are_allowed_in_both_directions);
+  RUN(test_fixture_lateral_offset_is_absorbed_only_at_guard_capture);
   RUN(test_rear_obstacle_during_reverse_stops_immediately);
   RUN(test_insufficient_rear_room_is_refused_before_any_motion);
   RUN(test_stale_rear_sensor_is_never_clear);

@@ -23,7 +23,14 @@ Real components retained as fallbacks or references, but not part of the running
 - **`patrolbot_navigation/scripts/twist_mux.yaml`** — a reference velocity-priority config; the
   active twist_mux runs from `patrolbot-launch`'s `mux.yaml`.
 - **`patrolbot_nav.rviz`** — operator RViz layout for manual visualization.
-- **`maps/cmuq_1st_floor.{yaml,pgm}`** — an older CMU-Q floor map, not loaded by the active launch.
+- **Dock-in prototype** — `patrolbot_docking_plugins`, docking-server YAML and reserved mux input remain; guarded undock is a separate active path.
+
+## Retained active components
+
+- **Floor 1** (`maps/cmuq_1st_floor.{yaml,pgm}`) is selectable in the active floor-map catalog. Floor 2 is the default.
+- **`RuntimeGuard`** keeps its process-lifetime lock even without later attribute reads.
+- **`map_catalog.py`** contains shared robot persistence and remains byte-identical to the dashboard validator.
+- Existing tuning executors and legacy/prototype support remain unchanged by fixes-only cleanup.
 
 ## Removed dead code { #known-dead-code--cleanup-candidates }
 

@@ -36,8 +36,21 @@ The site deploys to GitHub Pages automatically on push to `main`
 | Path | What it is |
 |------|------------|
 | `docs/` | Documentation source (Markdown + Mermaid) |
-| `ros2_ws/src/` | Four ROS 2 packages; three active and legacy `rosaria2` |
+| `ros2_ws/src/` | Seven ROS 2 packages; six image-selected and source-only legacy `rosaria2` |
 | `docker/` | Image, Compose stack, liveness probes, and readiness status |
 | `mkdocs.yml` | Site configuration and navigation tree |
 | `requirements.txt` | Documentation build toolchain |
 | `.github/workflows/deploy.yml` | GitHub Pages deploy workflow |
+
+## Offline regression tests
+
+With `contracts/requirements-test.txt` installed, run:
+
+```bash
+python -B contracts/validate_robot_tuning.py
+python -B docker/run-portable-review-tests.py
+```
+
+The runner isolates pytest groups and runs all five ARIA-free C++ binaries.
+It excludes native ROS, live integration and ament lint suites before collection.
+See [Testing](docs/development/testing.md) for those separate checks.

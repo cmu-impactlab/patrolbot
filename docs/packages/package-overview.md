@@ -5,8 +5,9 @@ description: The active Pi packages, legacy ROS driver, and standalone SBC serve
 
 # Package Overview
 
-PatrolBot's code is organized into **six packages built into the Pi image**, one source-only legacy
-ROS driver, and one standalone C++ program on the SBC.
+The checkout contains **seven ROS packages**: six selected by the Pi image
+and one source-only legacy ROS driver. The standalone C++ SBC server is not a
+ROS package. Source inventory does not establish deployment or commissioning.
 
 ```mermaid
 flowchart TB

@@ -1,14 +1,39 @@
 ---
 title: Testing
-description: How PatrolBot is tested today — ament lint tests and the manual freeze/resume resilience tests that validated the self-healing.
+description: Offline Python and C++ regressions, separate native tests, and supervised hardware acceptance.
 ---
 
 # Testing
 
-PatrolBot's testing is pragmatic: ament lint tests and a set of **manual
-freeze/resume resilience tests** that are the real validation of the system's
-fault tolerance. There is no automated integration suite or checked-in SBC
-simulator today; this page documents what exists and how to run it.
+Portable regression checks, native ROS/fake-SBC integration and supervised
+hardware acceptance are separate evidence levels. Passing offline tests does
+not establish that a feature is deployed or commissioned.
+
+## Portable regression runner
+
+In an isolated development environment, install `contracts/requirements-test.txt`,
+then run:
+
+```bash
+python -B docker/run-portable-review-tests.py
+```
+
+This is the offline CI entry point. It covers contracts, portable bridge/tuning,
+navigation safety, dock-manager policy, Docker helper units, reset/preflight
+helpers, localization diagnostics, status-report
+and patch-artifact checks, then all five ARIA-free hardware C++ binaries.
+Separate pytest processes isolate test-local ROS stubs; the runner places its
+own checkout first on `PYTHONPATH`.
+
+`--list` prints the selection without running it. Native ROS message/runtime
+tests, opt-in live-stack/Docker integration (including deployed-odometry tests)
+and ament lint templates are explicitly excluded **before collection**, even if
+ROS is installed. The runner disables inherited integration opt-ins; it does not
+start a ROS domain, container, robot connection or deployment. C++ failures stay
+failures, and each built binary runs independently so one failure cannot hide
+later checks. No safety expectation is relaxed to make a baseline green.
+
+The broader native and fake-SBC suites remain separate gates.
 
 ## Unit / lint tests
 
@@ -26,11 +51,10 @@ colcon test-result --verbose
 | `patrolbot_dock_manager` | `test_contracts.py`, `test_manager_integration.py`, plus lint |
 | `patrolbot_navigation` | `test_safety_contract.py`, `test_safety_policy.py`, `test_joystick_policy.py`, `test_physical_calibration.py`, `test_collision_monitor_integration.py` |
 | `patrolbot_docking_plugins` | `test_charge_state.cpp` (gtest) |
-| `patrolbot_gimbal` | seven behaviour suites incl. `test_isolation_contract.py` |
 | `patrolbot-launch` | `test_copyright.py`, `test_flake8.py`, `test_pep257.py` |
 | `rosaria2` | `ament_lint_auto` / `ament_lint_common` |
 
-The two integration suites are skipped unless `PATROLBOT_RUN_INTEGRATION=1` is set, because they
+The fake-SBC and dock-manager integration suites are skipped unless `PATROLBOT_RUN_INTEGRATION=1` is set, because they
 create real rclpy nodes and must run in an isolated ROS domain:
 
 ```bash
@@ -40,11 +64,11 @@ PATROLBOT_RUN_INTEGRATION=1 colcon test \
 
 ## SBC server tests
 
-The SBC has its own suites, and **neither links ARIA**, so both build and run on a workstation:
+The SBC has five suites; **none links ARIA**, so they build and run on a workstation:
 
 ```bash
 cd hardware/patrolbot_hw_server
-make -B test        # runs tests/protocol_test and tests/undock_test
+make -B test        # protocol, undock, scan timing, LiDAR power, encoder capture
 ```
 
 `tests/undock_test.cpp` drives the dock observer and the undock controller through scripted
@@ -61,11 +85,13 @@ g++ -m32 -Wall -Wextra -Wpedantic -O2 -std=c++11 -c protocol.cpp -o /tmp/protoco
 g++ -m32 -Wall -Wextra -Wpedantic -O2 -std=c++11 -c undock.cpp   -o /tmp/undock.o
 ```
 
-## Resilience tests (the important ones)
+## Supervised resilience acceptance
 
-The self-healing behavior was validated by deliberately breaking the link on the live robot and
-confirming automatic recovery. These are the canonical acceptance tests for any change near the
-seam; re-run them after touching the bridge, the SBC server, or the lifecycle/launch logic.
+Historical self-healing checks deliberately broke the link on the live robot
+and observed recovery. They are not acceptance evidence for the current checkout.
+Re-running this matrix requires a separately authorized, supervised hardware
+session after changes near the bridge/SBC/lifecycle seam; the offline runner
+does not execute any of it.
 
 | Scenario | How | Expected |
 |---|---|---|
@@ -83,9 +109,8 @@ ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
 
 ## What is **not** covered
 
-- No automated end-to-end navigation test (plan → follow → reach goal). Validate goals manually in
-  RViz against the active map.
-- No automated end-to-end navigation test on hardware; validate goals manually in RViz.
+- Portable units do not replace the separate native closed-loop/fake-hardware
+  navigation tests or supervised hardware navigation acceptance.
 - The undock hardware profile (rear-sonar indices, E-stop semantics, fault masks) cannot be
   measured offline. Until `patrolbot_commission_probe` supplies them, a production undock is
   refused by design.
@@ -96,11 +121,8 @@ ssh robot-pi2 'docker logs --tail 100 patrolbot-navigation'
 
 If you invest in test infrastructure, the highest-value targets, in order:
 
-1. A pytest suite around the bridge's `_parse_telemetry` / `_parse_aux` (pure functions over
-   strings — easy to unit test, high payoff given they handle untrusted wire input).
-2. A checked-in mock SBC plus a launch-testing smoke test that asserts `/odom`,
-   `/scan`, and `/cmd_vel` flow.
-3. A scripted version of the freeze/resume resilience matrix.
+1. Extend existing protocol/odometry tests with additional malformed-input cases.
+2. Add supervised evidence capture for the freeze/resume resilience matrix.
 
 See [Profiling](profiling.md) for performance measurement and [Debugging](debugging.md) for the
 diagnostic tooling these tests rely on.

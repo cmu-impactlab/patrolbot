@@ -56,7 +56,7 @@ while normally docked are not.
 `joy_node` accepts one `TYPE_RUMBLE`, id `0` command. Its SDL `LEFTRIGHT`
 implementation applies the single intensity to both the F710's large and small
 motors. The navigation container therefore needs read/write access to
-`/dev/input`; the gimbal container remains read-only.
+`/dev/input`.
 
 ### Failure conditions
 
@@ -65,7 +65,7 @@ motors. The navigation container therefore needs read/write access to
 | Controller unplugged | no `/dev/input/js*`, no `/joy` | 0.4 s watchdog drops the deadman and ramps to zero; a canceled goal stays canceled |
 | Switch on **D** (DirectInput) | wrong axis/button map | sticks do nothing useful — set the switch to **X** |
 | Deadman not held | sticks ignored | by design (interlock) |
-| Rumble unavailable | `joy_node` logs `No haptic (rumble) available` | verify the navigation input mount and cgroup rule are read/write; do not weaken the gimbal service |
+| Rumble unavailable | `joy_node` logs `No haptic (rumble) available` | verify the navigation input mount and cgroup rule are read/write |
 
 ## SBC telemetry socket (machine-to-machine)
 

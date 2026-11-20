@@ -287,7 +287,6 @@ class PatrolBotBridge(Node):
         self._undock_result = None
         self._operation_fault = ('', '')
         self._undock_feedback = None
-        self._undock_accepted = False
         self._undock_session = 0
         self._undock_goal_lock = threading.Lock()
         self._undock_goal_reserved = False
@@ -349,7 +348,6 @@ class PatrolBotBridge(Node):
         # a reviewed evidence-backed backend is wired in (see tuning_activation).
         self._tuning_store = None
         self._tuning_service = None
-        self._tuning_coordinator = None
         self._tuning_error = ''
         self._tuning_policy = PolicyCache(self._probe_tuning_limits,
                                           required=self._tuning_state_expected())
@@ -1611,7 +1609,6 @@ class PatrolBotBridge(Node):
         with self._undock_lock:
             if event.request_id != self._undock_request_id:
                 return
-            self._undock_accepted = True
             self._undock_feedback = event
 
     def _handle_undock_result(self, line):
@@ -1711,7 +1708,6 @@ class PatrolBotBridge(Node):
             self._undock_request_id = request_id
             self._undock_result = None
             self._undock_feedback = None
-            self._undock_accepted = False
             self._undock_session = session
         self._undock_event.clear()
         try:
@@ -1940,7 +1936,6 @@ class PatrolBotBridge(Node):
             self._tuning_readback_at = None
             self._tuning_readback_lock = threading.Lock()
             self._tuning_store = store
-            self._tuning_coordinator = coordinator
             self._tuning_service = TuningService(
                 store, coordinator,
                 mutations_enabled=self._tuning_authorization_key is not None,

@@ -58,9 +58,7 @@ that local acknowledgement, replace its AA batteries before changing ROS or
 container configuration. Keep the rear mode switch at `X` (XInput).
 
 The `navigation` Compose service must have both
-`/dev/input:/dev/input:rw` and `c 13:* rw`. The `gimbal` service must remain
-`/dev/input:/dev/input:ro` with `c 13:* r`; it consumes `/joy` from ROS and
-never needs device write access. Recreate only `patrolbot-navigation` after a
+`/dev/input:/dev/input:rw` and `c 13:* rw`. Recreate only `patrolbot-navigation` after a
 permission change, then verify its log reports haptic availability.
 
 For a no-motion channel check, publish one finite `JoyFeedback` pulse only with

@@ -35,8 +35,8 @@ and the laser frame transform.
 | `launch/patrolbot_localization_launch.py` | Patched nav2_bringup localization (`bond_timeout: 0.0`) |
 | `launch/patrolbot_navigation_launch.py` | Patched nav2_bringup navigation (`bond_timeout: 0.0`) |
 | `config/nav2_params.yaml` | Full Nav2 parameter set ([Parameters](../ros2/parameters.md)) |
-| `maps/second_map.{yaml,pgm}` | **Active** map — 3192×2205 @ 0.075 m/px, origin `[-1,-1,0]` |
-| `maps/cmuq_1st_floor.{yaml,pgm}` | Older CMU-Q map — not loaded |
+| `maps/second_map.{yaml,pgm}` | **Active catalog Floor 2**, default when no selection exists — 3192×2205 @ 0.075 m/px, origin `[-1,-1,0]` |
+| `maps/cmuq_1st_floor.{yaml,pgm}` | **Active catalog Floor 1**, selectable through the coordinated map/localization path; not dead data |
 | `scripts/patrolbot_joy_teleop.py` | Xinput joystick teleop node |
 | `scripts/patrolbot_safety_watchdog.py` | priority-10 telemetry/power/fault/E-stop hold |
 | `scripts/lms200_sanitizer.py` | `/bad_scan → /good_scan` header fixer — **not in active launch** |

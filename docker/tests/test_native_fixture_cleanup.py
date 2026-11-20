@@ -4,11 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 import ast
 import inspect
+import json
 import math
+import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -747,3 +750,102 @@ def test_collision_readiness_failure_is_bounded_and_never_applies_fault(
     assert not any(e['event'] == 'command' and e['phase'] == 'scenario'
                    for e in node.evidence)
     assert node.world == (False, False, True)
+
+
+@pytest.mark.parametrize('shape', ['dict', 'object'])
+def test_collision_receive_accepts_native_metadata(collision_simulation, shape):
+    node, _, _, _ = collision_simulation
+    message = SimpleNamespace(linear=SimpleNamespace(x=1, y=0, z=0),
+                              angular=SimpleNamespace(x=0, y=0, z=0))
+    info = {'source_timestamp': 42}
+    if shape == 'object':
+        info = SimpleNamespace(**info)
+    node.receive(message, info)
+    assert node.outputs == [message]
+    assert node.output_sources == [42]
+    assert node.evidence[-1]['source_ns'] == 42
+
+
+@pytest.mark.parametrize('shape', ['dict', 'object'])
+@pytest.mark.parametrize('value', [None, True, False, 0, -1, 1.5, '42', [], {}])
+def test_collision_invalid_timestamp_preserves_paired_arrays(
+        collision_simulation, shape, value):
+    node, _, deliver, _ = collision_simulation
+    deliver(0.1, 0.0)
+    outputs, sources = node.outputs[:], node.output_sources[:]
+    info = {'source_timestamp': value}
+    if shape == 'object':
+        info = SimpleNamespace(**info)
+    with pytest.raises(ValueError, match='positive integer'):
+        node.receive(object(), info)
+    assert node.outputs == outputs
+    assert node.output_sources == sources
+    assert len(node.outputs) == len(node.output_sources)
+    assert node.evidence[-1]['event'] == 'output-metadata-invalid'
+    deliver(0.2, 0.0)
+    assert len(node.outputs) == len(node.output_sources) == 2
+
+
+@pytest.mark.parametrize('info', [None, {}, SimpleNamespace(), [], 42])
+def test_collision_missing_metadata_is_recorded_without_output(collision_simulation, info):
+    node, _, _, _ = collision_simulation
+    with pytest.raises(ValueError, match='positive integer'):
+        node.receive(object(), info)
+    assert node.outputs == node.output_sources == []
+    assert node.evidence[-1]['event'] == 'output-metadata-invalid'
+
+
+@pytest.mark.parametrize('cleanup_fails', [False, True])
+def test_sonar_helper_direct_fixture_startup_and_cleanup(
+        monkeypatch, tmp_path, capsys, cleanup_fails):
+    root = Path(__file__).resolve().parents[2]
+    source = root / 'ros2_ws/src/patrolbot_navigation/test/test_collision_monitor_integration.py'
+    tree = ast.parse(source.read_text())
+    tree.body = [item for item in tree.body if getattr(item, 'name', '') == 'monitor']
+    tree.body[0].decorator_list = []
+    scratch_paths = []
+
+    def log_path(name, fallback):
+        scratch_paths.append(fallback)
+        assert fallback.is_dir()
+        return fixture_log_path(name, fallback)
+
+    namespace = dict(fixture_log_path=log_path, rclpy=object(), NativeFixture=Mock(
+        side_effect=RuntimeError('native startup reached')))
+    exec(compile(tree, str(source), 'exec'), namespace)
+    fixture = namespace['monitor']
+    if cleanup_fails:
+        def fixture(factory):
+            log_path('collision_monitor.log', factory.mktemp('collision-monitor')).touch()
+            try:
+                yield SimpleNamespace(command=lambda _: object())
+            finally:
+                raise RuntimeError('fixture cleanup failed')
+
+    helper = root / 'docker/tests/integration_sonar_outage.py'
+    tree = ast.parse(helper.read_text())
+    # Run the actual helper body with ROS startup stubbed; never launch a worker.
+    start = next(i for i, item in enumerate(tree.body)
+                 if isinstance(item, ast.If))
+    tree.body = tree.body[start:]
+    logs = tmp_path / 'retained-logs'
+    monkeypatch.setenv('ROS_LOG_DIR', str(logs))
+    alarms = []
+    module = SimpleNamespace(monitor=SimpleNamespace(__wrapped__=fixture),
+                             PARAMS_FILE=Path('params.yaml'),
+                             assert_velocity=Mock(side_effect=RuntimeError('case reached')))
+    namespace = dict(os=os, tempfile=tempfile, Path=Path, SimpleNamespace=SimpleNamespace,
+                     module=module, time=__import__('time'), json=json,
+                     signal=SimpleNamespace(SIGALRM=signal.SIGALRM,
+                                            signal=lambda *_: None, alarm=alarms.append))
+    with pytest.raises(RuntimeError, match=(
+            'fixture cleanup failed' if cleanup_fails else 'native startup reached')):
+        exec(compile(tree, str(helper), 'exec'), namespace)
+    assert scratch_paths and all(not path.exists() for path in scratch_paths)
+    assert (logs / 'collision_monitor.log').exists()
+    assert alarms == [30, 0]
+    evidence = json.loads(capsys.readouterr().out)
+    assert evidence['passed'] is False
+    assert evidence['log_dir'] == str(logs)
+    if cleanup_fails:
+        assert evidence['cleanup_failure'] == 'fixture cleanup failed'

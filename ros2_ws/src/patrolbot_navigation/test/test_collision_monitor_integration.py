@@ -70,9 +70,15 @@ class CollisionHarness(Node):
 
     def receive(self, message, info):
         with self.lock:
+            source = (info.get('source_timestamp') if isinstance(info, dict)
+                      else getattr(info, 'source_timestamp', None))
+            if type(source) is not int or source <= 0:
+                self.record('output-metadata-invalid', metadata_type=type(info).__name__,
+                            source_timestamp=repr(source))
+                raise ValueError('DDS output source timestamp must be a positive integer')
             self.outputs.append(message)
-            self.output_sources.append(info.source_timestamp)
-            self.record('output', source_ns=info.source_timestamp, velocity=[
+            self.output_sources.append(source)
+            self.record('output', source_ns=source, velocity=[
                 message.linear.x, message.linear.y, message.linear.z,
                 message.angular.x, message.angular.y, message.angular.z])
 

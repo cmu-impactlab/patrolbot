@@ -1,0 +1,133 @@
+"""Exercise the real pytest child/evidence protocol without ROS or Docker."""
+
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC = importlib.util.spec_from_file_location('gate', ROOT / 'docker/native_ci_gate.py')
+gate = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(gate)
+
+
+def run(tmp_path, source, deadline=10):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    (package / 'test/test_sample.py').write_text(source)
+    return gate.run_suite('custom', package, tmp_path / 'evidence', deadline)
+
+
+def test_clean_suite_records_collection_all_phases_and_junit(tmp_path):
+    result = run(tmp_path, 'def test_ok():\n    assert True\n')
+    assert result['issues'] == []
+    directory = tmp_path / 'evidence/custom'
+    events = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
+    assert next(item for item in events if item['event'] == 'collection')['nodeids'] == [
+        'test/test_sample.py::test_ok']
+    assert [item['when'] for item in events if item['event'] == 'report'] == [
+        'setup', 'call', 'teardown']
+    assert result['expected_exclusions'] == list(gate.EXCLUSIONS)
+    assert result['allowed_skips'] == []
+    assert (directory / 'pytest.log').is_file()
+    assert (directory / 'ros').is_dir()
+    assert gate.check_evidence(directory, ['test/missing.py::test_missing']) == [
+        'missing required integration sentinel: test/missing.py::test_missing']
+    (directory / 'junit.xml').unlink()
+    assert any('JUnit' in issue for issue in gate.check_evidence(directory, ()))
+
+
+@pytest.mark.parametrize('source,reason', [
+    ('import pytest\npytest.skip("collection skip", allow_module_level=True)\n', 'collection skipped'),
+    ('import pytest\n@pytest.fixture\ndef setup_skip():\n    pytest.skip("setup skip")\n'
+     'def test_skip(setup_skip):\n    pass\n', 'setup: skipped'),
+    ('import pytest\ndef test_skip():\n    pytest.skip("call skip")\n', 'call: skipped'),
+    ('import pytest\n@pytest.fixture\ndef teardown_skip():\n    yield\n    pytest.skip("teardown skip")\n'
+     'def test_skip(teardown_skip):\n    pass\n', 'teardown: skipped'),
+    ('import pytest\n@pytest.mark.xfail\ndef test_xfail():\n    assert False\n', 'call: skipped'),
+    ('import threading\ndef test_thread():\n'
+     '    def crash():\n        raise RuntimeError("thread broke")\n'
+     '    worker = threading.Thread(target=crash)\n    worker.start()\n    worker.join()\n',
+     'PytestUnhandledThreadExceptionWarning'),
+    ('import gc\ndef test_unraisable():\n'
+     '    class Broken:\n        def __del__(self):\n            raise RuntimeError("unraisable broke")\n'
+     '    del_me = Broken()\n    del del_me\n    gc.collect()\n',
+     'PytestUnraisableExceptionWarning'),
+    ('def test_teardown(request):\n'
+     '    def fail():\n        raise RuntimeError("teardown broke")\n'
+     '    request.addfinalizer(fail)\n', 'teardown: failed'),
+    ('raise RuntimeError("collection broke")\n', 'collection failed'),
+    ('# no tests\n', 'empty or missing collection'),
+    ('import os\ndef test_exit():\n    os._exit(27)\n', 'pytest process exit: 27'),
+    ('import os, signal\ndef test_crash():\n    os.kill(os.getpid(), signal.SIGTERM)\n',
+     'pytest process exit: -15'),
+])
+def test_reliability_failures_are_never_green(tmp_path, source, reason):
+    result = run(tmp_path, source)
+    assert result['issues']
+    assert any(reason in issue for issue in result['issues']), result
+    assert (tmp_path / 'evidence/custom/summary.json').is_file()
+
+
+def test_deadline_keeps_logs_and_partial_collection(tmp_path):
+    result = run(tmp_path, 'import time\ndef test_hang():\n    time.sleep(60)\n', deadline=1.5)
+    assert result['timed_out']
+    assert any('deadline exceeded' in issue for issue in result['issues'])
+    assert any('session finish' in issue for issue in result['issues'])
+    assert (tmp_path / 'evidence/custom/events.jsonl').is_file()
+    assert (tmp_path / 'evidence/custom/pytest.log').is_file()
+
+
+def test_missing_or_corrupt_evidence_fails(tmp_path):
+    assert 'missing or invalid pytest evidence' in gate.check_evidence(tmp_path, ())[0]
+    (tmp_path / 'events.jsonl').write_text('{broken')
+    assert 'missing or invalid pytest evidence' in gate.check_evidence(tmp_path, ())[0]
+
+
+def test_expected_lint_exclusions_happen_before_collection(tmp_path):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    for name in gate.EXCLUSIONS:
+        (package / name).write_text('raise RuntimeError("must never import lint")\n')
+    (package / 'test/test_ok.py').write_text('def test_ok():\n    pass\n')
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10)
+    assert result['issues'] == []
+    assert 'must never import lint' not in (tmp_path / 'evidence/custom/pytest.log').read_text()
+
+
+def test_main_aggregates_later_suites_after_failure(tmp_path, monkeypatch):
+    for name in gate.SENTINELS:
+        package = tmp_path / f'ros2_ws/src/patrolbot_{name}/test'
+        package.mkdir(parents=True)
+        (package / 'test_sample.py').write_text(
+            f'def test_ok():\n    assert {name != "bridge"}\n')
+    monkeypatch.setattr(gate, 'SENTINELS', dict.fromkeys(gate.SENTINELS, ()))
+    monkeypatch.setattr(sys, 'argv', ['native_ci_gate.py'])
+    monkeypatch.setenv('PATROLBOT_TEST_WORKSPACE', str(tmp_path))
+    monkeypatch.setenv('PATROLBOT_TEST_EVIDENCE', str(tmp_path / 'evidence'))
+    assert gate.main() == 1
+    results = json.loads((tmp_path / 'evidence/summary.json').read_text())
+    assert [result['suite'] for result in results] == ['bridge', 'dock_manager', 'navigation']
+    assert [bool(result['issues']) for result in results] == [True, False, False]
+
+
+def test_sentinels_reference_real_source_tests():
+    import ast
+    for name, sentinels in gate.SENTINELS.items():
+        for nodeid in sentinels:
+            filename, function = nodeid.split('::')
+            source = ROOT / f'ros2_ws/src/patrolbot_{name}' / filename
+            tree = ast.parse(source.read_text())
+            assert any(isinstance(node, ast.FunctionDef) and node.name == function
+                       for node in tree.body), nodeid
+
+
+def test_leftover_native_child_fails_and_is_killed(tmp_path):
+    result = run(tmp_path,
+                 'import subprocess, sys\ndef test_leak():\n'
+                 '    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n')
+    assert result['leaked_children']
+    assert 'pytest left a live process group after shutdown' in result['issues']

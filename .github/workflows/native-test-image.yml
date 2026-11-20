@@ -1,6 +1,6 @@
-name: ROS test image build and focused smoke
+name: Native ROS functional gate
 
-# Source/unit fixtures only; no robot operation or full native/lint claim.
+# Native functional suites only; no robot operation or lint claim.
 # No branch/path filters: stacked PRs must receive this check too.
 on:
   pull_request:
@@ -25,30 +25,38 @@ jobs:
           set -euo pipefail
           docker build --pull --progress=plain \
             --file docker/Dockerfile.ros-tests \
-            --tag patrolbot-ros-tests:smoke . \
+            --tag patrolbot-ros-tests:native . \
             2>&1 | tee "$RUNNER_TEMP/native-test-image-build.log"
 
-      - name: Run 42 focused source and unit tests
+      - name: Run native functional suites
         shell: bash
         run: |
           set -euo pipefail
+          evidence="$RUNNER_TEMP/native-test-image-evidence"
+          mkdir -p "$evidence/results"
+          # Only this empty evidence directory is writable by the container UID.
+          chmod 755 "$evidence/results"
+          sudo chown 65534:65534 "$evidence/results"
           docker run --rm --network=none --ipc=private \
             --cap-drop=ALL --security-opt=no-new-privileges \
             --user 65534:65534 --read-only \
-            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
-            --env HOME=/tmp --env PATROLBOT_RUN_INTEGRATION=0 \
-            patrolbot-ros-tests:smoke \
-            ros2_ws/src/patrolbot_bridge/test/test_tuning_backend.py \
-            ros2_ws/src/patrolbot_bridge/test/test_tuning_recover.py \
-            ros2_ws/src/patrolbot_bridge/test/test_tuning_observation_source.py \
-            ros2_ws/src/patrolbot_bridge/test/test_tuning_map_gate.py \
-            ros2_ws/src/patrolbot_bridge/test/test_tuning_runtime_contract.py \
-            2>&1 | tee "$RUNNER_TEMP/native-test-image-smoke.log"
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m \
+            --mount "type=bind,src=$evidence/results,dst=/evidence" \
+            --env HOME=/tmp --env PATROLBOT_TEST_EVIDENCE=/evidence \
+            --env ROS_DOMAIN_ID=101 --env ROS_LOCALHOST_ONLY=1 \
+            --env ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST \
+            --env PATROLBOT_RUN_INTEGRATION=1 \
+            --env PATROLBOT_RUN_MANUAL_UNDOCK_NATIVE=1 \
+            patrolbot-ros-tests:native \
+            2>&1 | tee "$evidence/container.log"
 
-      - name: Upload build and smoke logs
+      - name: Upload native evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-test-image-logs
-          path: ${{ runner.temp }}/native-test-image-*.log
+          path: |
+            ${{ runner.temp }}/native-test-image-build.log
+            ${{ runner.temp }}/native-test-image-evidence/
+          if-no-files-found: error
           retention-days: 7

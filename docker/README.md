@@ -19,10 +19,49 @@ docker build -f docker/Dockerfile.ros-tests -t patrolbot-ros-tests .
 docker run --rm --network=none patrolbot-ros-tests
 ```
 
-The final image builds generated interfaces and runs bridge/dock-manager
-fake-peer integration tests, their lint gates, and offline navigation tests.
-It never connects to the robot. Physical acceptance, the real Nav2 stack and
-`test_collision_monitor_integration.py` are outside this test environment.
+The final image builds generated interfaces and runs bridge, dock-manager and
+navigation functional suites in separate pytest processes from their source
+package directories. Fake-SBC, dock-manager, manual-undock and installed Jazzy
+Collision Monitor integration tests are required. The runner enables both
+integration opt-ins, uses ROS domain 101 (valid on Linux) and localhost discovery.
+Domain isolation is logical; hosted CI also requires `--network=none` and private
+IPC. It never connects to the robot. Physical acceptance and full Nav2-stack
+acceptance remain separate.
+
+The required `native-test-image` job builds this strict rosdep image once, then
+runs it non-root with a read-only root filesystem, private network/IPC, dropped
+capabilities and no-new-privileges. Only its dedicated evidence directory is
+bind-mounted writable, owned by UID/GID 65534; `/tmp` is tmpfs. It mounts no source,
+credentials, devices, sockets or production volumes. The checkout's baked source
+fixtures remain read-only. Job ID and branch-protection contexts are unchanged.
+
+There are **no allowed skips**. Before collection, the runner explicitly excludes
+`test_copyright.py`, `test_flake8.py` and `test_pep257.py` in each package. These
+ament checks are outside this functional gate; their exclusion claims no lint or
+copyright pass. All other collected tests must pass setup, call and teardown.
+Required integration nodeids are checked without pinning a total test count.
+Collection errors, empty suites, skipped/xfail outcomes, thread/unraisable
+exceptions, missing JUnit/evidence, native pytest crashes, leaked child process
+groups and deadlines fail the
+gate. Failed suites do not prevent the remaining suites from running. There are
+no retries or blanket warning filters.
+
+Evidence defaults to `/tmp/native-test-evidence` (override with
+`PATROLBOT_TEST_EVIDENCE`). Each suite keeps `pytest.log`, `junit.xml`, an
+incremental `events.jsonl` (collection nodeids, deselection, skip/failure reasons,
+all test phases and session finish), `summary.json` (command, exclusions, deadline,
+exit and process-group cleanup), and a `ros/` log directory. An abnormal exit can
+leave JUnit/session finish missing; that is itself a failure, with partial logs
+retained. The root summary aggregates every suite. Hosted CI uploads build,
+container and suite evidence with `if: always()` even on failure.
+
+Portable gate regressions (no ROS or Docker):
+
+```bash
+python -B -m pytest -q docker/tests/test_native_ci_gate.py \
+  docker/tests/test_native_test_image_workflow.py docker/tests/test_ros_test_image.py \
+  docker/tests/test_main_protection.py
+```
 
 For rapid iteration, reuse one container with a read-only source mount and
 incremental build output inside the container (no image rebuild per edit):
@@ -49,10 +88,13 @@ Repeat only `docker exec` after edits. Use normal installation, not
 `--symlink-install`: the map catalog deliberately rejects files resolving
 outside its catalog directory. The `ros-test-env` Dockerfile target contains
 only the reusable toolchain/dependencies; the final `ros-tests` target is
-suitable for a later CI build-and-run job. Both return nonzero on failure.
+used by the hosted functional gate. Both return nonzero on failure.
 Each pytest invocation is capped at 300 seconds (override with
-`PATROLBOT_TEST_TIMEOUT`). Lint runs use one worker: forking a linter after
-loading ROS/DDS threads can crash or hang the test process.
+`PATROLBOT_TEST_TIMEOUT`, maximum 600). The runner terminates then kills the suite
+process group after completion or deadline, so native children do not survive
+into the next suite. Optional pytest arguments select a diagnostic run, without
+the default three-suite integration sentinel requirement. Hosted CI passes no
+arguments and always runs the required selection.
 
 ## Configure and build
 

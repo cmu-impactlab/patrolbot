@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
+import inspect
 from pathlib import Path
 import signal
 import subprocess
@@ -14,7 +15,17 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] /
                        'ros2_ws/src/patrolbot_bridge/test'))
-from native_fixture import NativeFixture, fixture_log_path
+from native_fixture import NativeFixture, dispose_task, fixture_log_path
+
+
+def inactive_task():
+    task = Mock()
+    task.done.return_value = False
+    task.cancelled.return_value = False
+    task._handler = None
+    task._executing = False
+    task._task_lock = threading.Lock()
+    return task
 
 
 def test_native_child_logs_use_evidence_directory(monkeypatch, tmp_path):
@@ -133,11 +144,19 @@ def test_pending_worker_queue_is_cancelled_before_ros_handles_are_destroyed():
         lifetime.start(executor)
         executor._executor.submit(callback)
         assert entered.wait(1)
-        pending = executor._executor.submit(lambda: events.append('queued'))
+        task = inactive_task()
+        async def handler():
+            events.append('queued')
+        coroutine = task._handler = handler()
+        task.side_effect = lambda: coroutine.send(None)
+        executor._pending_tasks[task] = None
+        pending = executor._executor.submit(task)
         releaser.start()
     releaser.join(timeout=2)
     assert not releaser.is_alive()
     assert pending.cancelled()
+    assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
+    task.cancel.assert_called_once_with()
     assert 'queued' not in events
     assert events.index('callback-finished') < events.index('shutdown')
 
@@ -202,8 +221,8 @@ def test_callback_exception_is_not_lost_after_spin_stops(storage, state):
     events = []
     ros, node = resources(events)
     executor = Executor(events, 'legacy' if storage == 'legacy' else 'jazzy')
-    task = Mock()
-    task.done.return_value = state != 'pending'
+    task = inactive_task()
+    task.done.return_value = state == 'completed'
     task.cancelled.return_value = state == 'cancelled'
     task.exception.return_value = ValueError('callback error')
     if storage == 'legacy':
@@ -237,9 +256,7 @@ def test_async_task_finishing_during_drain_retains_exception_and_new_tasks():
     executor = Executor(events)
     # Like cached Jazzy, this executor has no legacy _tasks attribute.
     assert not hasattr(executor, '_tasks')
-    task = Mock()
-    task.done.return_value = False
-    task.cancelled.return_value = False
+    task = inactive_task()
     task.exception.return_value = ValueError('async action failed')
     executor._pending_tasks[task] = None
     executor._ready_tasks.append(task)
@@ -252,7 +269,7 @@ def test_async_task_finishing_during_drain_retains_exception_and_new_tasks():
         executor._pending_tasks.clear()
         executor._ready_tasks.clear()
         executor._futures.clear()
-        completed = Mock()
+        completed = inactive_task()
         completed.done.return_value = True
         completed.cancelled.return_value = False
         completed.exception.return_value = ValueError('done callback failed')
@@ -287,13 +304,129 @@ def test_unsupported_private_api_fails_clearly(missing):
         assert any('unsupported test executor' in str(error)
                    for error in caught.value.exceptions)
         assert events[-1] == 'external'
-        if missing == '_executor':
-            assert 'destroy' not in events and 'context' not in events
+        assert 'destroy' not in events and 'context' not in events
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
 
 
-def test_callback_timeout_retains_handles_and_reports_surviving_drain():
+@pytest.mark.parametrize('state', ['created', 'suspended', 'cancelled'])
+@pytest.mark.parametrize('cancel_closes', [False, True])
+def test_inactive_coroutines_are_finalized_before_guard_destruction(state, cancel_closes):
+    events = []
+    ros, node = resources(events)
+    executor = Executor(events)
+    task = inactive_task()
+
+    async def handler():
+        try:
+            await pause()
+        finally:
+            assert 'shutdown' not in events and 'destroy' not in events
+            events.append('finalized')
+
+    class pause:
+        def __await__(self):
+            yield
+
+    coroutine = task._handler = handler()
+    if state == 'suspended':
+        coroutine.send(None)
+    task.cancelled.return_value = state == 'cancelled'
+    if cancel_closes:
+        task.cancel.side_effect = lambda: (
+            None if task.cancelled() else coroutine.close())
+    executor._pending_tasks[task] = None
+    executor._ready_tasks.append(task)
+    executor._futures.append(task)
+    try:
+        with NativeFixture(ros) as lifetime:
+            lifetime.init()
+            lifetime.node(node)
+            lifetime.start(executor)
+        assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CLOSED
+        task.cancel.assert_called_once_with()
+        task.assert_not_called()
+        if state == 'suspended':
+            assert events.index('finalized') < events.index('shutdown')
+        assert events[-2:] == ['destroy', 'context']
+    finally:
+        coroutine.close()
+
+
+def test_disposal_also_cancels_tasks_scheduled_by_cancellation():
+    executor = Executor([])
+    first, followup = inactive_task(), inactive_task()
+    first.cancel.side_effect = lambda: executor._ready_tasks.append(followup)
+    executor._pending_tasks[first] = None
+    with NativeFixture(Mock()) as lifetime:
+        lifetime.start(executor)
+    first.cancel.assert_called_once_with()
+    followup.cancel.assert_called_once_with()
+
+
+@pytest.mark.parametrize('active', ['lock', 'executing'])
+def test_active_task_is_never_cancelled_or_closed(active):
+    task = inactive_task()
+    async def handler():
+        pass
+    coroutine = task._handler = handler()
+    if active == 'lock':
+        task._task_lock.acquire()
+    else:
+        task._executing = True
+    try:
+        with pytest.raises(RuntimeError, match='still active'):
+            dispose_task(task)
+        task.cancel.assert_not_called()
+        assert inspect.getcoroutinestate(coroutine) == inspect.CORO_CREATED
+    finally:
+        if active == 'lock':
+            task._task_lock.release()
+        coroutine.close()
+
+
+@pytest.mark.parametrize('failure', ['unsupported', 'cancel', 'close'])
+def test_disposal_failure_keeps_guards_and_preserves_other_task_errors(failure):
+    events = []
+    ros, node = resources(events)
+    executor = Executor(events)
+    task = inactive_task()
+    async def handler():
+        try:
+            await pause()
+        finally:
+            raise ValueError('close failed')
+    class pause:
+        def __await__(self):
+            yield
+    coroutine = task._handler = handler()
+    if failure == 'unsupported':
+        del task._task_lock
+    elif failure == 'cancel':
+        task.cancel.side_effect = ValueError('cancel failed')
+    else:
+        coroutine.send(None)
+    completed = inactive_task()
+    completed.done.return_value = True
+    completed.exception.return_value = ValueError('callback failed')
+    executor._ready_tasks.extend([task, completed])
+    try:
+        with pytest.raises(BaseExceptionGroup) as caught:
+            with NativeFixture(ros) as lifetime:
+                lifetime.init()
+                lifetime.node(node)
+                lifetime.start(executor)
+                lifetime.cleanups.append(lambda: events.append('external'))
+        assert len(caught.value.exceptions) == 2
+        assert str(caught.value.exceptions[-1]) == 'callback failed'
+        assert 'shutdown' not in events and 'destroy' not in events and 'context' not in events
+        assert events[-1] == 'external'
+    finally:
+        coroutine.close()
+
+
+@pytest.mark.parametrize('stage', ['callback', 'finalizer'])
+def test_callback_timeout_retains_handles_and_reports_surviving_drain(stage):
     events = []
     ros, node = resources(events)
     executor = Executor(events)
@@ -303,15 +436,30 @@ def test_callback_timeout_retains_handles_and_reports_surviving_drain():
     def callback():
         entered.set()
         assert release.wait(2)
+    class pause:
+        def __await__(self):
+            yield
+    async def handler():
+        try:
+            await pause()
+        finally:
+            callback()
+    if stage == 'finalizer':
+        task = inactive_task()
+        task._handler = handler()
+        task._handler.send(None)
+        executor._ready_tasks.append(task)
     try:
         with pytest.raises(BaseExceptionGroup) as caught:
             with NativeFixture(ros, timeout=0.02) as lifetime:
                 lifetime.init()
                 lifetime.node(node)
                 lifetime.start(executor)
-                executor._executor.submit(callback)
-                assert entered.wait(1)
+                if stage == 'callback':
+                    executor._executor.submit(callback)
+                    assert entered.wait(1)
                 lifetime.cleanups.append(lambda: events.append('external'))
+        assert entered.is_set()
         assert 'fixture-worker-drain survived' in str(caught.value.exceptions[0])
         assert 'destroy' not in events and 'context' not in events
         assert events[-1] == 'external'

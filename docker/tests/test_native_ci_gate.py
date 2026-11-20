@@ -63,6 +63,10 @@ def test_clean_suite_records_collection_all_phases_and_junit(tmp_path):
      '    class Broken:\n        def __del__(self):\n            raise RuntimeError("unraisable broke")\n'
      '    del_me = Broken()\n    del del_me\n    gc.collect()\n',
      'PytestUnraisableExceptionWarning'),
+    ('import gc\ndef test_unawaited():\n'
+     '    async def handler():\n        pass\n'
+     '    coroutine = handler()\n    del coroutine\n    gc.collect()\n',
+     'was never awaited'),
     ('def test_teardown(request):\n'
      '    def fail():\n        raise RuntimeError("teardown broke")\n'
      '    request.addfinalizer(fail)\n', 'teardown: failed'),
@@ -89,6 +93,17 @@ def test_deadline_keeps_logs_and_partial_collection(tmp_path):
     assert result['process_group_cleanup']['signals_sent'] == ['SIGTERM']
     assert not result['process_group_cleanup']['forced_cleanup']
     assert result['process_group_cleanup']['group_retired']
+
+
+def test_never_awaited_warning_cannot_be_greenwashed_by_local_warning_filter(tmp_path):
+    result = run(tmp_path,
+                 'import gc, warnings\ndef test_unawaited():\n'
+                 '    warnings.simplefilter("always", RuntimeWarning)\n'
+                 '    async def handler():\n        pass\n'
+                 '    coroutine = handler()\n    del coroutine\n    gc.collect()\n')
+    assert result['returncode'] == 0
+    assert any('RuntimeWarning:' in issue and 'was never awaited' in issue
+               for issue in result['issues'])
 
 
 def test_missing_or_corrupt_evidence_fails(tmp_path):

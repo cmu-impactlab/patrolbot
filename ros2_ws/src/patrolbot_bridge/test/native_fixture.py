@@ -1,5 +1,6 @@
 """Shared test-only lifetime ownership; no ROS imports for offline checks."""
 
+import inspect
 import signal
 import subprocess
 import threading
@@ -28,6 +29,29 @@ def executor_tasks(executor):
         raise RuntimeError('unsupported test executor task storage; update TEST ONLY adapter')
     # Completed handlers may already be absent from the pending collection.
     return tasks + list(getattr(executor, '_futures', ()))
+
+
+def dispose_task(task):
+    """TEST ONLY: finalize an inactive rclpy Task while ROS guards still exist."""
+    handler = getattr(task, '_handler', None)
+    lock = getattr(task, '_task_lock', None)
+    if (not hasattr(task, '_handler') or not isinstance(lock, type(threading.Lock()))
+            or not isinstance(getattr(task, '_executing', None), bool)
+            or not (handler is None or callable(handler) or inspect.iscoroutine(handler))):
+        raise RuntimeError('unsupported test executor task internals; update TEST ONLY adapter')
+    if not lock.acquire(blocking=False):
+        raise RuntimeError('test executor task is still active after worker drain')
+    try:
+        if task._executing or (inspect.iscoroutine(handler) and handler.cr_running):
+            raise RuntimeError('test executor task is still active after worker drain')
+        if task.done():
+            return task.exception()
+        task.cancel()
+        # cancel() varies by rclpy version and may leave a cancelled coroutine open.
+        if inspect.iscoroutine(handler):
+            handler.close()
+    finally:
+        lock.release()
 
 
 class NativeFixture:
@@ -110,7 +134,7 @@ class NativeFixture:
                 safe = attempt(lambda: join(self.spin_thread))
             if safe and self.executor is not None:
                 tasks = []
-                attempt(lambda: tasks.extend(executor_tasks(self.executor)))
+                compatible = attempt(lambda: tasks.extend(executor_tasks(self.executor)))
                 # Jazzy may have submitted handlers not yet counted as active work.
                 # TEST ONLY: drain the known private pool before destroying guards.
                 def drain_workers():
@@ -119,23 +143,34 @@ class NativeFixture:
                         raise RuntimeError('unsupported test executor worker pool; '
                                            'update TEST ONLY adapter')
                     pool.shutdown(wait=True, cancel_futures=True)
+                    disposed = compatible
+                    seen = set()
+                    # Cancellation/finally blocks can schedule further tasks.
+                    while True:
+                        if not attempt(lambda: tasks.extend(executor_tasks(self.executor))):
+                            disposed = False
+                            break
+                        pending = dict.fromkeys(task for task in tasks if task not in seen)
+                        if not pending:
+                            break
+                        for task in pending:
+                            seen.add(task)
+                            def dispose():
+                                error = dispose_task(task)
+                                if error is not None:
+                                    failures.append(error)
+                            if not attempt(dispose):
+                                disposed = False
+                    drained.append(disposed)
 
                 drained = []
                 drain = threading.Thread(
-                    target=lambda: drained.append(attempt(drain_workers)),
+                    target=lambda: attempt(drain_workers),
                     name='fixture-worker-drain', daemon=True)
                 safe = attempt(drain.start)
                 if safe:
                     safe = attempt(lambda: join(drain)) and drained == [True]
                 if safe:
-                    attempt(lambda: tasks.extend(executor_tasks(self.executor)))
-                    def check_tasks():
-                        for task in dict.fromkeys(tasks):
-                            if task.done() and not task.cancelled():
-                                error = task.exception()
-                                if error is not None:
-                                    failures.append(error)
-                    attempt(check_tasks)
                     def shutdown():
                         assert self.executor.shutdown(timeout_sec=self.timeout), (
                             'executor failed to drain callbacks')

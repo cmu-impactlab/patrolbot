@@ -86,8 +86,10 @@ def check_evidence(directory, sentinels):
             issues.append(f"collection {item['outcome']}: {item['nodeid']}: {item['reason']}")
         elif item['event'] == 'deselected' and item['nodeids']:
             issues.append(f"unexpected deselected tests: {item['nodeids']}")
-        elif item['event'] == 'warning' and item['category'] in (
-                'PytestUnhandledThreadExceptionWarning', 'PytestUnraisableExceptionWarning'):
+        elif item['event'] == 'warning' and (
+                item['category'] in (
+                    'PytestUnhandledThreadExceptionWarning', 'PytestUnraisableExceptionWarning')
+                or (item['category'] == 'RuntimeWarning' and 'was never awaited' in item['reason'])):
             issues.append(f"{item['category']}: {item['reason']}")
     for nodeid in nodeids:
         if reports.get(nodeid) != dict.fromkeys(('setup', 'call', 'teardown'), 'passed'):
@@ -139,6 +141,7 @@ def run_suite(name, package, evidence, deadline, paths=()):
                '-p', 'no:cacheprovider', '-p', 'native_ci_gate',
                '-W', 'error::pytest.PytestUnhandledThreadExceptionWarning',
                '-W', 'error::pytest.PytestUnraisableExceptionWarning',
+               '-W', 'error:coroutine .* was never awaited:RuntimeWarning',
                f'--junitxml={directory / "junit.xml"}',
                *(f'--ignore={path}' for path in EXCLUSIONS), *(paths or ('test',))]
     env = {**os.environ, 'PYTHONPATH': os.pathsep.join(

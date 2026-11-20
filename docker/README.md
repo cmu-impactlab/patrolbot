@@ -38,9 +38,11 @@ fixtures remain read-only. Job ID and branch-protection contexts are unchanged.
 There are **no allowed skips**. Before collection, the runner explicitly excludes
 exactly `test/test_copyright.py`, `test/test_flake8.py` and `test/test_pep257.py`
 relative to each package. The runner supplies absolute `--ignore` paths and a
-`tryfirst` collection hook matches those same absolute paths before import.
-It returns `None` for every other path, preserving other plugins' collection
-rules; matching basenames elsewhere are not excluded. Additional `--ignore` or
+pytest 7-compatible `hookwrapper=True` collection hook matches those same absolute
+paths before import. It yields to delegate hooks and calls `outcome.get_result()`
+before forcing `True` only for those paths, preserving upstream errors even for
+declared exclusions. Every other path retains the delegate result or exception;
+matching basenames elsewhere are not excluded. Additional `--ignore` or
 `--ignore-glob` options fail configuration. These
 ament checks are outside this functional gate; their exclusion claims no lint or
 copyright pass. All other collected tests must pass setup, call and teardown.
@@ -57,7 +59,7 @@ unknown options (including timeout settings without their plugin) fatal.
 Evidence defaults to `/tmp/native-test-evidence` (override with
 `PATROLBOT_TEST_EVIDENCE`). Each suite keeps `pytest.log`, `junit.xml`, an
 incremental `events.jsonl` (pre-collection pytest/Python versions, cwd/rootdir,
-config file, invocation, installed plugins and ignore-hook ordering flags,
+config file, invocation, installed plugins and ignore-hook ordering/wrapper flags,
 declared/observed absolute exclusions, collection files/nodeids, deselection, skip/failure reasons,
 all test phases and session finish), `summary.json` (command, exclusions, deadline,
 exit and process-group cleanup), and a `ros/` log directory. An abnormal exit can
@@ -67,13 +69,17 @@ container and suite evidence with `if: always()` even on failure.
 Evidence validation rejects collection of a declared excluded file or a hook
 exclusion outside the declared paths, independently of rootdir-relative nodeids.
 
-The failed PR 85 hosted build used pytest 7.4.4 and collected lint files despite
-relative CLI exclusions. That artifact does not establish whether cwd resolution
-or a plugin caused the bypass: `pytest_ignore_collect` is a first-result hook,
-so another implementation returning `False` can bypass pytest's built-in ignore
-handling. Portable regressions exercise both different rootdirs and an installed
-plugin returning `False`, with import-time failures in all three excluded files.
-Fresh hosted verification remains necessary.
+Both failed PR 85 hosted runs are retained. The second run's pytest 7.4.4 metadata
+records launch-testing 3.4.13 / launch-testing-ros 0.26.13 and a later-registered
+`launch_testing` hook with `tryfirst=True`, competing with the gate's old
+`tryfirst` hook. A `False` first result bypassed the gate despite matching source
+paths and absolute exclusions. The passing cached image had launch-testing
+3.4.11 without that competing hook. The wrapper runs around nonwrapper hooks
+regardless of their priority or registration order. Portable regressions exercise
+different rootdirs and an installed, autoloaded, later-registered `tryfirst`
+plugin returning `False`, with import-time failures in all three excluded files,
+functional files still collected, and delegate results/errors preserved.
+Fresh hosted verification remains the parent's responsibility; no lint pass is claimed.
 
 Portable gate regressions (no ROS or Docker):
 

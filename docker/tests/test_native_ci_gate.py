@@ -52,7 +52,8 @@ def test_configuration_metadata_uses_plugin_registry(
         'plugins': sorted([dist.project_name, dist.version]
                           for _, dist in config.pluginmanager.list_plugin_distinfo()),
         'ignore_hooks': [{'plugin': str(impl.plugin_name), 'tryfirst': impl.tryfirst,
-                          'trylast': impl.trylast} for impl in implementations],
+                          'trylast': impl.trylast, 'hookwrapper': impl.hookwrapper}
+                         for impl in implementations],
     }
 
 
@@ -161,6 +162,11 @@ def test_expected_lint_exclusions_happen_before_collection(
     (other / 'test_pep257.py').write_text('def test_other_package():\n    pass\n')
     if installed_hook:
         (package / 'force_collect.py').write_text(
+            'import pytest\n'
+            'def pytest_configure(config):\n'
+            '    names = [name for name, _ in config.pluginmanager.list_name_plugin()]\n'
+            '    assert names.index("native_ci_gate") < names.index("force-collect")\n'
+            '@pytest.hookimpl(tryfirst=True)\n'
             'def pytest_ignore_collect(collection_path, config):\n'
             '    if collection_path.suffix == ".py":\n        return False\n')
         dist = package / 'force_collect-1.0.dist-info'
@@ -185,11 +191,53 @@ def test_expected_lint_exclusions_happen_before_collection(
     assert set(configuration['exclusions']) == exclusions
     assert configuration['pytest_version'] == pytest.__version__
     assert (['force-collect', '1.0'] in configuration['plugins']) == installed_hook
+    hooks = {hook['plugin']: hook for hook in configuration['ignore_hooks']}
+    assert hooks['native_ci_gate']['hookwrapper'] is True
+    if installed_hook:
+        assert hooks['force-collect'] == {
+            'plugin': 'force-collect', 'tryfirst': True, 'trylast': False,
+            'hookwrapper': False}
     collection = next(item for item in events if item['event'] == 'collection')
     assert set(collection['files']) == {
         str(package / 'test/test_ok.py'), str(package / 'test/nested/test_flake8.py'),
         str(other / 'test_pep257.py')}
     assert not any(item['event'] == 'deselected' for item in events)
+
+
+@pytest.mark.parametrize('excluded', [False, True])
+def test_ignore_wrapper_preserves_delegate_failure(tmp_path, excluded):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    filename = gate.EXCLUSIONS[0] if excluded else 'test/test_ok.py'
+    (package / filename).write_text('raise RuntimeError("must never import")\n')
+    (package / 'conftest.py').write_text(
+        'import pytest\n'
+        '@pytest.hookimpl(tryfirst=True)\n'
+        'def pytest_ignore_collect(collection_path, config):\n'
+        f'    if collection_path.name == {Path(filename).name!r}:\n'
+        '        raise RuntimeError("delegate hook broke")\n')
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10)
+    assert result['returncode'] != 0
+    assert result['issues']
+    log = (tmp_path / 'evidence/custom/pytest.log').read_text()
+    assert 'delegate hook broke' in log
+    assert 'must never import' not in log
+
+
+@pytest.mark.parametrize('result', [None, False, True])
+def test_ignore_wrapper_preserves_other_path_result(tmp_path, result):
+    class Delegate:
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_ignore_collect(self, collection_path, config):
+            return result
+
+    manager = pytest.PytestPluginManager()
+    manager.register(gate, 'native_ci_gate')
+    manager.register(Delegate(), 'later_delegate')
+    config = SimpleNamespace(
+        _native_exclusions=tuple(tmp_path / path for path in gate.EXCLUSIONS))
+    assert manager.hook.pytest_ignore_collect(
+        collection_path=tmp_path / 'test/test_functional.py', config=config) is result
 
 
 @pytest.mark.parametrize('addopts', ['--ignore=test/test_ok.py', '--ignore-glob=*ok.py'])

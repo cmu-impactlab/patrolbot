@@ -54,17 +54,18 @@ def pytest_sessionstart(session):
           plugins=sorted((dist.project_name, dist.version)
                          for _, dist in config.pluginmanager.list_plugin_distinfo()),
           ignore_hooks=[{'plugin': str(hook.plugin_name), 'tryfirst': hook.tryfirst,
-                         'trylast': hook.trylast}
+                         'trylast': hook.trylast, 'hookwrapper': hook.hookwrapper}
                         for hook in config.pluginmanager.hook.pytest_ignore_collect.get_hookimpls()])
 
 
-@pytest.hookimpl(tryfirst=True)
+@pytest.hookimpl(hookwrapper=True)
 def pytest_ignore_collect(collection_path, config):
-    # firstresult hooks returning False can bypass pytest's built-in --ignore.
+    outcome = yield
+    outcome.get_result()  # Preserve delegate errors even for declared exclusions.
+    # A later-registered tryfirst hook returning False must not bypass exclusions.
     if collection_path in config._native_exclusions:
         event('excluded', path=str(collection_path))
-        return True
-    return None
+        outcome.force_result(True)
 
 
 def pytest_collection_finish(session):

@@ -191,6 +191,8 @@ struct UndockHardwareProfile {
   double max_clearance_m;
   double max_speed_mps;
   double max_timeout_s;
+  // Captured free-running guard limits through clearance and normal handoff;
+  // manual turning after confirmed clearance has separate odometry checks.
   double max_lateral_drift_m;
   double max_departure_yaw_rad;
   // Reverse progress at which the pose guard engages. Charge state and front

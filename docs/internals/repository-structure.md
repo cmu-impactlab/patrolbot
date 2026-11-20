@@ -15,6 +15,9 @@ deployed copies; they are not the canonical editing location.
 ├── ros2_ws/                          # the colcon workspace
 │   ├── src/
 │   │   ├── patrolbot_bridge/         # ament_python — TCP bridge
+│   │   ├── patrolbot_interfaces/     # ament_cmake — typed contracts
+│   │   ├── patrolbot_dock_manager/   # ament_python — guarded undock
+│   │   ├── patrolbot_docking_plugins/# ament_cmake — dormant dock-in plugin
 │   │   ├── patrolbot_navigation/     # ament_cmake  — Nav2
 │   │   ├── patrolbot-launch/         # ament_python — mobile base (SOURCE)
 │   │   └── rosaria2/                 # ament_cmake  — legacy
@@ -74,7 +77,7 @@ patrolbot/  (github.com/cmu-impactlab/patrolbot)
 | Bridge behavior | `ros2_ws/src/patrolbot_bridge/...` | rebuild/restart bridge |
 | Nav2 params / launch / map | `ros2_ws/src/patrolbot_navigation/...` | rebuild/restart nav |
 | Mobile base (twist_mux/smoother) | `ros2_ws/src/patrolbot-launch/...` | restart bringup; rebuild if adding files |
-| SBC server | `patrolbot_hw_server/patrolbot_server.cpp` (on SBC) | `make`, restart server |
+| SBC server | `hardware/patrolbot_hw_server/` in this monorepo | offline tests, then separately authorized deployment |
 | Docker deployment | `docker/...` and `ros2_ws/src/...` | build/deploy a revision |
 | These docs | `docs/...` | `mkdocs serve` to preview |
 

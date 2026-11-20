@@ -608,7 +608,6 @@ void UndockController::computeProgress(const UndockInputs& inputs,
 
 bool UndockController::safetyTripped(const UndockInputs& inputs,
                                      UndockOutputs* out) {
-  (void)out;
   if (phase_ == UNDOCK_PHASE_STOPPING) return false;
   if (inputs.estop_pressed) {
     beginStopping(UNDOCK_SAFETY_FAULT, "estop_asserted", inputs.now_ms);
@@ -648,6 +647,17 @@ bool UndockController::safetyTripped(const UndockInputs& inputs,
   if ((phase_ == UNDOCK_PHASE_BACKING_OUT ||
        phase_ == UNDOCK_PHASE_MANUAL_TURN) && wheelStalled(inputs)) {
     beginStopping(UNDOCK_SAFETY_FAULT, "wheel_stall", inputs.now_ms);
+    return true;
+  }
+  // Guard every post-fixture sample until clearance; the manual half-turn
+  // then uses its own turn odometry limits instead of the reverse heading.
+  if (guard_captured_ && !manual_clear_ &&
+      (out->lateral_error_m > profile_.max_lateral_drift_m ||
+       out->heading_error_rad > profile_.max_departure_yaw_rad)) {
+    beginStopping(UNDOCK_MOTION_FAILED, config_.manual_mode
+        ? "manual_reverse_deviation"
+        : (out->lateral_error_m > profile_.max_lateral_drift_m
+            ? "lateral_drift_exceeded" : "departure_yaw_exceeded"), inputs.now_ms);
     return true;
   }
   if (inputs.now_ms - started_ms_ >
@@ -780,12 +790,6 @@ void UndockController::runPhase(const UndockInputs& inputs,
           out->reverse_progress_m >= profile_.pose_guard_start_m) {
         captureGuardPose(inputs);
         computeProgress(inputs, out);
-      }
-      if (config_.manual_mode && guard_captured_ &&
-          (out->lateral_error_m > profile_.max_lateral_drift_m ||
-           out->heading_error_rad > profile_.max_departure_yaw_rad)) {
-        beginStopping(UNDOCK_MOTION_FAILED, "manual_reverse_deviation", now);
-        break;
       }
       if (out->reverse_progress_m < -kForwardMotionToleranceM) {
         beginStopping(UNDOCK_MOTION_FAILED, "forward_motion_detected", now);

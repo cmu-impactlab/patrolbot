@@ -182,7 +182,6 @@ class ManualUndockRuntime:
             with n._undock_lock:
                 n._undock_request_id = request_id
                 n._undock_result = n._undock_feedback = None
-                n._undock_accepted = False
                 n._undock_session = session
                 n._undock_event.clear()
             with e.lock, n.sock_lock:

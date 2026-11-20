@@ -87,6 +87,13 @@ DDS participant discover and publish to command topics and call actions and
 services. There is no authentication, authorization, or read-only boundary in
 raw DDS. Use `LOCALHOST` whenever that exposure is not explicitly required.
 
+This page and the checked-in Compose scalar describe the **current explicit
+SUBNET choice**, not a claim that LAN DDS is safe or authenticated. Historical
+audit recommendations to prefer `LOCALHOST` are security guidance, not evidence
+that the current stack is localhost-only. Dashboard credentials do not protect
+raw DDS. Any change to the discovery scalar is a separately reviewed deployment
+decision; documentation cleanup must not silently change runtime discovery.
+
 ```bash
 # Read-only status over the management channel:
 ssh robot-pi2 'cd /home/ubuntu/patrolbot-repo && ./docker/status.sh'

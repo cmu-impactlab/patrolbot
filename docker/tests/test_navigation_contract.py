@@ -16,7 +16,10 @@ def test_both_trees_bound_recovery_and_recheck_goal_updates():
         fallback = recovery.find('./Sequence/ReactiveFallback')
         assert fallback[0].tag == 'GoalUpdated'
         actions = fallback.find('./RoundRobin')
-        assert [node.tag for node in actions] == ['Sequence', 'BackUp', 'Spin', 'Wait']
+        # Outer recovery first makes clearance, then clears both costmaps.
+        assert [node.tag for node in actions] == ['BackUp', 'Sequence', 'Spin', 'Wait']
+        assert [node.tag for node in actions[1]] == [
+            'ClearEntireCostmap', 'ClearEntireCostmap']
         assert float(actions.find('./BackUp').attrib['backup_dist']) == .10
         assert float(actions.find('./BackUp').attrib['backup_speed']) == .05
 

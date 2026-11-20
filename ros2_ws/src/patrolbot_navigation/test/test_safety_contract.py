@@ -256,12 +256,12 @@ class SafetyContractTest(unittest.TestCase):
     def test_rumble_permissions_are_scoped_to_manual_bringup(self):
         compose = yaml.safe_load(COMPOSE_FILE.read_text(encoding='utf-8'))
         navigation = compose['services']['bringup']
-        gimbal = compose['services']['gimbal']
         self.assertIn('/dev/input:/dev/input:rw', navigation['volumes'])
         self.assertEqual(navigation['device_cgroup_rules'], ['c 13:* rw'])
-        self.assertIn('/dev/input:/dev/input:ro', gimbal['volumes'])
-        self.assertIn('c 13:* r', gimbal['device_cgroup_rules'])
-        self.assertNotIn('c 13:* rw', gimbal['device_cgroup_rules'])
+        self.assertNotIn('gimbal', compose['services'])
+        for name, service in compose['services'].items():
+            if name != 'bringup':
+                self.assertNotIn('c 13:* rw', service.get('device_cgroup_rules', []))
 
     def test_controller_feedback_can_only_publish_rumble(self):
         notifier_path = (
@@ -405,7 +405,7 @@ class SafetyContractTest(unittest.TestCase):
         self.assertEqual(
             compose['x-common']['environment'][
                 'ROS_AUTOMATIC_DISCOVERY_RANGE'], expected)
-        for service in ('bringup', 'bridge', 'web-bridge', 'gimbal',
+        for service in ('bringup', 'bridge', 'web-bridge',
                         'navigation'):
             self.assertEqual(
                 compose['services'][service]['environment'][

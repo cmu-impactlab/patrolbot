@@ -2,6 +2,9 @@
 import ast
 from pathlib import Path
 from types import SimpleNamespace
+import threading
+import time
+import math
 import unittest
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -33,7 +36,7 @@ class WatchdogCaptureTests(unittest.TestCase):
         for samples in [[],[(10.61,zero)],[(10.49,zero)],[(10.55,nonzero)]]:
             with self.assertRaises(AssertionError):check(samples,10.,.5,.60)
 
-    def test_candidate_watchdog_withdraws_hardware_validity_during_recovery(self):
+    def test_localization_recovery_preserves_manual_hardware_validity(self):
         callback=function(ROOT/'ros2_ws/src/patrolbot_navigation/scripts/patrolbot_safety_watchdog.py','_base_state_cb')
         watchdog=SimpleNamespace(_now=lambda:1.)
         message=SimpleNamespace(hardware_state_valid=True,odom_epoch_valid=True,
@@ -43,10 +46,29 @@ class WatchdogCaptureTests(unittest.TestCase):
         self.assertTrue(watchdog._hardware_state_valid)
         message.localization_recovery_required=True
         callback(watchdog,message)
-        self.assertFalse(watchdog._hardware_state_valid)
+        self.assertTrue(watchdog._hardware_state_valid)
         message.localization_recovery_required=False
         callback(watchdog,message)
         self.assertTrue(watchdog._hardware_state_valid)
+        # Manual recovery still requires real hardware and a valid odom epoch.
+        for field in ('hardware_state_valid', 'odom_epoch_valid'):
+            setattr(message, field, False)
+            callback(watchdog,message)
+            self.assertFalse(watchdog._hardware_state_valid)
+            setattr(message, field, True)
+
+    def test_localization_recovery_still_gates_autonomy(self):
+        allowed=function(ROOT/'ros2_ws/src/patrolbot_bridge/patrolbot_bridge/epoch_runtime.py',
+                         'commands_allowed').fget
+        allowed.__globals__.update(time=time, math=math)
+        runtime=SimpleNamespace(lock=threading.RLock(), tuning_hold=False, map_hold=False, undock_hold=False,
+            guard=SimpleNamespace(ready=True), recovery=SimpleNamespace(required=False),
+            _navigation_ready=True, first_tf_ns=1,
+            node=SimpleNamespace(_lidar_ready=lambda:True, _pose_lock=threading.Lock(),
+                _pose_at=time.monotonic(), _pose_received=True, _odom_tf_timeout=10.))
+        self.assertTrue(allowed(runtime))
+        runtime.recovery.required=True
+        self.assertFalse(allowed(runtime))
 
     def test_floor_capture_sensor_qos_accepts_best_effort_and_latched_tf(self):
         source=(ROOT/'docker/tests/integration_floor_maps.py').read_text()

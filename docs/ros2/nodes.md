@@ -212,6 +212,11 @@ say `yaw=π` are stale.
 **Failure mode:** launched with `respawn=True`; if the script is not executable the navigation
 launch restart-loops, so executable permissions are safety-relevant.
 
+The active mux safety input expires after **0.2 s** of silence. Releasing this
+hold does not bypass autonomy admission: localization recovery still gates
+autonomy at the bridge/dashboard, but does not alone withdraw valid hardware
+state needed for deadman-held manual recovery.
+
 ### patrolbot_dock_manager
 
 | Field | Value |

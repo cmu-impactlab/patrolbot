@@ -16,8 +16,11 @@ def test_cleanup_after_context_shutdown():
     messages.State=object;messages.Transition=object
     services=types.ModuleType('lifecycle_msgs.srv')
     services.ChangeState=object;services.GetState=object
+    standard_services=types.ModuleType('std_srvs.srv')
+    standard_services.SetBool=object
     modules={'rclpy':ros,'rclpy.node':node_module,'lifecycle_msgs':types.ModuleType('lifecycle_msgs'),
-             'lifecycle_msgs.msg':messages,'lifecycle_msgs.srv':services}
+             'lifecycle_msgs.msg':messages,'lifecycle_msgs.srv':services,
+             'std_srvs':types.ModuleType('std_srvs'),'std_srvs.srv':standard_services}
     path=Path(__file__).resolve().parents[2]/'ros2_ws/src/patrolbot-launch/lifecycle_mgr.py'
     spec=importlib.util.spec_from_file_location('smoother_lifecycle',path)
     module=importlib.util.module_from_spec(spec)

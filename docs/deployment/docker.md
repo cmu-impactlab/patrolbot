@@ -151,7 +151,6 @@ Nav2 goal tests require a clear area and an operator at the deadman/E-stop.
   separately under `logs/bringup`, `logs/bridge`, and `logs/navigation`.
 - Only the navigation container receives read/write `/dev/input` access and
   read/write input-device cgroup permission, which `joy_node` needs to upload
-  finite F710 force-feedback effects. The opt-in gimbal container remains
-  read-only, and the stack is not privileged.
+  finite F710 force-feedback effects. The stack is not privileged.
 - The bridge being unable to contact the configured SBC endpoint does not fail container
   liveness or create a restart loop.

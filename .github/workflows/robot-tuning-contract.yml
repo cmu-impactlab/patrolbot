@@ -1,8 +1,7 @@
-name: Robot tuning contract
+name: Portable robot regression tests
 
-# Offline validation of the robot-tuning contract and guarded runtime
-# foundation: schema, registry, persistence, strict JSON, mutation refusals and
-# source consistency. No robot contact, native ROS graph or deployment.
+# Broad offline Python and ARIA-free C++ regression coverage.
+# No robot contact, native ROS graph, container execution or deployment.
 #
 # This runs on every push/PR (no paths filter) because the contract pins values
 # that live in real source files (smoother.yaml, mux.yaml, nav2_params.yaml,
@@ -47,49 +46,7 @@ jobs:
       - name: Validate schema, registry and fixtures
         run: python contracts/validate_robot_tuning.py
 
-      - name: Run portable and source-consistency contract tests
-        run: python -m pytest contracts/ -q -p no:cacheprovider
-
-      - name: Run tuning runtime and authorization unit tests
-        env:
-          PYTHONPATH: ros2_ws/src/patrolbot_bridge
-        run: |
-          python -m pytest \
-            ros2_ws/src/patrolbot_bridge/test/test_tuning_*.py \
-            ros2_ws/src/patrolbot_bridge/test/test_config_bootstrap.py \
-            -q -p no:cacheprovider
-
-      # test_epoch_tuning_hold.py uses real ROS message types and runs in the
-      # native docker/Dockerfile.ros-tests suite, not this ROS-free job.
-
-      # Selected existing portable teleop/safety checks. These import bridge /
-      # navigation modules with a mocked ROS graph (no native ROS, no robot).
-      - name: Run portable teleop and safety regression tests
-        env:
-          PYTHONPATH: ros2_ws/src/patrolbot_bridge
-        run: |
-          python -m pytest \
-            ros2_ws/src/patrolbot_bridge/test/test_web_teleop_contract.py \
-            ros2_ws/src/patrolbot_bridge/test/test_manual_active.py \
-            ros2_ws/src/patrolbot_bridge/test/test_manual_drive_forwarding.py \
-            ros2_ws/src/patrolbot_bridge/test/test_local_source.py \
-            ros2_ws/src/patrolbot_bridge/test/test_manual_telemetry.py \
-            ros2_ws/src/patrolbot_bridge/test/test_manual_undock_policy.py \
-            ros2_ws/src/patrolbot_bridge/test/test_manual_undock_runtime.py \
-            ros2_ws/src/patrolbot_bridge/test/test_fault_recovery_runtime.py \
-            ros2_ws/src/patrolbot_navigation/test/test_joy_teleop_runtime.py \
-            ros2_ws/src/patrolbot_navigation/test/test_manual_sensor_watchdog.py \
-            ros2_ws/src/patrolbot_navigation/test/test_joystick_policy.py \
-            ros2_ws/src/patrolbot_navigation/test/test_safety_policy.py \
-            ros2_ws/src/patrolbot_navigation/test/test_controller_feedback_policy.py \
-            ros2_ws/src/patrolbot_navigation/test/test_reverse_safety_rules.py \
-            ros2_ws/src/patrolbot_navigation/test/test_physical_calibration.py \
-            ros2_ws/src/patrolbot_navigation/test/test_safety_contract.py \
-            -q -p no:cacheprovider
-
-      - name: Run offline controller-undock hardware checks
-        working-directory: hardware/patrolbot_hw_server
-        run: |
-          make tests/protocol_test tests/undock_test
-          ./tests/protocol_test
-          ./tests/undock_test --manual-only
+      - name: Run broad portable Python and hardware C++ suites
+        # Excludes native ROS, live integration and ament lint before collection.
+        # Isolated pytest groups and simulated snapshots only; no robot contact.
+        run: python -B docker/run-portable-review-tests.py

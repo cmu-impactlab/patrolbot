@@ -23,6 +23,8 @@ once as cleanup candidates and nowhere else.
 | `patrolbot_navigation` (launch, params, maps) | Pi | Nav2 stack | [package](../packages/patrolbot_navigation.md) |
 | `patrolbot_localization_launch.py` / `patrolbot_navigation_launch.py` | Pi | patched Nav2 launches (`bond_timeout: 0.0`) | [launch](../ros2/launch-system.md) |
 | `second_map.{pgm,yaml}` | Pi | active 3192×2205 map at 0.075 m/px | [package](../packages/patrolbot_navigation.md) |
+| `cmuq_1st_floor.{pgm,yaml}` | Pi | active selectable Floor 1 catalog entry | [floor maps](../deployment/floor-maps.md) |
+| `patrolbot_interfaces`, `patrolbot_dock_manager` | Pi | typed contracts and guarded undock; no automatic dock-in | [packages](../packages/package-overview.md) |
 | `patrolbot_joy_teleop.py` | Pi | Xinput teleop | [node](../ros2/nodes.md#patrolbot_joy_teleop) |
 | `laser_static_tf` | Pi | `base_link→laser_frame` | [node](../ros2/nodes.md#laser_static_tf) |
 | `patrolbot-launch` | Pi | mobile base | [package](../packages/patrolbot-launch.md) |
@@ -40,7 +42,7 @@ These are real but not part of the running stack. Each is one line in
 | `lms200_sanitizer.py` | `/bad_scan → /good_scan` fixer; no `/bad_scan` publisher today |
 | `patrolbot_navigation/scripts/twist_mux.yaml` | reference config; twist_mux runs from `patrolbot-launch` |
 | `patrolbot_nav.rviz` | operator RViz layout (manual use) |
-| `maps/cmuq_1st_floor.{yaml,pgm}` | older map, not in active launch |
+| `patrolbot_docking_plugins`, docking-server YAML and mux input | retained dock-in prototype; no generic docking server launched |
 
 ## Removed dead code
 

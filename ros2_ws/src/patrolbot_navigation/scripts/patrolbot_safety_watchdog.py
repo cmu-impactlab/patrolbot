@@ -9,8 +9,8 @@ highest-priority input (`input/safety_controller`, priority 10), overriding
 navigation and teleop.
 
 When every monitored stream is fresh again, the node goes SILENT; twist_mux
-times the safety input out (~1 s) and navigation resumes on its own — no
-restart, no operator action.
+times the safety input out (0.2 s in the active mux configuration). Autonomy
+still requires localization and admission; manual recovery uses hardware gates.
 
 Fail-safe by construction: before any data has ever arrived the streams count
 as stale, so the default state is "hold". The robot can only move once it has
@@ -26,17 +26,6 @@ from safety_policy import evaluate_safety, odometry_values_finite
 from sensor_msgs.msg import BatteryState, LaserScan
 from std_msgs.msg import Bool
 from patrolbot_bridge.local_source import LocalSource
-
-
-def undock_turn_owned(message):
-    goal = getattr(message, 'undock_turn_goal_id', '')
-    return bool(getattr(message, 'undock_turn_active', False)
-                and len(goal) == 32 and all(c in '0123456789abcdef' for c in goal)
-                and message.link_connected and message.hardware_state_valid
-                and getattr(message, 'odom_epoch_valid', False)
-                and message.motors_enabled and message.dock_state_valid
-                and message.dock_state == 'CLEAR_CONFIRMED'
-                and not message.undock_active)
 
 
 class SafetyWatchdog(Node):
@@ -207,7 +196,7 @@ class SafetyWatchdog(Node):
                     'SAFETY HOLD (' + ', '.join(reasons) +
                     ') — commanding priority-10 zero velocity.')
         elif self._holding:
-            # Recovered: go silent so the safety input times out and nav resumes.
+            # Release this input; other motion/admission gates remain.
             self._holding = False
             self._holding_reasons = ()
             self._desired_linear = 0.0

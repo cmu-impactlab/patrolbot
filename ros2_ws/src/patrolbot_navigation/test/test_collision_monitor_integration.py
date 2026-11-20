@@ -4,7 +4,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
-import threading
+import sys
 import time
 
 from geometry_msgs.msg import Twist
@@ -17,6 +17,10 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan, PointCloud2, PointField
 
+
+# Shared source-only test support; never installed with production nodes.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'patrolbot_bridge' / 'test'))
+from native_fixture import NativeFixture
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 PARAMS_FILE = PACKAGE_ROOT / 'config' / 'nav2_params.yaml'
@@ -98,45 +102,35 @@ class CollisionHarness(Node):
 
 
 @pytest.fixture(scope='module')
-def monitor():
-    process = subprocess.Popen(
-        [
-            '/opt/ros/jazzy/lib/nav2_collision_monitor/collision_monitor',
-            '--ros-args', '--params-file', str(PARAMS_FILE),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    rclpy.init()
-    node = CollisionHarness()
-    executor = MultiThreadedExecutor(num_threads=3)
-    executor.add_node(node)
-    spin_thread = threading.Thread(target=executor.spin, daemon=True)
-    spin_thread.start()
-
-    change_state = node.create_client(
-        ChangeState, '/collision_monitor/change_state')
-    assert change_state.wait_for_service(timeout_sec=5.0)
-    for transition_id in (
-            Transition.TRANSITION_CONFIGURE, Transition.TRANSITION_ACTIVATE):
-        request = ChangeState.Request()
-        request.transition.id = transition_id
-        future = change_state.call_async(request)
-        assert wait_until(future.done, timeout=5.0)
-        assert future.result().success
-    assert wait_until(lambda: node.command_pub.get_subscription_count() == 1)
-    yield node
-    executor.shutdown(timeout_sec=2.0)
-    node.destroy_node()
-    spin_thread.join(timeout=2.0)
-    rclpy.shutdown()
-    process.terminate()
-    try:
-        process.wait(timeout=3.0)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=2.0)
+def monitor(tmp_path_factory):
+    log_path = tmp_path_factory.mktemp('collision-monitor') / 'collision_monitor.log'
+    with log_path.open('w') as log, NativeFixture(rclpy) as lifetime:
+        process = lifetime.process(subprocess.Popen(
+            [
+                '/opt/ros/jazzy/lib/nav2_collision_monitor/collision_monitor',
+                '--ros-args', '--params-file', str(PARAMS_FILE),
+            ],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        ))
+        lifetime.init()
+        node = lifetime.node(CollisionHarness())
+        node.process = process
+        node.log_path = log_path
+        lifetime.start(MultiThreadedExecutor(num_threads=3))
+        change_state = node.create_client(
+            ChangeState, '/collision_monitor/change_state')
+        assert change_state.wait_for_service(timeout_sec=5.0)
+        for transition_id in (
+                Transition.TRANSITION_CONFIGURE, Transition.TRANSITION_ACTIVATE):
+            request = ChangeState.Request()
+            request.transition.id = transition_id
+            future = change_state.call_async(request)
+            assert wait_until(future.done, timeout=5.0)
+            assert future.result().success
+        assert wait_until(lambda: node.command_pub.get_subscription_count() == 1)
+        yield node
 
 
 def assert_velocity(message, linear, angular=0.0):

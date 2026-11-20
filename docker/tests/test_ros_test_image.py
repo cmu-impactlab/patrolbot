@@ -1,9 +1,13 @@
 """Keep the native test recipe's source fixtures and discovery usable offline."""
 
 import ast
+import json
+import os
 from pathlib import Path
 import shlex
 import shutil
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -77,6 +81,69 @@ def test_rosdep_sees_built_manifests_and_local_dependencies(tmp_path):
                 assert dependency.text in manifests, dependency.text
     assert '--ignore-src' in DEPS
     assert 'python3-pytest-timeout' in shlex.split(DEPS, comments=True)
+
+
+def test_dock_manager_declares_setuptools_and_exports_ament_python():
+    manifest = ET.parse(ROOT / 'ros2_ws/src/patrolbot_dock_manager/package.xml')
+    assert manifest.findtext('export/build_type') == 'ament_python'
+    dependencies = [node.text for node in manifest.getroot()
+                    if node.tag.endswith('depend')]
+    assert 'ament_python' not in dependencies
+    assert manifest.findtext('buildtool_depend') == 'python3-setuptools'
+
+
+@pytest.mark.parametrize('sources_exist,failure', [
+    (False, ''), (True, ''), (False, 'rosdep init'),
+    (False, 'apt-get install'), (True, 'rosdep update'),
+    (True, 'apt-get update'), (True, 'rosdep install'), (True, 'rosdep check'),
+])
+def test_rosdep_run_shell_propagates_failures(tmp_path, sources_exist, failure):
+    # Execute the recipe's RUN bodies; only redirect the default-file probe.
+    sources = tmp_path / '20-default.list'
+    if sources_exist:
+        sources.touch()
+    log = tmp_path / 'commands.jsonl'
+    for name in ('apt-get', 'rosdep', 'rm'):
+        executable = tmp_path / name
+        executable.write_text(
+            f'#!{sys.executable}\n'
+            'import json, os, pathlib, sys\n'
+            'args = [pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]\n'
+            'with open(os.environ["COMMAND_LOG"], "a") as log:\n'
+            '    log.write(json.dumps(args) + "\\n")\n'
+            'sys.exit(41 if " ".join(args[:2]) == os.environ["FAIL_COMMAND"] else 0)\n'
+        )
+        executable.chmod(0o755)
+    runs = [line.removeprefix('RUN ') for line in DEPS.splitlines()
+            if line.startswith('RUN ')]
+    assert len(runs) == 2
+    for run in runs:
+        result = subprocess.run(
+            ['/bin/sh', '-c', run.replace(
+                '/etc/ros/rosdep/sources.list.d/20-default.list', shlex.quote(str(sources)))],
+            cwd=tmp_path, capture_output=True, text=True,
+            env={**os.environ, 'PATH': str(tmp_path), 'COMMAND_LOG': str(log),
+                 'FAIL_COMMAND': failure}, check=False,
+        )
+        if result.returncode:
+            break
+    commands = [json.loads(line) for line in log.read_text().splitlines()]
+    names = [' '.join(args[:2]) for args in commands]
+    expected = ['apt-get update', 'apt-get install', 'rm -rf']
+    if not sources_exist:
+        expected.append('rosdep init')
+    expected += ['rosdep update', 'apt-get update', 'rosdep install',
+                 'rosdep check', 'rm -rf']
+    if failure:
+        expected = expected[:expected.index(failure) + 1]
+    assert result.returncode == (41 if failure else 0), result.stderr
+    assert names == expected
+    for args in commands:
+        if args[:2] in (['rosdep', 'install'], ['rosdep', 'check']):
+            expected_args = ['rosdep', args[1], '--from-paths', '.', '--ignore-src']
+            if args[1] == 'install':
+                expected_args.append('-y')
+            assert args == [*expected_args, '--rosdistro', 'jazzy']
 
 
 def test_native_selection_keeps_fixture_only_packages_unbuilt():

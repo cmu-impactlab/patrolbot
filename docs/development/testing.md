@@ -35,6 +35,14 @@ later checks. No safety expectation is relaxed to make a baseline green.
 
 The broader native and fake-SBC suites remain separate gates.
 
+The ROS test image treats rosdep failures as build failures: installation runs
+without `-r` and is followed by `rosdep check`, both with `--ignore-src` for the
+copied local package manifests. A successful hosted build had previously hidden
+an unresolved dock-manager dependency because `-r` continued after errors.
+`ament_python` is the exported build type; its setuptools build dependency is
+declared as `python3-setuptools`. Rosdep initialization runs only when its default
+sources file is absent, and initialization errors fail the build.
+
 ## Unit / lint tests
 
 Each package carries the standard ament test templates:

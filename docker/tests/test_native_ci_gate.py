@@ -2,7 +2,10 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 
 import pytest
@@ -32,6 +35,10 @@ def test_clean_suite_records_collection_all_phases_and_junit(tmp_path):
         'setup', 'call', 'teardown']
     assert result['expected_exclusions'] == list(gate.EXCLUSIONS)
     assert result['allowed_skips'] == []
+    cleanup = result['process_group_cleanup']
+    assert cleanup['signals_sent'] == []
+    assert not cleanup['forced_cleanup']
+    assert cleanup['group_retired']
     assert (directory / 'pytest.log').is_file()
     assert (directory / 'ros').is_dir()
     assert gate.check_evidence(directory, ['test/missing.py::test_missing']) == [
@@ -79,6 +86,9 @@ def test_deadline_keeps_logs_and_partial_collection(tmp_path):
     assert any('session finish' in issue for issue in result['issues'])
     assert (tmp_path / 'evidence/custom/events.jsonl').is_file()
     assert (tmp_path / 'evidence/custom/pytest.log').is_file()
+    assert result['process_group_cleanup']['signals_sent'] == ['SIGTERM']
+    assert not result['process_group_cleanup']['forced_cleanup']
+    assert result['process_group_cleanup']['group_retired']
 
 
 def test_missing_or_corrupt_evidence_fails(tmp_path):
@@ -131,3 +141,86 @@ def test_leftover_native_child_fails_and_is_killed(tmp_path):
                  '    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n')
     assert result['leaked_children']
     assert 'pytest left a live process group after shutdown' in result['issues']
+    cleanup = result['process_group_cleanup']
+    assert cleanup['signals_sent'][0] == 'SIGTERM'
+    assert cleanup['elapsed_seconds'] < 8
+    if not cleanup['group_retired']:
+        assert 'suite process group did not retire within cleanup deadline' in result['issues']
+
+
+@pytest.mark.parametrize('addopts', [
+    '-k keep', '--deselect=test/test_sample.py::test_other', '-p no:native_ci_gate',
+])
+def test_inherited_pytest_selection_and_plugins_are_sanitized(tmp_path, monkeypatch, addopts):
+    monkeypatch.setenv('PYTEST_ADDOPTS', addopts)
+    monkeypatch.setenv('PYTEST_PLUGINS', 'nonexistent_host_plugin')
+    monkeypatch.setenv('PYTEST_DISABLE_PLUGIN_AUTOLOAD', '1')
+    monkeypatch.setitem(gate.SENTINELS, 'custom', ('test/test_sample.py::test_keep',))
+    result = run(tmp_path,
+                 'import os\ndef test_keep():\n    pass\n'
+                 'def test_other():\n'
+                 '    assert not any(key in os.environ for key in '
+                 '("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_DISABLE_PLUGIN_AUTOLOAD"))\n')
+    assert result['issues'] == []
+    events = (tmp_path / 'evidence/custom/events.jsonl').read_text()
+    assert 'test/test_sample.py::test_other' in events
+    assert '"event": "deselected"' not in events
+
+
+@pytest.mark.parametrize('addopts', ['-k keep', '--deselect=test/test_sample.py::test_other'])
+def test_actual_pytest_deselection_cannot_claim_full_coverage(tmp_path, monkeypatch, addopts):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    (package / 'pytest.ini').write_text(f'[pytest]\naddopts = {addopts}\n')
+    (package / 'test/test_sample.py').write_text(
+        'def test_keep():\n    pass\ndef test_other():\n    pass\n')
+    monkeypatch.setitem(gate.SENTINELS, 'bridge', ('test/test_sample.py::test_keep',))
+    result = gate.run_suite('bridge', package, tmp_path / 'evidence', 10)
+    assert result['returncode'] == 0
+    assert result['issues'] == [
+        "unexpected deselected tests: ['test/test_sample.py::test_other']"]
+    events = (tmp_path / 'evidence/bridge/events.jsonl').read_text()
+    assert '"event": "deselected"' in events
+
+
+def test_explicit_diagnostic_path_still_runs(tmp_path):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    (package / 'test/test_keep.py').write_text('def test_keep():\n    pass\n')
+    (package / 'test/test_other.py').write_text('raise RuntimeError("not selected")\n')
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10,
+                            ('test/test_keep.py',))
+    assert result['issues'] == []
+
+
+def test_missing_timeout_plugin_config_is_fatal(tmp_path):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    (package / 'pytest.ini').write_text('[pytest]\ntimeout = 1\n')
+    (package / 'test/test_ok.py').write_text('def test_ok():\n    pass\n')
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10,
+                            ('-p', 'no:timeout', 'test'))
+    assert result['issues']
+    assert result['returncode'] != 0
+    assert 'Unknown config option: timeout' in (
+        tmp_path / 'evidence/custom/pytest.log').read_text()
+
+
+def test_forced_cleanup_is_bounded_and_leaves_unrelated_process_alive(tmp_path):
+    unrelated = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                 start_new_session=True)
+    try:
+        result = run(tmp_path,
+                     'import signal, time\ndef test_stubborn():\n'
+                     '    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
+                     '    time.sleep(60)\n', deadline=1.5)
+        cleanup = result['process_group_cleanup']
+        assert cleanup['signals_sent'] == ['SIGTERM', 'SIGKILL']
+        assert cleanup['forced_cleanup']
+        assert cleanup['group_retired']
+        assert cleanup['elapsed_seconds'] < 8
+        assert 'suite process group required SIGKILL' in result['issues']
+        assert unrelated.poll() is None
+    finally:
+        os.killpg(unrelated.pid, signal.SIGKILL)
+        unrelated.wait(timeout=5)

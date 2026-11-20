@@ -84,6 +84,8 @@ def check_evidence(directory, sentinels):
                 issues.append(f"{item['nodeid']} {item['when']}: {item['outcome']}: {item['reason']}")
         elif item['event'] == 'collection_problem':
             issues.append(f"collection {item['outcome']}: {item['nodeid']}: {item['reason']}")
+        elif item['event'] == 'deselected' and item['nodeids']:
+            issues.append(f"unexpected deselected tests: {item['nodeids']}")
         elif item['event'] == 'warning' and item['category'] in (
                 'PytestUnhandledThreadExceptionWarning', 'PytestUnraisableExceptionWarning'):
             issues.append(f"{item['category']}: {item['reason']}")
@@ -102,11 +104,38 @@ def check_evidence(directory, sentinels):
     return issues
 
 
+def retire_process_group(process):
+    """Signal only this suite's group and bound both retirement waits."""
+    started = time.monotonic()
+    signals = []
+    for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, 1)):
+        process.poll()  # Reap pytest before probing for surviving children.
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            return {'signals_sent': signals, 'forced_cleanup': 'SIGKILL' in signals,
+                    'group_retired': True, 'elapsed_seconds': time.monotonic() - started}
+        signals.append(sig.name)
+        deadline = time.monotonic() + grace
+        while True:
+            process.poll()
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return {'signals_sent': signals, 'forced_cleanup': 'SIGKILL' in signals,
+                        'group_retired': True, 'elapsed_seconds': time.monotonic() - started}
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+    return {'signals_sent': signals, 'forced_cleanup': 'SIGKILL' in signals,
+            'group_retired': False, 'elapsed_seconds': time.monotonic() - started}
+
+
 def run_suite(name, package, evidence, deadline, paths=()):
     directory = evidence / name
     directory.mkdir(parents=True, exist_ok=False)
     (directory / 'ros').mkdir()
-    command = [sys.executable, '-B', '-m', 'pytest', '-q', '-ra',
+    command = [sys.executable, '-B', '-m', 'pytest', '-q', '-ra', '--strict-config',
                '-p', 'no:cacheprovider', '-p', 'native_ci_gate',
                '-W', 'error::pytest.PytestUnhandledThreadExceptionWarning',
                '-W', 'error::pytest.PytestUnraisableExceptionWarning',
@@ -116,6 +145,8 @@ def run_suite(name, package, evidence, deadline, paths=()):
         filter(None, (str(Path(__file__).resolve().parent), os.environ.get('PYTHONPATH')))),
         'PATROLBOT_NATIVE_EVENTS': str(directory / 'events.jsonl'),
         'ROS_LOG_DIR': str(directory / 'ros'), 'PYTHONDONTWRITEBYTECODE': '1'}
+    for key in ('PYTEST_ADDOPTS', 'PYTEST_PLUGINS', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD'):
+        env.pop(key, None)
     started = time.monotonic()
     timed_out = False
     leaked_children = False
@@ -134,25 +165,16 @@ def run_suite(name, package, evidence, deadline, paths=()):
                     leaked_children = True
                 except ProcessLookupError:
                     pass
-            # Retire the entire suite group, including orphaned native children.
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
+            cleanup = retire_process_group(process)
     issues = check_evidence(directory, SENTINELS.get(name, ()))
     if leaked_children:
         issues.append('pytest left a live process group after shutdown')
     if timed_out:
         issues.append(f'suite deadline exceeded: {deadline}s')
+    if cleanup['forced_cleanup']:
+        issues.append('suite process group required SIGKILL')
+    if not cleanup['group_retired']:
+        issues.append('suite process group did not retire within cleanup deadline')
     if process.returncode:
         issues.append(f'pytest process exit: {process.returncode}')
     summary = {'suite': name, 'command': command, 'cwd': str(package),
@@ -160,7 +182,7 @@ def run_suite(name, package, evidence, deadline, paths=()):
                'deadline_seconds': deadline, 'elapsed_seconds': time.monotonic() - started,
                'returncode': process.returncode, 'timed_out': timed_out,
                'leaked_children': leaked_children,
-               'process_group_cleanup': 'SIGTERM then SIGKILL', 'issues': issues}
+               'process_group_cleanup': cleanup, 'issues': issues}
     (directory / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print(f'=== {name} ===', flush=True)
     with (directory / 'pytest.log').open() as output:

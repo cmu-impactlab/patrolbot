@@ -40,11 +40,14 @@ There are **no allowed skips**. Before collection, the runner explicitly exclude
 ament checks are outside this functional gate; their exclusion claims no lint or
 copyright pass. All other collected tests must pass setup, call and teardown.
 Required integration nodeids are checked without pinning a total test count.
-Collection errors, empty suites, skipped/xfail outcomes, thread/unraisable
+Collection errors, empty suites, deselected tests, skipped/xfail outcomes, thread/unraisable
 exceptions, missing JUnit/evidence, native pytest crashes, leaked child process
 groups and deadlines fail the
 gate. Failed suites do not prevent the remaining suites from running. There are
 no retries or blanket warning filters.
+Inherited `PYTEST_ADDOPTS`, `PYTEST_PLUGINS` and
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD` are cleared. Strict pytest configuration makes
+unknown options (including timeout settings without their plugin) fatal.
 
 Evidence defaults to `/tmp/native-test-evidence` (override with
 `PATROLBOT_TEST_EVIDENCE`). Each suite keeps `pytest.log`, `junit.xml`, an
@@ -90,9 +93,11 @@ outside its catalog directory. The `ros-test-env` Dockerfile target contains
 only the reusable toolchain/dependencies; the final `ros-tests` target is
 used by the hosted functional gate. Both return nonzero on failure.
 Each pytest invocation is capped at 300 seconds (override with
-`PATROLBOT_TEST_TIMEOUT`, maximum 600). The runner terminates then kills the suite
-process group after completion or deadline, so native children do not survive
-into the next suite. Optional pytest arguments select a diagnostic run, without
+`PATROLBOT_TEST_TIMEOUT`, maximum 600). Any remaining suite process group receives
+SIGTERM with a five-second retirement bound, then SIGKILL with a one-second bound
+if still present. Evidence records only signals actually sent and whether the
+group retired; leaks, forced kills and incomplete retirement fail the gate.
+Optional test paths select a diagnostic run, without
 the default three-suite integration sentinel requirement. Hosted CI passes no
 arguments and always runs the required selection.
 

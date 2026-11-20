@@ -7,6 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +23,37 @@ def run(tmp_path, source, deadline=10):
     (package / 'test').mkdir(parents=True)
     (package / 'test/test_sample.py').write_text(source)
     return gate.run_suite('custom', package, tmp_path / 'evidence', deadline)
+
+
+@pytest.mark.parametrize('compatibility_proxy', [False, True])
+def test_configuration_metadata_uses_plugin_registry(
+        tmp_path, monkeypatch, pytestconfig, compatibility_proxy):
+    # pytest 7 wraps path hooks in functions; newer pytest may expose HookCaller directly.
+    hook = pytestconfig.hook
+    if compatibility_proxy:
+        hook = SimpleNamespace(pytest_ignore_collect=lambda **kwargs:
+                               pytestconfig.hook.pytest_ignore_collect(**kwargs))
+        assert not hasattr(hook.pytest_ignore_collect, 'get_hookimpls')
+    config = SimpleNamespace(
+        hook=hook, pluginmanager=pytestconfig.pluginmanager,
+        rootpath=tmp_path, inipath=tmp_path / 'pytest.ini',
+        invocation_params=SimpleNamespace(args=('test',)),
+        _native_exclusions=tuple(tmp_path / path for path in gate.EXCLUSIONS))
+    events = tmp_path / 'events.jsonl'
+    monkeypatch.setenv('PATROLBOT_NATIVE_EVENTS', str(events))
+    gate.pytest_sessionstart(SimpleNamespace(config=config))
+    implementations = config.pluginmanager.hook.pytest_ignore_collect.get_hookimpls()
+    assert implementations
+    assert json.loads(events.read_text()) == {
+        'event': 'configuration', 'pytest_version': pytest.__version__,
+        'python_version': sys.version, 'cwd': str(Path.cwd()),
+        'rootdir': str(config.rootpath), 'configfile': str(config.inipath),
+        'args': ['test'], 'exclusions': list(map(str, config._native_exclusions)),
+        'plugins': sorted([dist.project_name, dist.version]
+                          for _, dist in config.pluginmanager.list_plugin_distinfo()),
+        'ignore_hooks': [{'plugin': str(impl.plugin_name), 'tryfirst': impl.tryfirst,
+                          'trylast': impl.trylast} for impl in implementations],
+    }
 
 
 def test_clean_suite_records_collection_all_phases_and_junit(tmp_path):

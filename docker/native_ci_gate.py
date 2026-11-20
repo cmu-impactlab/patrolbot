@@ -55,7 +55,7 @@ def pytest_sessionstart(session):
                          for _, dist in config.pluginmanager.list_plugin_distinfo()),
           ignore_hooks=[{'plugin': str(hook.plugin_name), 'tryfirst': hook.tryfirst,
                          'trylast': hook.trylast}
-                        for hook in config.hook.pytest_ignore_collect.get_hookimpls()])
+                        for hook in config.pluginmanager.hook.pytest_ignore_collect.get_hookimpls()])
 
 
 @pytest.hookimpl(tryfirst=True)

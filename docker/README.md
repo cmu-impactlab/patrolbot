@@ -36,7 +36,12 @@ credentials, devices, sockets or production volumes. The checkout's baked source
 fixtures remain read-only. Job ID and branch-protection contexts are unchanged.
 
 There are **no allowed skips**. Before collection, the runner explicitly excludes
-`test_copyright.py`, `test_flake8.py` and `test_pep257.py` in each package. These
+exactly `test/test_copyright.py`, `test/test_flake8.py` and `test/test_pep257.py`
+relative to each package. The runner supplies absolute `--ignore` paths and a
+`tryfirst` collection hook matches those same absolute paths before import.
+It returns `None` for every other path, preserving other plugins' collection
+rules; matching basenames elsewhere are not excluded. Additional `--ignore` or
+`--ignore-glob` options fail configuration. These
 ament checks are outside this functional gate; their exclusion claims no lint or
 copyright pass. All other collected tests must pass setup, call and teardown.
 Required integration nodeids are checked without pinning a total test count.
@@ -51,12 +56,24 @@ unknown options (including timeout settings without their plugin) fatal.
 
 Evidence defaults to `/tmp/native-test-evidence` (override with
 `PATROLBOT_TEST_EVIDENCE`). Each suite keeps `pytest.log`, `junit.xml`, an
-incremental `events.jsonl` (collection nodeids, deselection, skip/failure reasons,
+incremental `events.jsonl` (pre-collection pytest/Python versions, cwd/rootdir,
+config file, invocation, installed plugins and ignore-hook ordering flags,
+declared/observed absolute exclusions, collection files/nodeids, deselection, skip/failure reasons,
 all test phases and session finish), `summary.json` (command, exclusions, deadline,
 exit and process-group cleanup), and a `ros/` log directory. An abnormal exit can
 leave JUnit/session finish missing; that is itself a failure, with partial logs
 retained. The root summary aggregates every suite. Hosted CI uploads build,
 container and suite evidence with `if: always()` even on failure.
+Evidence validation rejects collection of a declared excluded file or a hook
+exclusion outside the declared paths, independently of rootdir-relative nodeids.
+
+The failed PR 85 hosted build used pytest 7.4.4 and collected lint files despite
+relative CLI exclusions. That artifact does not establish whether cwd resolution
+or a plugin caused the bypass: `pytest_ignore_collect` is a first-result hook,
+so another implementation returning `False` can bypass pytest's built-in ignore
+handling. Portable regressions exercise both different rootdirs and an installed
+plugin returning `False`, with import-time failures in all three excluded files.
+Fresh hosted verification remains necessary.
 
 Portable gate regressions (no ROS or Docker):
 

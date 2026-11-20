@@ -112,15 +112,80 @@ def test_missing_or_corrupt_evidence_fails(tmp_path):
     assert 'missing or invalid pytest evidence' in gate.check_evidence(tmp_path, ())[0]
 
 
-def test_expected_lint_exclusions_happen_before_collection(tmp_path):
+@pytest.mark.parametrize('different_rootdir', [False, True])
+@pytest.mark.parametrize('installed_hook', [False, True])
+def test_expected_lint_exclusions_happen_before_collection(
+        tmp_path, monkeypatch, different_rootdir, installed_hook):
     package = tmp_path / 'package'
     (package / 'test').mkdir(parents=True)
     for name in gate.EXCLUSIONS:
         (package / name).write_text('raise RuntimeError("must never import lint")\n')
     (package / 'test/test_ok.py').write_text('def test_ok():\n    pass\n')
-    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10)
+    # Same basenames under other paths remain functional gate inputs.
+    (package / 'test/nested').mkdir()
+    (package / 'test/nested/test_flake8.py').write_text('def test_nested():\n    pass\n')
+    other = tmp_path / 'other/test'
+    other.mkdir(parents=True)
+    (other / 'test_pep257.py').write_text('def test_other_package():\n    pass\n')
+    if installed_hook:
+        (package / 'force_collect.py').write_text(
+            'def pytest_ignore_collect(collection_path, config):\n'
+            '    if collection_path.suffix == ".py":\n        return False\n')
+        dist = package / 'force_collect-1.0.dist-info'
+        dist.mkdir()
+        (dist / 'METADATA').write_text('Name: force-collect\nVersion: 1.0\n')
+        (dist / 'entry_points.txt').write_text('[pytest11]\nforce-collect = force_collect\n')
+        monkeypatch.setenv('PYTHONPATH', os.pathsep.join(
+            filter(None, (str(package), os.environ.get('PYTHONPATH')))))
+    rootdir = tmp_path if different_rootdir else package
+    sentinel = f'{"package/" if different_rootdir else ""}test/test_ok.py::test_ok'
+    monkeypatch.setitem(gate.SENTINELS, 'custom', (sentinel,))
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10,
+                            (f'--rootdir={rootdir}', 'test', str(other)))
     assert result['issues'] == []
-    assert 'must never import lint' not in (tmp_path / 'evidence/custom/pytest.log').read_text()
+    directory = tmp_path / 'evidence/custom'
+    assert 'must never import lint' not in (directory / 'pytest.log').read_text()
+    events = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
+    exclusions = {str(package / name) for name in gate.EXCLUSIONS}
+    assert {item['path'] for item in events if item['event'] == 'excluded'} == exclusions
+    configuration = next(item for item in events if item['event'] == 'configuration')
+    assert configuration['rootdir'] == str(rootdir)
+    assert set(configuration['exclusions']) == exclusions
+    assert configuration['pytest_version'] == pytest.__version__
+    assert (['force-collect', '1.0'] in configuration['plugins']) == installed_hook
+    collection = next(item for item in events if item['event'] == 'collection')
+    assert set(collection['files']) == {
+        str(package / 'test/test_ok.py'), str(package / 'test/nested/test_flake8.py'),
+        str(other / 'test_pep257.py')}
+    assert not any(item['event'] == 'deselected' for item in events)
+
+
+@pytest.mark.parametrize('addopts', ['--ignore=test/test_ok.py', '--ignore-glob=*ok.py'])
+def test_extra_exclusions_are_rejected(tmp_path, addopts):
+    package = tmp_path / 'package'
+    (package / 'test').mkdir(parents=True)
+    (package / 'pytest.ini').write_text(f'[pytest]\naddopts = {addopts}\n')
+    (package / 'test/test_ok.py').write_text('def test_ok():\n    pass\n')
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10)
+    assert result['issues']
+    assert result['returncode'] != 0
+    assert 'permits only its declared absolute exclusions' in (
+        tmp_path / 'evidence/custom/pytest.log').read_text()
+
+
+def test_evidence_rejects_excluded_collection_and_unknown_exclusions(tmp_path):
+    assert run(tmp_path, 'def test_ok():\n    pass\n')['issues'] == []
+    directory = tmp_path / 'evidence/custom'
+    evidence = directory / 'events.jsonl'
+    events = [json.loads(line) for line in evidence.read_text().splitlines()]
+    exclusions = [str(tmp_path / 'package' / path) for path in gate.EXCLUSIONS]
+    next(item for item in events if item['event'] == 'collection')['files'].append(exclusions[0])
+    next(item for item in events if item['event'] == 'configuration')['exclusions'].append('extra')
+    events.append({'event': 'excluded', 'path': 'extra'})
+    evidence.write_text(''.join(json.dumps(item) + '\n' for item in events))
+    assert gate.check_evidence(directory, (), exclusions) == [
+        'pre-collection exclusions differ from declared package paths',
+        'declared excluded files reached collection', 'unexpected pre-collection exclusion']
 
 
 def test_main_aggregates_later_suites_after_failure(tmp_path, monkeypatch):

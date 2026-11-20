@@ -10,6 +10,8 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+import pytest
+
 
 EXCLUSIONS = ('test/test_copyright.py', 'test/test_flake8.py', 'test/test_pep257.py')
 SENTINELS = {
@@ -34,8 +36,40 @@ def event(kind, **fields):
         stream.write(json.dumps({'event': kind, **fields}) + '\n')
 
 
+def pytest_configure(config):
+    package = Path(os.environ['PATROLBOT_NATIVE_PACKAGE'])
+    config._native_exclusions = tuple(package / path for path in EXCLUSIONS)
+    if (config.getoption('ignore') != list(map(str, config._native_exclusions))
+            or config.getoption('ignore_glob')):
+        raise pytest.UsageError('native gate permits only its declared absolute exclusions')
+
+
+def pytest_sessionstart(session):
+    config = session.config
+    event('configuration', pytest_version=pytest.__version__, python_version=sys.version,
+          cwd=str(Path.cwd()), rootdir=str(config.rootpath),
+          configfile=str(config.inipath) if config.inipath else None,
+          args=config.invocation_params.args,
+          exclusions=list(map(str, config._native_exclusions)),
+          plugins=sorted((dist.project_name, dist.version)
+                         for _, dist in config.pluginmanager.list_plugin_distinfo()),
+          ignore_hooks=[{'plugin': str(hook.plugin_name), 'tryfirst': hook.tryfirst,
+                         'trylast': hook.trylast}
+                        for hook in config.hook.pytest_ignore_collect.get_hookimpls()])
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_ignore_collect(collection_path, config):
+    # firstresult hooks returning False can bypass pytest's built-in --ignore.
+    if collection_path in config._native_exclusions:
+        event('excluded', path=str(collection_path))
+        return True
+    return None
+
+
 def pytest_collection_finish(session):
-    event('collection', nodeids=[item.nodeid for item in session.items])
+    event('collection', nodeids=[item.nodeid for item in session.items],
+          files=sorted({str(item.path) for item in session.items}))
 
 
 def pytest_deselected(items):
@@ -62,7 +96,7 @@ def pytest_sessionfinish(session, exitstatus):
     event('finish', exitstatus=int(exitstatus))
 
 
-def check_evidence(directory, sentinels):
+def check_evidence(directory, sentinels, exclusions=None):
     """Require collection, every test phase, clean shutdown, and parseable JUnit."""
     issues = []
     try:
@@ -70,6 +104,18 @@ def check_evidence(directory, sentinels):
     except (OSError, ValueError) as error:
         return [f'missing or invalid pytest evidence: {error}']
     collections = [item for item in events if item['event'] == 'collection']
+    configurations = [item for item in events if item['event'] == 'configuration']
+    if len(configurations) != 1:
+        issues.append('missing or duplicate pre-collection configuration')
+    elif exclusions is not None:
+        if configurations[0]['exclusions'] != exclusions:
+            issues.append('pre-collection exclusions differ from declared package paths')
+        for collection in collections:
+            if set(collection['files']) & set(exclusions):
+                issues.append('declared excluded files reached collection')
+        if any(item['path'] not in exclusions for item in events
+               if item['event'] == 'excluded'):
+            issues.append('unexpected pre-collection exclusion')
     nodeids = collections[-1]['nodeids'] if collections else []
     if not nodeids:
         issues.append('empty or missing collection')
@@ -134,6 +180,8 @@ def retire_process_group(process):
 
 
 def run_suite(name, package, evidence, deadline, paths=()):
+    package = package.resolve()
+    exclusions = [str(package / path) for path in EXCLUSIONS]
     directory = evidence / name
     directory.mkdir(parents=True, exist_ok=False)
     (directory / 'ros').mkdir()
@@ -143,10 +191,11 @@ def run_suite(name, package, evidence, deadline, paths=()):
                '-W', 'error::pytest.PytestUnraisableExceptionWarning',
                '-W', 'error:coroutine .* was never awaited:RuntimeWarning',
                f'--junitxml={directory / "junit.xml"}',
-               *(f'--ignore={path}' for path in EXCLUSIONS), *(paths or ('test',))]
+               *(f'--ignore={path}' for path in exclusions), *(paths or ('test',))]
     env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
         filter(None, (str(Path(__file__).resolve().parent), os.environ.get('PYTHONPATH')))),
         'PATROLBOT_NATIVE_EVENTS': str(directory / 'events.jsonl'),
+        'PATROLBOT_NATIVE_PACKAGE': str(package),
         'ROS_LOG_DIR': str(directory / 'ros'), 'PYTHONDONTWRITEBYTECODE': '1'}
     for key in ('PYTEST_ADDOPTS', 'PYTEST_PLUGINS', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD'):
         env.pop(key, None)
@@ -169,7 +218,7 @@ def run_suite(name, package, evidence, deadline, paths=()):
                 except ProcessLookupError:
                     pass
             cleanup = retire_process_group(process)
-    issues = check_evidence(directory, SENTINELS.get(name, ()))
+    issues = check_evidence(directory, SENTINELS.get(name, ()), exclusions)
     if leaked_children:
         issues.append('pytest left a live process group after shutdown')
     if timed_out:

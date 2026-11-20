@@ -2,7 +2,9 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from collections import deque
+import ast
 import inspect
+import math
 from pathlib import Path
 import signal
 import subprocess
@@ -577,3 +579,171 @@ def test_early_child_exit_is_a_failure():
         with NativeFixture(Mock()) as lifetime:
             lifetime.process(process)
     process.terminate.assert_not_called()
+
+
+@pytest.fixture
+def collision_simulation():
+    """Run the real harness methods with a clock-driven ROS/DDS stand-in."""
+    clock = SimpleNamespace(now=0.0, pending=[], published=[], source=0,
+                            graph_at=0.2, transport_at=0.35, reply=True,
+                            stopped=False, stop_stamp=0.0, last_sonar=0.0)
+
+    class Twist:
+        def __init__(self):
+            self.linear = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+            self.angular = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+
+    def deliver(linear, angular, source=None):
+        clock.source += 1
+        message = Twist()
+        message.linear.x, message.angular.z = linear, angular
+        node.receive(message, SimpleNamespace(
+            source_timestamp=clock.source if source is None else source))
+
+    def publish(message):
+        linear, angular = message.linear.x, message.angular.z
+        clock.published.append((clock.now, linear, angular, node.world))
+        scan, sonar, healthy = node.world
+        stop = ((scan and linear > 0) or (sonar and linear < 0) or
+                clock.now - clock.last_sonar > 0.5)
+        if stop:
+            if not clock.stopped:
+                clock.stop_stamp = clock.now
+            suppressed = clock.stopped and clock.now - clock.stop_stamp > 1.0
+            clock.stopped = True
+            linear = angular = 0.0
+        else:
+            clock.stopped = False
+            suppressed = False
+        if clock.reply and not suppressed and clock.now >= clock.transport_at:
+            clock.pending.append((clock.now + 0.01, linear, angular))
+
+    class Node:
+        def __init__(self, name):
+            pass
+
+        def create_publisher(self, kind, topic, qos):
+            return SimpleNamespace(get_subscription_count=lambda: 1, publish=publish)
+
+        def create_subscription(self, *args):
+            return SimpleNamespace(get_publisher_count=lambda: int(
+                clock.now >= clock.graph_at))
+
+        def create_timer(self, period, callback):
+            return callback
+
+        def get_clock(self):
+            return SimpleNamespace(now=lambda: SimpleNamespace(
+                nanoseconds=int(clock.now * 1e9)))
+
+    def sleep(seconds):
+        clock.now += seconds
+        node.sensors()
+        for item in list(clock.pending):
+            if item[0] <= clock.now:
+                clock.pending.remove(item)
+                deliver(*item[1:])
+
+    source = Path(__file__).resolve().parents[2] / (
+        'ros2_ws/src/patrolbot_navigation/test/test_collision_monitor_integration.py')
+    tree = ast.parse(source.read_text())
+    # Avoid importing ROS; execute the actual class and wait function unchanged.
+    tree.body = [item for item in tree.body if getattr(item, 'name', '') in
+                 ('CollisionHarness', 'wait_until')]
+    namespace = dict(Node=Node, Twist=Twist, math=math, threading=threading,
+                     time=SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
+                     LaserScan=object, PointCloud2=object, qos_profile_sensor_data=None)
+    exec(compile(tree, str(source), 'exec'), namespace)
+    node = namespace['CollisionHarness']()
+    node.scan = lambda obstacle=False: None
+    node.sonar = lambda obstacle=False: setattr(clock, 'last_sonar', clock.now)
+    return node, clock, deliver, sleep
+
+
+def test_collision_discovery_and_motion_precede_single_stop_command(collision_simulation):
+    node, clock, deliver, sleep = collision_simulation
+    for _ in range(2):
+        output = node.command(0.05, scan_obstacle=True)
+        assert output.linear.x == output.angular.z == 0.0
+        events = node.evidence
+        scenario = [e for e in events if e['event'] == 'command' and
+                    e['phase'] == 'scenario'][-1]
+        ready = [e for e in events if e['event'] == 'precondition-ready'][-1]
+        assert ready['monotonic'] < scenario['monotonic']
+        assert all(ready['graph'].values())
+        assert scenario['world'] == (True, False, True)
+        # Already-stopped Nav2 legitimately suppresses further zeros after 1s.
+        sleep(1.1)
+        count = len(node.outputs)
+        stopped_command = type(output)()
+        stopped_command.linear.x = 0.05
+        node.command_pub.publish(stopped_command)
+        sleep(0.02)
+        assert len(node.outputs) == count
+    assert len([e for e in node.evidence if e['event'] == 'command' and
+                e['phase'] == 'scenario']) == 2
+    assert any(t < clock.transport_at for t, *_ in clock.published)
+
+
+def test_collision_stale_sonar_is_not_refreshed_after_fault(collision_simulation):
+    node, clock, deliver, sleep = collision_simulation
+    output = node.command(-0.05, publish_sonar=False)
+    assert output.linear.x == output.angular.z == 0.0
+    assert clock.now - clock.last_sonar >= 0.6
+    assert node.world == (False, False, False)
+    sonar_stamp = clock.last_sonar
+    sleep(0.2)
+    assert clock.last_sonar == sonar_stamp
+    assert node.command(-0.05).linear.x == -0.05
+
+
+def test_collision_stale_output_cannot_satisfy_scenario(collision_simulation):
+    node, clock, deliver, sleep = collision_simulation
+    publish = node.command_pub.publish
+
+    def stale_only(message):
+        if message.linear.x == 0.037:
+            publish(message)
+        else:
+            # A queued old zero and a delayed clear probe are both insufficient.
+            deliver(0.0, 0.0, source=1)
+            deliver(*next(iter(node.probes)))
+    node.command_pub.publish = stale_only
+    with pytest.raises(AssertionError, match='scenario output timed out'):
+        node.command(0.05, scan_obstacle=True)
+    assert clock.now < 2.0
+
+
+def test_collision_wrong_current_output_is_returned_without_retry(collision_simulation):
+    node, clock, deliver, sleep = collision_simulation
+    publish = node.command_pub.publish
+
+    def wrong_velocity(message):
+        if message.linear.x == 0.037:
+            publish(message)
+        else:
+            deliver(0.02, 0.0)
+    node.command_pub.publish = wrong_velocity
+    # The caller's velocity assertion must see the wrong result immediately.
+    assert node.command(0.05, scan_obstacle=True).linear.x == 0.02
+    assert len([e for e in node.evidence if e['event'] == 'command' and
+                e['phase'] == 'scenario']) == 1
+
+
+@pytest.mark.parametrize('failure', ['command', 'scan', 'sonar', 'output', 'transport'])
+def test_collision_readiness_failure_is_bounded_and_never_applies_fault(
+        collision_simulation, failure):
+    node, clock, deliver, sleep = collision_simulation
+    if failure == 'transport':
+        clock.reply = False
+    elif failure == 'output':
+        clock.graph_at = 100.0
+    else:
+        publisher = getattr(node, failure + '_pub')
+        publisher.get_subscription_count = lambda: 0
+    with pytest.raises(AssertionError, match='graph not ready|precondition timed out'):
+        node.command(0.05, scan_obstacle=True)
+    assert clock.now <= 4.02
+    assert not any(e['event'] == 'command' and e['phase'] == 'scenario'
+                   for e in node.evidence)
+    assert node.world == (False, False, True)

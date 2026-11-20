@@ -62,4 +62,40 @@ An early child exit fails teardown. Expected termination codes are 0 and SIGTERM
 a forced kill reaps the process and fails the fixture. Existing opt-ins and
 sensor freshness/expiry assertions are unchanged.
 
+Collision Monitor also records `collision_monitor_fixture.json` beside the child
+log, including monotonic/ROS timestamps, DDS output source timestamps, all six
+output velocity components, command identities and output barriers, lifecycle
+transitions, graph counts, and synthetic sensor state/publication ticks. The
+snapshot is written during external cleanup after executor draining, including
+on setup/test failure; the existing child-process cleanup still runs if writing
+evidence fails.
+
+Before each scenario, the fixture waits for command, scan, sonar and output graph
+connections and establishes actual clear-world nonzero output. Only this bounded
+four-second precondition can stream clear commands. Each probe uses a distinct
+velocity tag because production uses unstamped Twist; acknowledging that tag on
+the ordered streams establishes motion independently of previous test order.
+The fault is then applied, four sensor publication ticks settle its input, and
+the scenario command is published exactly once. Its one-second output wait
+rejects clear probes and DDS source timestamps at or before the acknowledged
+probe. Missing output fails; STOP assertions require a received zero, and allowed
+commands still require their actual nonzero velocity. No scenario command retry
+or production parameter change is involved.
+
+A timer keeps synthetic healthy sensors fresh. Stale-sonar scenarios disable
+sonar under the same lock used by that timer before aging the source for 0.6 s;
+scan continues, and no subsequent clear precondition runs until the scenario has
+finished. The separate sonar-outage acceptance helper also disables background
+sonar during its outage window.
+
+Hosted PR85 evidence at `ab99323` showed all three STOP cases timing out waiting
+for output, with the first polygon STOP logged about 0.13 s after activation.
+Missing output discovery combined with Nav2 1.3.14's suppression of repeated
+zeros after `stop_pub_timeout` is a plausible explanation, not a demonstrated
+root cause. Portable simulations cover delayed output discovery/transport, a
+single zero followed by suppression, scenario publication exactly once, stale
+output rejection, preserved sonar staleness, and bounded readiness failures for
+each graph connection. They do not replace the parent's native ROS validation
+against the installed middleware and Nav2 version.
+
 Offline regression: `python -m pytest docker/tests/test_native_fixture_cleanup.py`.

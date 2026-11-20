@@ -33,6 +33,7 @@ try:
         lambda msg: samples.append((time.monotonic(), msg.linear.x, msg.angular.z)), 10)
     assert module.wait_until(lambda: sub.get_publisher_count() == 1)
     # Continue scan and commands; sonar alone stops arriving.
+    monitor.set_world(publish_sonar=False)
     monitor.sonar()
     last_sonar = time.monotonic()
     command = Twist(); command.linear.x = -.05

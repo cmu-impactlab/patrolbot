@@ -41,8 +41,9 @@ be killed in process, so the enclosing CI process remains the final containment.
 The owner relies on constructors to clean allocations if they raise internally;
 it owns nodes once their constructors return.
 
-Collision Monitor writes combined output to pytest's retained temporary
-`collision-monitor*/collision_monitor.log` (also exposed as `node.log_path`).
+Collision Monitor writes combined output to `ROS_LOG_DIR/collision_monitor.log`
+when CI supplies the uploaded evidence directory, or pytest's retained temporary
+`collision-monitor*/collision_monitor.log` otherwise (also exposed as `node.log_path`).
 An early child exit fails teardown. Expected termination codes are 0 and SIGTERM;
 a forced kill reaps the process and fails the fixture. Existing opt-ins and
 sensor freshness/expiry assertions are unchanged.

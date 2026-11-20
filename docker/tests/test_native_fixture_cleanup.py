@@ -14,7 +14,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] /
                        'ros2_ws/src/patrolbot_bridge/test'))
-from native_fixture import NativeFixture
+from native_fixture import NativeFixture, fixture_log_path
+
+
+def test_native_child_logs_use_evidence_directory(monkeypatch, tmp_path):
+    evidence = tmp_path / 'evidence'
+    fallback = tmp_path / 'pytest'
+    monkeypatch.setenv('ROS_LOG_DIR', str(evidence))
+    assert fixture_log_path('collision_monitor.log', fallback) == (
+        evidence / 'collision_monitor.log')
+    assert evidence.is_dir()
+    monkeypatch.delenv('ROS_LOG_DIR')
+    assert fixture_log_path('collision_monitor.log', fallback) == (
+        fallback / 'collision_monitor.log')
 
 
 class Executor:

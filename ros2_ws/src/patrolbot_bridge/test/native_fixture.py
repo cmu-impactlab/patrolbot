@@ -5,6 +5,15 @@ import subprocess
 import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+import os
+from pathlib import Path
+
+
+def fixture_log_path(filename, fallback_directory):
+    """Keep native child output in uploaded evidence when the runner supplies it."""
+    directory = Path(os.environ.get('ROS_LOG_DIR', fallback_directory))
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / filename
 
 
 def executor_tasks(executor):

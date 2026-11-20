@@ -20,7 +20,7 @@ from sensor_msgs.msg import LaserScan, PointCloud2, PointField
 
 # Shared source-only test support; never installed with production nodes.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'patrolbot_bridge' / 'test'))
-from native_fixture import NativeFixture
+from native_fixture import NativeFixture, fixture_log_path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 PARAMS_FILE = PACKAGE_ROOT / 'config' / 'nav2_params.yaml'
@@ -103,7 +103,8 @@ class CollisionHarness(Node):
 
 @pytest.fixture(scope='module')
 def monitor(tmp_path_factory):
-    log_path = tmp_path_factory.mktemp('collision-monitor') / 'collision_monitor.log'
+    log_path = fixture_log_path(
+        'collision_monitor.log', tmp_path_factory.mktemp('collision-monitor'))
     with log_path.open('w') as log, NativeFixture(rclpy) as lifetime:
         process = lifetime.process(subprocess.Popen(
             [

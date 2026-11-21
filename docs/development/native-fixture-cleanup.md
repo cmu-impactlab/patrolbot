@@ -83,10 +83,35 @@ commands still require their actual nonzero velocity. No scenario command retry
 or production parameter change is involved.
 
 A timer keeps synthetic healthy sensors fresh. Stale-sonar scenarios disable
-sonar under the same lock used by that timer before aging the source for 0.6 s;
-scan continues, and no subsequent clear precondition runs until the scenario has
-finished. The separate sonar-outage acceptance helper also disables background
-sonar during its outage window.
+sonar under a separate producer lock before aging the source for 0.6 s. This
+lock serializes complete sensor batches, world transitions and command
+publication. `set_world(publish_sonar=False)` waits for an old batch's pending
+or in-flight sonar publication to finish before returning; subsequent batches
+continue scan only. No subsequent clear precondition runs until the scenario
+has finished. The separate sonar-outage acceptance helper also disables
+background sonar during its outage window; its strict 0.5–0.60 s onset and
+30-second total limits remain unchanged.
+
+DDS publication and graph queries never hold the observation lock. That lock
+still protects paired output/source appends, evidence and source barriers. The
+sensor timer has its own mutually exclusive callback group, separate from the
+output subscription's default group, so a blocked sensor publish cannot exclude
+output dispatch through rclpy's callback-group gate. The existing three-worker
+executor and node lifetimes are unchanged. Lock order is producer then
+observation; receive takes only observation.
+
+The policy-only `c720374` native evidence showed correct rear-forward and final
+clear-arc outputs sourced about 0.000140 s and 0.000142 s after their commands,
+but received 1.275731 s and 1.544796 s later; graph counts were all one. Sensor
+callbacks also stalled. This demonstrates observation delay rather than wrong
+Collision Monitor output. The old shared lock and default callback group both
+provided blocking paths; the evidence does not identify which path caused those
+specific delays or exclude OS/DDS/executor scheduling. Portable event-controlled
+regressions block scan, sonar, command publication and graph lookup and require
+receipt before releasing the producer. They also require world transitions to
+drain pending sonar and keep paired arrays atomic. They prove those fixture
+blocking paths are removed, not that native scheduling delays are resolved.
+No timeout, freshness guard, scenario retry or velocity assertion is relaxed.
 
 Hosted PR85 evidence at `ab99323` showed all three STOP cases timing out waiting
 for output, with the first polygon STOP logged about 0.13 s after activation.

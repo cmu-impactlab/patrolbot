@@ -14,6 +14,7 @@ from lifecycle_msgs.msg import Transition
 from lifecycle_msgs.srv import ChangeState
 import pytest
 import rclpy
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -50,6 +51,7 @@ class CollisionHarness(Node):
             PointCloud2, '/sonar', qos_profile_sensor_data)
         self.command_pub = self.create_publisher(Twist, '/cmd_vel_smoothed', 10)
         self.lock = threading.RLock()
+        self.producer_lock = threading.Lock()
         self.outputs = []
         self.output_sources = []
         self.ack_source = 0
@@ -60,7 +62,9 @@ class CollisionHarness(Node):
         self.world = (False, False, True)
         self.output_sub = self.create_subscription(
             Twist, '/input/navi', self.receive, 10)
-        self.sensor_timer = self.create_timer(0.03, self.sensors)
+        # A blocked DDS sensor publish must not occupy the receiver's group.
+        self.sensor_timer = self.create_timer(
+            0.03, self.sensors, callback_group=MutuallyExclusiveCallbackGroup())
 
     def record(self, event, **values):
         with self.lock:
@@ -90,27 +94,33 @@ class CollisionHarness(Node):
 
     def set_world(self, scan_obstacle=False, sonar_obstacle=False,
                   publish_sonar=True):
-        with self.lock:
-            self.world = (scan_obstacle, sonar_obstacle, publish_sonar)
-            self.record('world')
-            return self.sensor_ticks
+        # Drain the old sensor batch before starting a stale-sonar clock.
+        with self.producer_lock:
+            with self.lock:
+                self.world = (scan_obstacle, sonar_obstacle, publish_sonar)
+                self.record('world')
+                return self.sensor_ticks
 
     def sensors(self):
-        with self.lock:
-            scan_obstacle, sonar_obstacle, publish_sonar = self.world
+        with self.producer_lock:
+            with self.lock:
+                scan_obstacle, sonar_obstacle, publish_sonar = self.world
             self.scan(scan_obstacle)
             if publish_sonar:
                 self.sonar(sonar_obstacle)
-            self.sensor_ticks += 1
-            self.record('sensors', tick=self.sensor_ticks)
+            with self.lock:
+                self.sensor_ticks += 1
+                self.record('sensors', tick=self.sensor_ticks)
 
     def publish_command(self, linear, angular, phase):
-        with self.lock:
-            self.sequence += 1
-            count = len(self.outputs)
-            self.record('command', identity=self.sequence, phase=phase,
-                        linear=linear, angular=angular, graph=self.graph(),
-                        output_barrier=count)
+        with self.producer_lock:
+            graph = self.graph()
+            with self.lock:
+                self.sequence += 1
+                count = len(self.outputs)
+                self.record('command', identity=self.sequence, phase=phase,
+                            linear=linear, angular=angular, graph=graph,
+                            output_barrier=count)
             message = Twist()
             message.linear.x = linear
             message.angular.z = angular

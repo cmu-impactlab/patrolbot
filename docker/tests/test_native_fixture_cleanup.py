@@ -623,16 +623,18 @@ def collision_simulation():
 
     class Node:
         def __init__(self, name):
-            pass
+            self.default_callback_group = threading.Lock()
 
         def create_publisher(self, kind, topic, qos):
             return SimpleNamespace(get_subscription_count=lambda: 1, publish=publish)
 
         def create_subscription(self, *args):
+            self.output_group = self.default_callback_group
             return SimpleNamespace(get_publisher_count=lambda: int(
                 clock.now >= clock.graph_at))
 
-        def create_timer(self, period, callback):
+        def create_timer(self, period, callback, *, callback_group):
+            self.sensor_group = callback_group
             return callback
 
         def get_clock(self):
@@ -654,6 +656,7 @@ def collision_simulation():
     tree.body = [item for item in tree.body if getattr(item, 'name', '') in
                  ('CollisionHarness', 'wait_until')]
     namespace = dict(Node=Node, Twist=Twist, math=math, threading=threading,
+                     MutuallyExclusiveCallbackGroup=threading.Lock,
                      time=SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep),
                      LaserScan=object, PointCloud2=object, qos_profile_sensor_data=None)
     exec(compile(tree, str(source), 'exec'), namespace)
@@ -661,6 +664,136 @@ def collision_simulation():
     node.scan = lambda obstacle=False: None
     node.sonar = lambda obstacle=False: setattr(clock, 'last_sonar', clock.now)
     return node, clock, deliver, sleep
+
+
+@pytest.mark.parametrize('blocked', ['scan', 'sonar', 'command', 'graph'])
+def test_collision_receives_while_producer_is_blocked(collision_simulation, blocked):
+    node, _, deliver, _ = collision_simulation
+    entered, release = threading.Event(), threading.Event()
+
+    def block(*_):
+        entered.set()
+        assert release.wait(2)
+        return 1
+
+    if blocked in ('scan', 'sonar'):
+        publisher = getattr(node, blocked + '_pub')
+        publisher.publish = block
+        setattr(node, blocked, lambda *_: publisher.publish(None))
+    elif blocked == 'command':
+        node.command_pub.publish = block
+    else:
+        node.command_pub.get_subscription_count = block
+
+    def produce():
+        if blocked in ('scan', 'sonar'):
+            # Model rclpy's mutually exclusive dispatch, including group ownership.
+            with node.sensor_group:
+                node.sensors()
+        else:
+            node.publish_command(0.05, 0.0, 'scenario')
+
+    def receive():
+        with node.output_group:
+            deliver(0.05, 0.0, source=42)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        producer = pool.submit(produce)
+        try:
+            assert entered.wait(1)
+            assert node.producer_lock.locked()
+            assert node.sensor_group is not node.output_group
+            pool.submit(receive).result(timeout=1)
+            assert not producer.done()
+            with node.lock:
+                assert len(node.outputs) == len(node.output_sources) == 1
+                assert node.outputs[0].linear.x == 0.05
+                assert node.output_sources == [42]
+                assert node.evidence[-1]['source_ns'] == 42
+        finally:
+            release.set()
+            producer.result(timeout=1)
+
+
+@pytest.mark.parametrize('blocked', ['scan', 'sonar'])
+def test_collision_stopping_sonar_drains_old_sensor_batch(collision_simulation, blocked):
+    node, _, _, _ = collision_simulation
+    entered, release, transition_waiting = (
+        threading.Event(), threading.Event(), threading.Event())
+    sonar_worlds = []
+    producer_lock = node.producer_lock
+
+    class TrackedLock:
+        def __enter__(self):
+            if producer_lock.locked():
+                transition_waiting.set()
+            producer_lock.acquire()
+
+        def __exit__(self, *_):
+            producer_lock.release()
+
+    node.producer_lock = TrackedLock()
+
+    def scan(*_):
+        if blocked == 'scan':
+            entered.set()
+            assert release.wait(2)
+
+    def sonar(*_):
+        if blocked == 'sonar':
+            entered.set()
+            assert release.wait(2)
+        sonar_worlds.append(node.world)
+
+    node.scan, node.sonar = scan, sonar
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        producer = pool.submit(node.sensors)
+        transition = None
+        try:
+            assert entered.wait(1)
+            transition = pool.submit(node.set_world, publish_sonar=False)
+            assert transition_waiting.wait(1)
+            assert not transition.done()
+            assert node.world == (False, False, True)
+        finally:
+            release.set()
+            producer.result(timeout=1)
+            if transition is not None:
+                assert transition.result(timeout=1) == 1
+    assert sonar_worlds == [(False, False, True)]
+    assert node.world == (False, False, False)
+    assert [e['event'] for e in node.evidence] == ['sensors', 'world']
+    node.sensors()
+    assert sonar_worlds == [(False, False, True)]
+    assert node.sensor_ticks == 2
+
+
+def test_collision_callback_keeps_output_and_source_atomic(collision_simulation):
+    node, _, deliver, _ = collision_simulation
+    entered, release = threading.Event(), threading.Event()
+
+    class PausedAppend(list):
+        def append(self, value):
+            super().append(value)
+            entered.set()
+            assert release.wait(2)
+
+    node.outputs = PausedAppend()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        callback = pool.submit(deliver, 0.05, 0.0, 42)
+        try:
+            assert entered.wait(1)
+            acquired = node.lock.acquire(blocking=False)
+            if acquired:
+                node.lock.release()
+            assert not acquired, 'observers must not see the half-appended pair'
+        finally:
+            release.set()
+            callback.result(timeout=1)
+    with node.lock:
+        assert len(node.outputs) == len(node.output_sources) == 1
+        assert node.output_sources == [42]
+        assert node.evidence[-1]['source_ns'] == 42
 
 
 def test_collision_discovery_and_motion_precede_single_stop_command(collision_simulation):

@@ -27,7 +27,7 @@ it. The full graph is on [Software Architecture](../architecture/software-archit
 | `/patrolbot/web_teleop_active` | `std_msgs/Bool` | `patrolbot_web_bridge` (dashboard) | `patrolbot_bridge` | while the dashboard deadman is held |
 | `/input/nav_controller` | `geometry_msgs/Twist` | `controller_server` (RPP) | `nav_command_mux` | 5 Hz |
 | `/input/nav_behavior` | `geometry_msgs/Twist` | `behavior_server` | `nav_command_mux` | behavior-dependent |
-| `/input/docking` | `geometry_msgs/Twist` | none (reserved) | `nav_command_mux` | no publisher until commissioned |
+| `/input/docking` | `geometry_msgs/Twist` | guarded `undock_turn` | `nav_command_mux` | owned undock turn; automatic dock-in unlaunched |
 | `/cmd_vel_nav` | `geometry_msgs/Twist` | `nav_command_mux` | `velocity_smoother` | selected autonomous command |
 | `cmd_vel_smoothed` | `geometry_msgs/Twist` | `velocity_smoother` | `collision_monitor` | 20 Hz |
 | `input/navi` | `geometry_msgs/Twist` | `collision_monitor` | `twist_mux` (prio 5) | 5 Hz |
@@ -54,7 +54,7 @@ single final command consumed by the bridge.
 flowchart LR
     A["controller_server"] -->|input/nav_controller| N["nav_command_mux"]
     H["behavior_server"] -->|input/nav_behavior| N
-    R["reserved docking\nno publisher"] -.->|input/docking| N
+    R["guarded undock_turn"] -->|input/docking| N
     N -->|cmd_vel_nav| B["velocity_smoother"]
     B -->|cmd_vel_smoothed| C["collision_monitor"]
     C -->|input/navi| D["twist_mux"]

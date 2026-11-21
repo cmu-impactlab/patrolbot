@@ -108,7 +108,7 @@ consumes.
 flowchart LR
     RPP["controller_server\n(RPP)"] -->|input/nav_controller| NM{{"nav_command_mux"}}
     BS["behavior_server"] -->|input/nav_behavior| NM
-    FD["reserved docking input\n(no publisher)"] -.->|input/docking| NM
+    FD["guarded undock_turn"] -->|input/docking| NM
     NM -->|cmd_vel_nav| VS["velocity_smoother\n(in nav2_container)"]
     VS -->|cmd_vel_smoothed| CM["collision_monitor\ndirection-aware scan + sonar"]
     CM -->|input/navi · prio 5| TM{{"twist_mux"}}
@@ -144,9 +144,9 @@ Reading it carefully:
 
 !!! warning "Reserved mux inputs"
     `input/safety_controller` is active: `patrolbot_safety_watchdog.py` publishes zero Twist at
-    priority 10 on stale/faulted safety state. `input/teleop` (prio 8) and `input/switch` (prio 6)
-    on the final mux are reserved and have no current publisher. `/input/docking` on the upstream
-    autonomous mux is also publisher-free until a future reviewed producer passes commissioning.
+    priority 10 on stale/faulted safety state. Dashboard deadman teleop uses `input/teleop`
+    (priority 7); `input/switch` (priority 6) remains reserved. Guarded `undock_turn`
+    publishes to `/input/docking` on the upstream mux; automatic dock-in remains unlaunched.
 
 **Failure mode — `cmd_vel_in_topic` mismatch.** Earlier, `collision_monitor` read `cmd_vel_raw`,
 which had no publisher, so navigation commands silently never reached the robot. It now reads

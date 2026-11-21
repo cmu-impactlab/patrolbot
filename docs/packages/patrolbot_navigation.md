@@ -24,7 +24,7 @@ and the laser frame transform.
 
 ## Dependencies
 
-`nav2_bringup`, `nav2_msgs`, `slam_toolbox`, `joy`, `teleop_twist_joy`, `twist_mux`, `rclpy`,
+`nav2_bringup`, `nav2_msgs`, `joy`, `twist_mux`, `rclpy`,
 `geometry_msgs`, `sensor_msgs`, `launch`, `launch_ros`.
 
 ## Package layout
@@ -40,7 +40,6 @@ and the laser frame transform.
 | `scripts/patrolbot_joy_teleop.py` | Xinput joystick teleop node |
 | `scripts/patrolbot_safety_watchdog.py` | priority-10 telemetry/power/fault/E-stop hold |
 | `scripts/lms200_sanitizer.py` | `/bad_scan → /good_scan` header fixer — **not in active launch** |
-| `scripts/twist_mux.yaml` | reference priority config — twist_mux runs from `patrolbot-launch` |
 | `rviz/patrolbot_nav.rviz` | operator RViz layout |
 
 ## Public interfaces

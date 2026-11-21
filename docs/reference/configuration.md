@@ -20,7 +20,6 @@ All paths are inside the container, under `/opt/patrolbot_ws/`.
 |---|---|---|
 | `config/nav2_params.yaml` | `patrolbot_navigation` | AMCL, costmaps, controller, collision monitor, docking |
 | `config/physical_calibration.yaml` | `patrolbot_navigation` | Measured robot geometry |
-| `scripts/twist_mux.yaml` | `patrolbot_navigation` | Mux inputs and priorities |
 | `param/defaults/mux.yaml` | `patrolbot-launch` | Launch-time mux defaults |
 | `param/defaults/smoother.yaml` | `patrolbot-launch` | Final velocity smoother |
 | `config/bridge_params.yaml` | `patrolbot_bridge` | Bumper masks, candidate scan topic |
@@ -166,12 +165,6 @@ There are two muxes. `nav_command_mux` arbitrates within Nav2 and publishes `/cm
 | `input/navi` | 5 | 1.0 s |
 
 See [Safety Chain](../safety/safety-chain.md) for what these priorities mean in practice.
-
-!!! warning "`scripts/twist_mux.yaml` is not the running configuration"
-    `patrolbot_navigation/scripts/twist_mux.yaml` declares a `twist_mux` node with priorities
-    100 and 50 on `/cmd_vel_joy` and `/cmd_vel_nav`. No such node runs, and neither topic is a
-    mux input. It matches neither deployed mux and **MUST NOT** be used as a reference for
-    current priorities.
 
 ## Velocity smoothers
 

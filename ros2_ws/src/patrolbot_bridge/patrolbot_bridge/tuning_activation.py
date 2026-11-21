@@ -236,9 +236,6 @@ class ActivationCoordinator:
     def activation_supported(self) -> bool:
         return getattr(self.backend, 'approved', False) is True
 
-    def _digest_for(self, revision: int) -> str:
-        return self.store.load_revision(revision)['meta']['generated_digest']
-
     # ------------------------------------------------------------------
     # Admission
     # ------------------------------------------------------------------

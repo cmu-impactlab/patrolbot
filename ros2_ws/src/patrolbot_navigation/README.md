@@ -12,11 +12,12 @@ and a custom joystick teleop node.
 | File | Role |
 |------|------|
 | `launch/bringup.launch.py` | Launches the composed Nav2 stack (AMCL + RPP + collision monitor), joystick teleop, controller feedback, safety watchdog, and laser static TF |
-| `scripts/patrolbot_joy_teleop.py` | Logitech F710 Xinput teleop: RB deadman, left-stick drive/turn, four-shoulder LiDAR power toggle, publishes `/cmd_vel_joy` |
+| `scripts/patrolbot_joy_teleop.py` | Logitech F710 Xinput teleop: RB deadman, left-stick drive/turn, four-shoulder LiDAR power toggle, publishes `/input/joy` |
 | `scripts/patrolbot_controller_feedback.py` | Finite F710 rumble alerts for safety blockers; publishes only `/joy/set_feedback` and cannot command motion or enable motors |
 | `scripts/patrolbot_safety_watchdog.py` | Publishes a priority-10 zero command while `/scan` or `/odom` is stale |
 | `config/nav2_params.yaml` | AMCL differential model, RPP (`0.22 m/s` cruise), `0.26 m/s` Nav2 smoother cap, and a 0.6×0.6 m collision-monitor stop box |
-| `maps/second_map.yaml` + `.pgm` | Active map: 3192×2205 at 0.075 m/px, origin `[-1,-1,0]` |
+| `maps/second_map.yaml` + `.pgm` | Default Floor 2 catalog map: 3192×2205 at 0.075 m/px, origin `[-1,-1,0]` |
+| `maps/cmuq_1st_floor.yaml` + `.pgm` | Active selectable Floor 1 catalog map; bringup resolves the selected catalog entry |
 
 ## Controller LiDAR power
 
@@ -55,12 +56,11 @@ ros2 launch patrolbot_navigation bringup.launch.py
 
 - `scripts/lms200_sanitizer.py` — fixes SICK LMS-200 header fields
   (`/bad_scan` → `/good_scan`); no `/bad_scan` publisher in current stack
-- `scripts/twist_mux.yaml` — legacy, not loaded, and banner-marked as such in
-  the file; the active `twist_mux` is launched by `patrolbot-launch` with
-  `param/defaults/mux.yaml`
-- `maps/cmuq_1st_floor.yaml` + `.pgm` — older CMU-Q map, not loaded at launch
+The active final `twist_mux` loads `patrolbot-launch/param/defaults/mux.yaml`;
+`nav_command_mux` uses `config/nav2_params.yaml`, including `/input/docking`
+for guarded undock turning. Automatic dock-in remains unlaunched.
 
 ## Dependencies
 
-`nav2_bringup`, `nav2_msgs`, `slam_toolbox`, `joy`, `twist_mux`, `rclpy`,
+`nav2_bringup`, `nav2_msgs`, `joy`, `twist_mux`, `rclpy`,
 `geometry_msgs`, `sensor_msgs`, `launch`, `launch_ros`

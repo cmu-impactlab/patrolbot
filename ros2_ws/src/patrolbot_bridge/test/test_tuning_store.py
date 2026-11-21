@@ -31,12 +31,16 @@ def test_clean_install_is_uninitialized_and_mutation_fails_closed(tmp_path):
     with pytest.raises(StoreUnavailable):
         store.require_ready()
     with pytest.raises(StoreUnavailable):
+        store.require_initialized()
+    with pytest.raises(StoreUnavailable):
         store.save(request_id=UUID, base_revision=0,
                    changes=[{'id': 'amcl.alpha1', 'value': 0.06}], actor=ADMIN)
 
 
 def test_initialize_builds_revision_one_and_active_startup(tmp_path):
     store = initialized(tmp_path)
+    assert store.require_initialized() == store.require_ready()
+    assert not hasattr(RevisionStore, '_revision_generated_digest')
     state = store.snapshot_state()
     assert state['desired_revision'] == 1
     assert state['active_revision'] == 1

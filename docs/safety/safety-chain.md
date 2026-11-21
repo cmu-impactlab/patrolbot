@@ -19,7 +19,7 @@ Every velocity command reaches the motors through the same chain. Nothing bypass
 flowchart LR
     CTRL["controller_server"] -->|input/nav_controller p5| NMUX["nav_command_mux"]
     BEH["behavior_server"] -->|input/nav_behavior p7| NMUX
-    DOCK["docking (no publisher)"] -.->|input/docking p9| NMUX
+    DOCK["guarded undock_turn"] -->|input/docking p9| NMUX
     NMUX -->|/cmd_vel_nav| VS["velocity_smoother"]
     VS -->|/cmd_vel_smoothed| CM["collision_monitor"]
     CM -->|input/navi p5| MUX["cmd_vel_mux"]
@@ -57,17 +57,17 @@ Runs in the navigation container and publishes `/cmd_vel_nav`. All inputs have a
 
 | Input topic | Priority | Source |
 |---|---|---|
-| `input/docking` | 9 | Docking — **no publisher** |
+| `input/docking` | 9 | Guarded `undock_turn` owned turn |
 | `input/nav_behavior` | 7 | `behavior_server` (spin, back up, wait) |
 | `input/nav_controller` | 5 | `controller_server` (path following) |
 
 Everything leaving this mux still passes through the collision monitor before reaching the
-second mux. A docking publisher would therefore outrank normal path following but would **not**
+second mux. The guarded undock publisher therefore outranks normal path following but does **not**
 escape collision monitoring — unlike Nav2's own `docking_server`, which writes straight to the
 base and is deliberately absent from the graph.
 
-`/input/docking` has **zero publishers** and **MUST** remain publisher-free unless a publisher
-has been reviewed against this chain.
+Guarded `undock_turn` publishes to `/input/docking`. Automatic dock-in remains parked and
+unlaunched. Any additional publisher **MUST** be reviewed against this chain.
 
 ### `cmd_vel_mux` — the main arbiter
 

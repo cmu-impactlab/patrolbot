@@ -65,21 +65,6 @@ class ServiceError(ValueError):
         self.detail = detail
 
 
-def _reject_constant(name):
-    raise ServiceError('refused', 'invalid_json: ' + name)
-
-
-def _no_duplicates(pairs):
-    seen = set()
-    result = {}
-    for key, value in pairs:
-        if key in seen:
-            raise ServiceError('refused', 'duplicate_key: ' + str(key))
-        seen.add(key)
-        result[key] = value
-    return result
-
-
 def strict_json_loads(text: str, *, max_bytes: int = REQUEST_MAX_BYTES):
     if not isinstance(text, str):
         raise ServiceError('refused', 'invalid_json: expected text')

@@ -20,6 +20,15 @@ SESSION = '123e4567-e89b-12d3-a456-426614174000'
 REQ = '11111111-1111-4111-8111-111111111111'
 
 
+def test_strict_json_uses_shared_parser_without_dead_service_hooks():
+    from patrolbot_bridge.tuning_json import loads
+
+    assert svc.bounded_json_loads is loads
+    assert not hasattr(svc, '_reject_constant')
+    assert not hasattr(svc, '_no_duplicates')
+    assert svc.strict_json_loads('{"value": 1}') == {'value': 1}
+
+
 def generation():
     return {'capability': svc.CAPABILITY, 'session_id': SESSION}
 

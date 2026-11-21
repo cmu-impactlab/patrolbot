@@ -12,7 +12,7 @@ separate Makefile project pending a verified source import.
 
 | Machine | Stack |
 |---|---|
-| **Pi** | Ubuntu, ROS 2 **Jazzy**, `colcon`, Nav2 (`nav2_bringup`, `nav2_msgs`), `twist_mux`, `joy`, `slam_toolbox` |
+| **Pi** | Ubuntu, ROS 2 **Jazzy**, `colcon`, Nav2 (`nav2_bringup`, `nav2_msgs`), `twist_mux`, `joy` |
 | **SBC** | C++ toolchain (`g++`, `make`), ARIA/AriaCoda installed at `/usr/local/Aria` |
 | **Operator laptop** | SSH client; optional reviewed dashboard tooling |
 

@@ -465,8 +465,8 @@ patrolbot_dock_manager:
 
 # PB-AUDIT-001 upstream autonomous-command arbiter. All Nav2 motion producers
 # enter here before the navigation velocity smoother and collision monitor.
-# The docking input stays publisher-free until a reviewed docking implementation
-# is enabled. Short timeouts prevent stale commands from surviving a producer
+# Guarded undock_turn publishes its owned turn on the docking input; automatic
+# dock-in remains unlaunched. Short timeouts prevent stale commands surviving a producer
 # crash or a change in arbitration ownership.
 nav_command_mux:
   ros__parameters:

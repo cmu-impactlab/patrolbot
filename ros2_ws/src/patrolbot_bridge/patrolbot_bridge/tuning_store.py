@@ -519,9 +519,6 @@ class RevisionStore:
         _fsync_dir(self.revisions_dir)
         return meta
 
-    def _revision_generated_digest(self, revision) -> str:
-        return self.load_revision(revision)['meta']['generated_digest']
-
     # ------------------------------------------------------------------
     # Manifest / startup writes
     # ------------------------------------------------------------------

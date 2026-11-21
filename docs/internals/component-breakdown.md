@@ -40,9 +40,8 @@ These are real but not part of the running stack. Each is one line in
 |---|---|
 | `rosaria2` package | superseded direct-ARIA driver, kept as source-only fallback |
 | `lms200_sanitizer.py` | `/bad_scan → /good_scan` fixer; no `/bad_scan` publisher today |
-| `patrolbot_navigation/scripts/twist_mux.yaml` | reference config; twist_mux runs from `patrolbot-launch` |
 | `patrolbot_nav.rviz` | operator RViz layout (manual use) |
-| `patrolbot_docking_plugins`, docking-server YAML and mux input | retained dock-in prototype; no generic docking server launched |
+| `patrolbot_docking_plugins`, docking-server YAML | retained dock-in prototype; no generic docking server launched; the mux input is active for guarded undock turning |
 
 ## Removed dead code
 

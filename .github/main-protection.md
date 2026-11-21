@@ -28,13 +28,14 @@ Pages publication run only on filtered main pushes or manual dispatch, so they
 are excluded, as are Dependency Graph and manual-only checks. Requiring a
 filtered or manual workflow can leave PR checks pending forever.
 
-One eligible independent reviewer's approval is required for subsequent changes,
-including policy changes. Stale approvals are dismissed, the latest reviewable
-push needs approval from someone other than its pusher, and conversations must
-be resolved. The PR author cannot supply the required approval. Local Codex
-review under the author's CLI login does not satisfy GitHub's required approval.
-Several other write-access maintainers exist; use an eligible independent
-reviewer. There is no CODEOWNERS requirement or admin/actor/token bypass.
+The PR author may manually review and merge their own PR, including policy
+changes, after required CI passes and conversations are resolved. GitHub does
+not allow authors to submit an Approve review on their own PR; requiring zero
+approvals and disabling last-push approval removes the need for another person.
+Local Codex review can support the author's manual review. Stale approvals are
+still dismissed. There is no CODEOWNERS requirement or admin/actor/token bypass;
+administrators must satisfy the same PR and CI requirements. Merging remains a
+manual action; this policy does not enable auto-merge.
 Normal eligible maintainers can merge through required PRs (`restrictions` is
 null). Merge commits remain allowed; force pushes and deletion are prohibited,
 and the branch remains unlocked for compliant updates.

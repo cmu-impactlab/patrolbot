@@ -1,8 +1,11 @@
 """Isolated loopback integration tests for the real Pi bridge node."""
 
+from contextlib import contextmanager
 import math
 import os
+from pathlib import Path
 import socket
+import sys
 import threading
 import time
 from uuid import uuid4
@@ -25,6 +28,10 @@ from rclpy.parameter import Parameter
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
+# Shared source-only test support; never installed with production nodes.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from native_fixture import NativeFixture
+
 pytestmark = pytest.mark.skipif(
     os.environ.get('PATROLBOT_RUN_INTEGRATION') != '1',
     reason='set PATROLBOT_RUN_INTEGRATION=1 in an isolated ROS domain',
@@ -36,10 +43,14 @@ class FakeSbc:
 
     def __init__(self, advertise_undock=True):
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.listener.bind(('127.0.0.1', 0))
-        self.listener.listen(4)
-        self.listener.settimeout(0.1)
+        try:
+            self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.listener.bind(('127.0.0.1', 0))
+            self.listener.listen(4)
+            self.listener.settimeout(0.1)
+        except BaseException:
+            self.listener.close()
+            raise
         self.port = self.listener.getsockname()[1]
         self.odom_epoch = str(uuid4())
         self.running = True
@@ -83,7 +94,11 @@ class FakeSbc:
         self._connection = None
         self._lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        try:
+            self._thread.start()
+        except BaseException:
+            self.listener.close()
+            raise
 
     def _run(self):
         while self.running:
@@ -343,8 +358,11 @@ class FakeSbc:
         self._thread.join(timeout=2.0)
         with self._lock:
             scripts = list(self._scripts)
+        deadline = time.monotonic() + 2.0
         for script in scripts:
-            script.join(timeout=2.0)
+            script.join(timeout=max(0.0, deadline - time.monotonic()))
+        assert not self._thread.is_alive(), 'fake SBC receive thread survived cleanup'
+        assert not any(script.is_alive() for script in scripts), 'fake SBC script survived cleanup'
 
 
 def wait_until(predicate, timeout=3.0):
@@ -448,67 +466,46 @@ def seed_harness(bridge, client_node):
     client_node.destroy_publisher(publisher)
 
 
-def build_harness(fake):
-    rclpy.init()
-    amcl = FakeAmcl()
-    bridge = PatrolBotBridge(
-        parameter_overrides=[
-            Parameter('server_ip', value='127.0.0.1'),
-            Parameter('server_port', value=fake.port),
-            Parameter('connect_timeout', value=0.2),
-            Parameter('receive_timeout', value=0.3),
-            Parameter('reconnect_delay', value=0.05),
-            Parameter('control_timeout', value=0.4),
-        ]
-    )
-    client_node = Node('fake_sbc_integration_client')
-    client_node.fake_amcl = amcl
-    executor = MultiThreadedExecutor(num_threads=4)
-    executor.add_node(amcl)
-    executor.add_node(bridge)
-    executor.add_node(client_node)
-    spin_thread = threading.Thread(target=executor.spin, daemon=True)
-    spin_thread.start()
-    try:
+@contextmanager
+def build_harness(advertise_undock=True):
+    with NativeFixture(rclpy) as lifetime:
+        fake = FakeSbc(advertise_undock=advertise_undock)
+        lifetime.cleanups.append(fake.close)
+        lifetime.init()
+        amcl = lifetime.node(FakeAmcl())
+        bridge = lifetime.node(PatrolBotBridge(
+            parameter_overrides=[
+                Parameter('server_ip', value='127.0.0.1'),
+                Parameter('server_port', value=fake.port),
+                Parameter('connect_timeout', value=0.2),
+                Parameter('receive_timeout', value=0.3),
+                Parameter('reconnect_delay', value=0.05),
+                Parameter('control_timeout', value=0.4),
+            ]
+        ))
+        client_node = lifetime.node(Node('fake_sbc_integration_client'))
+        client_node.fake_amcl = amcl
+        executor = MultiThreadedExecutor(num_threads=4)
+        lifetime.start(executor)
         assert wait_until(lambda: bridge._link_connected)
         assert wait_until(lambda: bridge._pose_received)
         assert wait_until(lambda: bridge._charge_state_at > 0 and bridge._flags_at > 0)
         seed_harness(bridge, client_node)
-    except BaseException:
-        # A failed seed must not leak nodes/threads or poison every subsequent
-        # test with an already-initialized ROS context.
-        teardown_harness(bridge, client_node, executor, spin_thread, fake)
-        raise
-    return bridge, client_node, executor, spin_thread
-
-
-def teardown_harness(bridge, client_node, executor, spin_thread, fake):
-    assert executor.shutdown(timeout_sec=3.0), 'executor failed to drain callbacks'
-    spin_thread.join(timeout=2.0)
-    assert not spin_thread.is_alive(), 'executor spin thread survived shutdown'
-    for node in (bridge, client_node.fake_amcl, client_node):
-        executor.remove_node(node)
-        node.destroy_node()
-    rclpy.try_shutdown()
-    fake.close()
+        yield fake, bridge, client_node, executor
 
 
 @pytest.fixture
 def harness(tmp_path, monkeypatch):
     monkeypatch.setenv('PATROLBOT_STATE_DIR', str(tmp_path))
-    fake = FakeSbc()
-    bridge, client_node, executor, spin_thread = build_harness(fake)
-    yield fake, bridge, client_node, executor
-    teardown_harness(bridge, client_node, executor, spin_thread, fake)
+    with build_harness() as resources:
+        yield resources
 
 
 @pytest.fixture
 def harness_without_undock(tmp_path, monkeypatch):
     monkeypatch.setenv('PATROLBOT_STATE_DIR', str(tmp_path))
-    fake = FakeSbc(advertise_undock=False)
-    bridge, client_node, executor, spin_thread = build_harness(fake)
-    yield fake, bridge, client_node, executor
-    teardown_harness(bridge, client_node, executor, spin_thread, fake)
+    with build_harness(advertise_undock=False) as resources:
+        yield resources
 
 
 def call_release(client_node, request_id):

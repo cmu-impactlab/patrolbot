@@ -1,8 +1,8 @@
 # ROS test image for the PatrolBot Pi-side Python stack.
 #
 # Builds the interfaces, bridge, dock manager and navigation share data.
-# Runs fake-peer integration tests and offline navigation policy tests.
-# No hardware, real Nav2 stack, external services or robot commands.
+# Runs fake-peer integration tests and the installed Nav2 Collision Monitor.
+# No hardware, external services or robot commands.
 #
 # Hermetic by default: ROS_LOCALHOST_ONLY keeps DDS discovery on loopback
 # (see issue #20), and --network=none can be added at run time since the
@@ -72,6 +72,6 @@ COPY docker/Dockerfile docker/docker-compose.yml docker/status.sh \
      docker/source-tree-digest.sh docker/capture-nav-goal.sh docker/
 COPY docker/nav2-patches docker/nav2-patches
 
-COPY docker/run-ros-tests.sh /usr/local/bin/run-ros-tests.sh
+COPY docker/run-ros-tests.sh docker/native_ci_gate.py /usr/local/bin/
 
 ENTRYPOINT ["/usr/local/bin/run-ros-tests.sh"]

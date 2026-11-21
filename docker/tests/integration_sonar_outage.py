@@ -4,7 +4,9 @@ import json
 import os
 import signal
 from pathlib import Path
+import tempfile
 import time
+from types import SimpleNamespace
 
 assert os.environ.get('PATROLBOT_ISOLATED_TEST') == '1'
 assert {p.name for p in Path('/sys/class/net').iterdir()} == {'lo'}
@@ -18,14 +20,21 @@ spec = importlib.util.spec_from_file_location('collision_harness', source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 module.PARAMS_FILE = Path(get_package_share_directory('patrolbot_navigation')) / 'config/nav2_params.yaml'
-fixture = module.monitor.__wrapped__()
-evidence = {'physical_acceptance': False, 'passed': False, 'params': str(module.PARAMS_FILE)}
+if not os.environ.get('ROS_LOG_DIR'):
+    os.environ['ROS_LOG_DIR'] = tempfile.mkdtemp(prefix='sonar-outage-evidence-')
+scratch = tempfile.TemporaryDirectory(prefix='sonar-outage-')
+factory = SimpleNamespace(mktemp=lambda name: Path(
+    tempfile.mkdtemp(prefix=name, dir=scratch.name)))
+fixture = None
+evidence = {'physical_acceptance': False, 'passed': False, 'params': str(module.PARAMS_FILE),
+            'log_dir': os.environ['ROS_LOG_DIR']}
 started = time.monotonic()
 def timed_out(_signal, _frame):
     raise TimeoutError('30-second isolated case budget exhausted')
 signal.signal(signal.SIGALRM, timed_out)
 signal.alarm(30)
 try:
+    fixture = module.monitor.__wrapped__(factory)
     monitor = next(fixture)
     module.assert_velocity(monitor.command(-.05), -.05)
     samples = []
@@ -33,6 +42,7 @@ try:
         lambda msg: samples.append((time.monotonic(), msg.linear.x, msg.angular.z)), 10)
     assert module.wait_until(lambda: sub.get_publisher_count() == 1)
     # Continue scan and commands; sonar alone stops arriving.
+    monitor.set_world(publish_sonar=False)
     monitor.sonar()
     last_sonar = time.monotonic()
     command = Twist(); command.linear.x = -.05
@@ -54,8 +64,17 @@ except Exception as error:
     evidence['failure'] = str(error)
     raise
 finally:
-    fixture.close()
-    signal.alarm(0)
-    evidence['elapsed_s'] = time.monotonic() - started
-    print(json.dumps({'event': 'sonar_outage_evidence', **evidence}), flush=True)
-    assert evidence['elapsed_s'] <= 30., '30-second isolated case budget exhausted'
+    try:
+        if fixture is not None:
+            fixture.close()
+    except BaseException as error:
+        evidence.update(passed=False, cleanup_failure=str(error))
+        raise
+    finally:
+        try:
+            scratch.cleanup()
+        finally:
+            signal.alarm(0)
+            evidence['elapsed_s'] = time.monotonic() - started
+            print(json.dumps({'event': 'sonar_outage_evidence', **evidence}), flush=True)
+            assert evidence['elapsed_s'] <= 30., '30-second isolated case budget exhausted'

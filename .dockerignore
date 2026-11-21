@@ -5,6 +5,7 @@
 !docker/Dockerfile
 !docker/Dockerfile.nav2-fixes
 !docker/Dockerfile.ros-tests
+!docker/native_ci_gate.py
 !docker/run-ros-tests.sh
 !docker/nav2-patches/
 !docker/nav2-patches/**

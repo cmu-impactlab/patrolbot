@@ -19,10 +19,89 @@ docker build -f docker/Dockerfile.ros-tests -t patrolbot-ros-tests .
 docker run --rm --network=none patrolbot-ros-tests
 ```
 
-The final image builds generated interfaces and runs bridge/dock-manager
-fake-peer integration tests, their lint gates, and offline navigation tests.
-It never connects to the robot. Physical acceptance, the real Nav2 stack and
-`test_collision_monitor_integration.py` are outside this test environment.
+The final image builds generated interfaces and runs bridge, dock-manager and
+navigation functional suites in separate pytest processes from their source
+package directories. Fake-SBC, dock-manager, manual-undock and installed Jazzy
+Collision Monitor integration tests are required. The runner enables both
+integration opt-ins, uses ROS domain 101 (valid on Linux) and localhost discovery.
+Domain isolation is logical; hosted CI also requires `--network=none` and private
+IPC. It never connects to the robot. Physical acceptance and full Nav2-stack
+acceptance remain separate.
+
+The required `native-test-image` job builds this strict rosdep image once, then
+runs it non-root with a read-only root filesystem, private network/IPC, dropped
+capabilities and no-new-privileges. Only its dedicated evidence directory is
+bind-mounted writable, owned by UID/GID 65534; `/tmp` is tmpfs. It mounts no source,
+credentials, devices, sockets or production volumes. The checkout's baked source
+fixtures remain read-only. Job ID and branch-protection contexts are unchanged.
+
+There are **no allowed skips**. Before collection, the runner explicitly excludes
+exactly `test/test_copyright.py`, `test/test_flake8.py` and `test/test_pep257.py`
+relative to each package. The runner supplies absolute `--ignore` paths and a
+pytest 7-compatible `hookwrapper=True` collection hook matches those same absolute
+paths before import. It yields to delegate hooks and calls `outcome.get_result()`
+before forcing `True` only for those paths, preserving upstream errors even for
+declared exclusions. Every other path retains the delegate result or exception;
+matching basenames elsewhere are not excluded. Additional `--ignore` or
+`--ignore-glob` options fail configuration. These
+ament checks are outside this functional gate; their exclusion claims no lint or
+copyright pass. All other collected tests must pass setup, call and teardown.
+Required integration nodeids are checked without pinning a total test count.
+For default full-suite runs, the parent enumerates `package/test` recursively
+before starting pytest, using `test_*.py` and `*_test.py` and subtracting only
+the three exact lint paths above. Successful file collectors (including empty
+modules) and collected item paths must match that inventory. Missing or unexpected
+files fail the gate, including files hidden by plugin/conftest hooks, ignored
+parent directories, `collect_ignore`, or narrowed `python_files` configuration.
+An empty module is allowed when successfully collected; the suite must still
+contain tests and satisfy its sentinels. Explicit custom diagnostic paths disable
+this full-suite inventory comparison and are marked `enforced: false`; they do
+not claim full-suite coverage and may include sources outside the package.
+Collection errors, empty suites, deselected tests, skipped/xfail outcomes, thread/unraisable
+exceptions, missing JUnit/evidence, native pytest crashes, leaked child process
+groups and deadlines fail the
+gate. Failed suites do not prevent the remaining suites from running. There are
+no retries or blanket warning filters.
+Inherited `PYTEST_ADDOPTS`, `PYTEST_PLUGINS` and
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD` are cleared. Strict pytest configuration makes
+unknown options (including timeout settings without their plugin) fatal.
+
+Evidence defaults to `/tmp/native-test-evidence` (override with
+`PATROLBOT_TEST_EVIDENCE`). Each suite keeps `pytest.log`, `junit.xml`, an
+incremental `events.jsonl` (pre-collection pytest/Python versions, cwd/rootdir,
+config file, invocation, installed plugins and ignore-hook ordering/wrapper flags,
+declared/observed absolute exclusions, collection files/nodeids, deselection, skip/failure reasons,
+all test phases and session finish), `source-inventory.json` (the parent's
+pre-child expected absolute source paths and enforcement flag),
+`summary.json` (expected/collected/missing/unexpected source paths, inventory
+enforcement and validation issues, command, exclusions, deadline,
+exit and process-group cleanup), and a `ros/` log directory. An abnormal exit can
+leave JUnit/session finish missing; that is itself a failure, with partial logs
+retained. The root summary aggregates every suite. Hosted CI uploads build,
+container and suite evidence with `if: always()` even on failure.
+Evidence validation rejects collection of a declared excluded file, missing or
+invalid inventory evidence, or a full-suite file inventory mismatch independently
+of rootdir-relative nodeids.
+
+Both failed PR 85 hosted runs are retained. The second run's pytest 7.4.4 metadata
+records launch-testing 3.4.13 / launch-testing-ros 0.26.13 and a later-registered
+`launch_testing` hook with `tryfirst=True`, competing with the gate's old
+`tryfirst` hook. A `False` first result bypassed the gate despite matching source
+paths and absolute exclusions. The passing cached image had launch-testing
+3.4.11 without that competing hook. The wrapper runs around nonwrapper hooks
+regardless of their priority or registration order. Portable regressions exercise
+different rootdirs and an installed, autoloaded, later-registered `tryfirst`
+plugin returning `False`, with import-time failures in all three excluded files,
+functional files still collected, and delegate results/errors preserved.
+Fresh hosted verification remains the parent's responsibility; no lint pass is claimed.
+
+Portable gate regressions (no ROS or Docker):
+
+```bash
+python -B -m pytest -q docker/tests/test_native_ci_gate.py \
+  docker/tests/test_native_test_image_workflow.py docker/tests/test_ros_test_image.py \
+  docker/tests/test_main_protection.py
+```
 
 For rapid iteration, reuse one container with a read-only source mount and
 incremental build output inside the container (no image rebuild per edit):
@@ -49,10 +128,15 @@ Repeat only `docker exec` after edits. Use normal installation, not
 `--symlink-install`: the map catalog deliberately rejects files resolving
 outside its catalog directory. The `ros-test-env` Dockerfile target contains
 only the reusable toolchain/dependencies; the final `ros-tests` target is
-suitable for a later CI build-and-run job. Both return nonzero on failure.
+used by the hosted functional gate. Both return nonzero on failure.
 Each pytest invocation is capped at 300 seconds (override with
-`PATROLBOT_TEST_TIMEOUT`). Lint runs use one worker: forking a linter after
-loading ROS/DDS threads can crash or hang the test process.
+`PATROLBOT_TEST_TIMEOUT`, maximum 600). Any remaining suite process group receives
+SIGTERM with a five-second retirement bound, then SIGKILL with a one-second bound
+if still present. Evidence records only signals actually sent and whether the
+group retired; leaks, forced kills and incomplete retirement fail the gate.
+Optional test paths select a diagnostic run, without
+the default three-suite integration sentinel requirement. Hosted CI passes no
+arguments and always runs the required selection.
 
 ## Configure and build
 

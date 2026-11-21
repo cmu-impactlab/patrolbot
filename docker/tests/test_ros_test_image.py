@@ -150,10 +150,13 @@ def test_native_selection_keeps_fixture_only_packages_unbuilt():
     selection = IMAGE.split('--packages-select ', 1)[1].splitlines()[0]
     assert tuple(shlex.split(selection)) == BUILT
     runner = (ROOT / 'docker/run-ros-tests.sh').read_text()
+    helper = (ROOT / 'docker/native_ci_gate.py').read_text()
     for package in BUILT[1:]:
-        assert f'cd "$workspace/ros2_ws/src/{package}"' in runner
-    assert '--ignore=test/test_collision_monitor_integration.py' in runner
-    assert 'PATROLBOT_RUN_MANUAL_UNDOCK_NATIVE=1' not in RECIPE + runner
+        assert package.removeprefix("patrolbot_") in helper
+    assert 'test/test_collision_monitor_integration.py::' in helper
+    assert 'PATROLBOT_RUN_MANUAL_UNDOCK_NATIVE=1' in runner
+    assert '!docker/native_ci_gate.py' in (ROOT / '.dockerignore').read_text()
+    assert 'docker/native_ci_gate.py /usr/local/bin/' in RECIPE
     assert 'no:nose' not in RECIPE + runner
 
 

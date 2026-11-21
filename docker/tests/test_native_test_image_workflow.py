@@ -1,4 +1,4 @@
-"""Check hosted smoke policy and real shell failure propagation without Docker."""
+"""Check hosted functional policy and real shell failure propagation without Docker."""
 
 import json
 import os
@@ -16,10 +16,7 @@ WORKFLOW = yaml.load(
     Loader=yaml.BaseLoader,
 )
 JOB = WORKFLOW['jobs']['native-test-image']
-CHECKOUT, BUILD, SMOKE, UPLOAD = JOB['steps']
-TESTS = [f'ros2_ws/src/patrolbot_bridge/test/test_tuning_{name}.py'
-         for name in ('backend', 'recover', 'observation_source', 'map_gate',
-                      'runtime_contract')]
+CHECKOUT, BUILD, NATIVE, UPLOAD = JOB['steps']
 
 
 def test_hosted_workflow_is_bounded_read_only_and_covers_stacked_prs():
@@ -32,10 +29,12 @@ def test_hosted_workflow_is_bounded_read_only_and_covers_stacked_prs():
     assert CHECKOUT['with'] == {'persist-credentials': 'false'}
     assert UPLOAD['if'] == 'always()'
     assert UPLOAD['uses'] == 'actions/upload-artifact@v4'
-    assert UPLOAD['with']['path'] == '${{ runner.temp }}/native-test-image-*.log'
+    assert UPLOAD['with']['if-no-files-found'] == 'error'
+    assert 'native-test-image-evidence/' in UPLOAD['with']['path']
+    assert NATIVE['run'].index('chmod 755') < NATIVE['run'].index('sudo chown')
 
 
-@pytest.mark.parametrize('step,kind', [(BUILD, 'build'), (SMOKE, 'smoke')])
+@pytest.mark.parametrize('step,kind', [(BUILD, 'build'), (NATIVE, 'native')])
 @pytest.mark.parametrize('exit_code', [0, 37])
 def test_commands_keep_exit_status_logs_and_narrow_arguments(tmp_path, step, kind, exit_code):
     # A fake Docker executable exercises the actual workflow shell including tee.
@@ -48,6 +47,9 @@ def test_commands_keep_exit_status_logs_and_narrow_arguments(tmp_path, step, kin
         'sys.exit(int(os.environ["DOCKER_TEST_EXIT"]))\n'
     )
     docker.chmod(0o755)
+    sudo = tmp_path / 'sudo'
+    sudo.write_text('#!/bin/sh\nexit 0\n')
+    sudo.chmod(0o755)
     assert step['shell'] == 'bash'
     result = subprocess.run(
         ['bash', '-c', step['run']], cwd=ROOT, capture_output=True, text=True,
@@ -56,21 +58,27 @@ def test_commands_keep_exit_status_logs_and_narrow_arguments(tmp_path, step, kin
         check=False,
     )
     assert result.returncode == exit_code, result.stderr
-    log = (tmp_path / f'native-test-image-{kind}.log').read_text()
+    log_path = (tmp_path / 'native-test-image-build.log' if kind == 'build' else
+                tmp_path / 'native-test-image-evidence/container.log')
+    log = log_path.read_text()
     assert log == result.stdout
     assert 'docker stderr' in log
     args = json.loads(log.splitlines()[0])
     if kind == 'build':
         assert args == ['build', '--pull', '--progress=plain', '--file',
                         'docker/Dockerfile.ros-tests', '--tag',
-                        'patrolbot-ros-tests:smoke', '.']
+                        'patrolbot-ros-tests:native', '.']
     else:
-        # Exact arguments forbid mounts, entrypoint overrides and extra suites.
+        # Exact arguments forbid extra mounts, entrypoint overrides and smoke subsets.
         assert args == [
             'run', '--rm', '--network=none', '--ipc=private', '--cap-drop=ALL',
             '--security-opt=no-new-privileges', '--user', '65534:65534',
-            '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m',
-            '--env', 'HOME=/tmp', '--env', 'PATROLBOT_RUN_INTEGRATION=0',
-            'patrolbot-ros-tests:smoke', *TESTS,
+            '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=512m',
+            '--mount', f'type=bind,src={tmp_path}/native-test-image-evidence/results,dst=/evidence',
+            '--env', 'HOME=/tmp', '--env', 'PATROLBOT_TEST_EVIDENCE=/evidence',
+            '--env', 'ROS_DOMAIN_ID=101', '--env', 'ROS_LOCALHOST_ONLY=1',
+            '--env', 'ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST',
+            '--env', 'PATROLBOT_RUN_INTEGRATION=1',
+            '--env', 'PATROLBOT_RUN_MANUAL_UNDOCK_NATIVE=1',
+            'patrolbot-ros-tests:native',
         ]
-        assert all((ROOT / path).is_file() for path in TESTS)

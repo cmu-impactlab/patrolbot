@@ -9,7 +9,8 @@ hardware operation fails or the goal is cancelled.
 """
 
 import os
-import threading
+from pathlib import Path
+import sys
 import time
 
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
@@ -33,6 +34,10 @@ from rclpy.parameter import Parameter
 from sensor_msgs.msg import PointCloud2, PointField
 from std_srvs.srv import Empty
 from unique_identifier_msgs.msg import UUID
+
+# Shared source-only test support; never installed with production nodes.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'patrolbot_bridge' / 'test'))
+from native_fixture import NativeFixture
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('PATROLBOT_RUN_INTEGRATION') != '1',
@@ -391,83 +396,69 @@ def _build_harness(
     localization_needs_a_request=False,
     wait_for_initial_localization=True,
 ):
-    rclpy.init()
-    parameter_overrides = [
-        Parameter('dock_pose_configured', value=True),
-        Parameter('dock_pose_x', value=0.0),
-        Parameter('dock_pose_y', value=0.0),
-        Parameter('dock_pose_yaw', value=0.0),
-        Parameter('sensor_timeout', value=0.25),
-        Parameter('precheck_timeout', value=3.0),
-        Parameter('undock_clearance_distance', value=0.53),
-        Parameter('undock_reverse_speed', value=0.10),
-        Parameter('undock_max_duration', value=10.0),
-        Parameter('spin_timeout', value=5.0),
-        Parameter('post_undock_localization_timeout', value=0.75),
-        Parameter('handoff_timeout', value=0.75),
-        Parameter('dock_pose_initialization_timeout', value=1.0),
-    ]
-    parameter_overrides.extend(extra_parameter_overrides)
-    manager = DockManager(parameter_overrides=parameter_overrides)
-    world = FakeWorld(localization_needs_a_request=localization_needs_a_request)
-    nodes = [
-        world,
-        PathNode('controller_server', publish_topics=['/input/nav_controller']),
-        PathNode(
-            'nav_command_mux',
-            publish_topics=['/cmd_vel_nav'],
-            subscribe_topics=['/input/nav_controller', '/input/nav_behavior', '/input/docking'],
-        ),
-        PathNode(
-            'velocity_smoother',
-            publish_topics=['/cmd_vel_smoothed'],
-            subscribe_topics=['/cmd_vel_nav'],
-        ),
-        PathNode(
-            'collision_monitor',
-            publish_topics=['/input/navi'],
-            subscribe_topics=['/cmd_vel_smoothed'],
-        ),
-        PathNode(
-            'cmd_vel_mux',
-            publish_topics=['/cmd_vel_out'],
-            subscribe_topics=['/input/navi', '/input/undock_turn'],
-        ),
-        PathNode(
-            'teleop_velocity_smoother',
-            publish_topics=['/cmd_vel'],
-            subscribe_topics=['/cmd_vel_out'],
-        ),
-        PathNode(
-            'patrolbot_bridge',
-            publish_topics=['/input/docking', '/input/undock_turn'],
-            subscribe_topics=['/cmd_vel'],
-        ),
-        PathNode('patrolbot_safety_watchdog'),
-        Node('dock_manager_integration_client'),
-    ]
-    executor = MultiThreadedExecutor(num_threads=8)
-    executor.add_node(manager)
-    for node in nodes:
-        executor.add_node(node)
-    spin_thread = threading.Thread(target=executor.spin, daemon=True)
-    spin_thread.start()
-    if wait_for_initial_localization:
-        assert wait_until(lambda: manager._snapshot().dock_pose_valid)
-    else:
-        assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
-    assert wait_until(lambda: manager._snapshot().command_path_valid)
-    yield manager, world, nodes[-1]
-    # Stop callback workers and the spin thread before destroying ROS handles.
-    assert executor.shutdown(timeout_sec=3.0), 'executor failed to drain callbacks'
-    spin_thread.join(timeout=2.0)
-    assert not spin_thread.is_alive(), 'executor spin thread survived shutdown'
-    executor.remove_node(manager)
-    manager.destroy_node()
-    for node in nodes:
-        executor.remove_node(node)
-        node.destroy_node()
-    rclpy.try_shutdown()
+    with NativeFixture(rclpy) as lifetime:
+        lifetime.init()
+        parameter_overrides = [
+            Parameter('dock_pose_configured', value=True),
+            Parameter('dock_pose_x', value=0.0),
+            Parameter('dock_pose_y', value=0.0),
+            Parameter('dock_pose_yaw', value=0.0),
+            Parameter('sensor_timeout', value=0.25),
+            Parameter('precheck_timeout', value=3.0),
+            Parameter('undock_clearance_distance', value=0.53),
+            Parameter('undock_reverse_speed', value=0.10),
+            Parameter('undock_max_duration', value=10.0),
+            Parameter('spin_timeout', value=5.0),
+            Parameter('post_undock_localization_timeout', value=0.75),
+            Parameter('handoff_timeout', value=0.75),
+            Parameter('dock_pose_initialization_timeout', value=1.0),
+        ]
+        parameter_overrides.extend(extra_parameter_overrides)
+        manager = lifetime.node(DockManager(parameter_overrides=parameter_overrides))
+        world = lifetime.node(FakeWorld(localization_needs_a_request=localization_needs_a_request))
+        nodes = [
+            world,
+            lifetime.node(PathNode('controller_server', publish_topics=['/input/nav_controller'])),
+            lifetime.node(PathNode(
+                'nav_command_mux',
+                publish_topics=['/cmd_vel_nav'],
+                subscribe_topics=['/input/nav_controller', '/input/nav_behavior', '/input/docking'],
+            )),
+            lifetime.node(PathNode(
+                'velocity_smoother',
+                publish_topics=['/cmd_vel_smoothed'],
+                subscribe_topics=['/cmd_vel_nav'],
+            )),
+            lifetime.node(PathNode(
+                'collision_monitor',
+                publish_topics=['/input/navi'],
+                subscribe_topics=['/cmd_vel_smoothed'],
+            )),
+            lifetime.node(PathNode(
+                'cmd_vel_mux',
+                publish_topics=['/cmd_vel_out'],
+                subscribe_topics=['/input/navi', '/input/undock_turn'],
+            )),
+            lifetime.node(PathNode(
+                'teleop_velocity_smoother',
+                publish_topics=['/cmd_vel'],
+                subscribe_topics=['/cmd_vel_out'],
+            )),
+            lifetime.node(PathNode(
+                'patrolbot_bridge',
+                publish_topics=['/input/docking', '/input/undock_turn'],
+                subscribe_topics=['/cmd_vel'],
+            )),
+            lifetime.node(PathNode('patrolbot_safety_watchdog')),
+            lifetime.node(Node('dock_manager_integration_client')),
+        ]
+        lifetime.start(MultiThreadedExecutor(num_threads=8))
+        if wait_for_initial_localization:
+            assert wait_until(lambda: manager._snapshot().dock_pose_valid)
+        else:
+            assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
+        assert wait_until(lambda: manager._snapshot().command_path_valid)
+        yield manager, world, nodes[-1]
 
 
 @pytest.fixture

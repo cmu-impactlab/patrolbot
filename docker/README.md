@@ -47,6 +47,16 @@ matching basenames elsewhere are not excluded. Additional `--ignore` or
 ament checks are outside this functional gate; their exclusion claims no lint or
 copyright pass. All other collected tests must pass setup, call and teardown.
 Required integration nodeids are checked without pinning a total test count.
+For default full-suite runs, the parent enumerates `package/test` recursively
+before starting pytest, using `test_*.py` and `*_test.py` and subtracting only
+the three exact lint paths above. Successful file collectors (including empty
+modules) and collected item paths must match that inventory. Missing or unexpected
+files fail the gate, including files hidden by plugin/conftest hooks, ignored
+parent directories, `collect_ignore`, or narrowed `python_files` configuration.
+An empty module is allowed when successfully collected; the suite must still
+contain tests and satisfy its sentinels. Explicit custom diagnostic paths disable
+this full-suite inventory comparison and are marked `enforced: false`; they do
+not claim full-suite coverage and may include sources outside the package.
 Collection errors, empty suites, deselected tests, skipped/xfail outcomes, thread/unraisable
 exceptions, missing JUnit/evidence, native pytest crashes, leaked child process
 groups and deadlines fail the
@@ -61,13 +71,17 @@ Evidence defaults to `/tmp/native-test-evidence` (override with
 incremental `events.jsonl` (pre-collection pytest/Python versions, cwd/rootdir,
 config file, invocation, installed plugins and ignore-hook ordering/wrapper flags,
 declared/observed absolute exclusions, collection files/nodeids, deselection, skip/failure reasons,
-all test phases and session finish), `summary.json` (command, exclusions, deadline,
+all test phases and session finish), `source-inventory.json` (the parent's
+pre-child expected absolute source paths and enforcement flag),
+`summary.json` (expected/collected/missing/unexpected source paths, inventory
+enforcement and validation issues, command, exclusions, deadline,
 exit and process-group cleanup), and a `ros/` log directory. An abnormal exit can
 leave JUnit/session finish missing; that is itself a failure, with partial logs
 retained. The root summary aggregates every suite. Hosted CI uploads build,
 container and suite evidence with `if: always()` even on failure.
-Evidence validation rejects collection of a declared excluded file or a hook
-exclusion outside the declared paths, independently of rootdir-relative nodeids.
+Evidence validation rejects collection of a declared excluded file, missing or
+invalid inventory evidence, or a full-suite file inventory mismatch independently
+of rootdir-relative nodeids.
 
 Both failed PR 85 hosted runs are retained. The second run's pytest 7.4.4 metadata
 records launch-testing 3.4.13 / launch-testing-ros 0.26.13 and a later-registered

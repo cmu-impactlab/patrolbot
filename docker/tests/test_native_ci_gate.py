@@ -181,6 +181,7 @@ def test_expected_lint_exclusions_happen_before_collection(
     result = gate.run_suite('custom', package, tmp_path / 'evidence', 10,
                             (f'--rootdir={rootdir}', 'test', str(other)))
     assert result['issues'] == []
+    assert result['source_inventory']['enforced'] is False
     directory = tmp_path / 'evidence/custom'
     assert 'must never import lint' not in (directory / 'pytest.log').read_text()
     events = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
@@ -351,6 +352,115 @@ def test_explicit_diagnostic_path_still_runs(tmp_path):
     result = gate.run_suite('custom', package, tmp_path / 'evidence', 10,
                             ('test/test_keep.py',))
     assert result['issues'] == []
+    assert result['source_inventory']['enforced'] is False
+    assert result['source_inventory']['expected'] == []
+
+
+@pytest.mark.parametrize('omission', [
+    'file_hook', 'directory_hook', 'collect_ignore', 'python_files', 'nested_lint', 'plugin',
+])
+def test_full_inventory_catches_hidden_failing_file_despite_passing_sentinel(
+        tmp_path, monkeypatch, omission):
+    package = tmp_path / 'package'
+    (package / 'test/nested').mkdir(parents=True)
+    hidden = 'test/nested/test_flake8.py' if omission == 'nested_lint' else 'test/nested/test_hidden.py'
+    (package / hidden).write_text('def test_failure():\n    assert False\n')
+    (package / 'test/test_sentinel.py').write_text('def test_sentinel():\n    pass\n')
+    hook = ('def pytest_ignore_collect(collection_path, config):\n'
+            f'    if collection_path.name == {Path(hidden).name!r}:\n        return True\n')
+    if omission == 'directory_hook':
+        hook = ('def pytest_ignore_collect(collection_path, config):\n'
+                '    if collection_path.name == "nested":\n        return True\n')
+    elif omission == 'collect_ignore':
+        hook = f'collect_ignore = [{hidden!r}]\n'
+    elif omission == 'python_files':
+        (package / 'pytest.ini').write_text('[pytest]\npython_files = test_sentinel.py\n')
+        hook = ''
+    if omission == 'plugin':
+        (package / 'omit_functional.py').write_text(hook)
+        dist = package / 'omit_functional-1.0.dist-info'
+        dist.mkdir()
+        (dist / 'METADATA').write_text('Name: omit-functional\nVersion: 1.0\n')
+        (dist / 'entry_points.txt').write_text('[pytest11]\nomit-functional = omit_functional\n')
+        monkeypatch.setenv('PYTHONPATH', str(package))
+    else:
+        (package / 'conftest.py').write_text(hook)
+    monkeypatch.setitem(gate.SENTINELS, 'bridge', ('test/test_sentinel.py::test_sentinel',))
+    result = gate.run_suite('bridge', package, tmp_path / 'evidence', 10)
+    assert result['returncode'] == 0
+    assert len(result['issues']) == 1
+    assert 'functional source inventory mismatch' in result['issues'][0]
+    inventory = result['source_inventory']
+    assert inventory['enforced'] is True
+    assert inventory['expected'] == sorted([
+        str(package / hidden), str(package / 'test/test_sentinel.py')])
+    assert inventory['collected'] == [str(package / 'test/test_sentinel.py')]
+    assert inventory['missing'] == [str(package / hidden)]
+    assert inventory['unexpected'] == []
+    assert json.loads((tmp_path / 'evidence/bridge/summary.json').read_text()) == result
+
+
+def test_full_inventory_accepts_empty_modules_and_only_declared_lint_omissions(tmp_path):
+    package = tmp_path / 'package'
+    (package / 'test/nested').mkdir(parents=True)
+    for path in gate.EXCLUSIONS:
+        (package / path).write_text('raise RuntimeError("lint must not import")\n')
+    sources = {
+        'test/test_ok.py': 'def test_ok():\n    pass\n',
+        'test/nested/test_flake8.py': 'def test_nested():\n    pass\n',
+        'test/nested/empty_test.py': '# A successfully collected module may contain no items.\n',
+    }
+    for path, source in sources.items():
+        (package / path).write_text(source)
+    result = gate.run_suite('custom', package, tmp_path / 'evidence', 10)
+    assert result['issues'] == []
+    assert result['source_inventory'] == {
+        'enforced': True, 'expected': sorted(str(package / path) for path in sources),
+        'collected': sorted(str(package / path) for path in sources),
+        'missing': [], 'unexpected': [], 'issues': [],
+    }
+
+
+@pytest.mark.parametrize('damage', [
+    'missing_inventory', 'invalid_inventory', 'missing_expected', 'invalid_expected',
+    'missing_collection', 'missing_collected', 'invalid_collected', 'changed_snapshot',
+    'unexpected_source',
+])
+def test_full_inventory_evidence_fails_closed(tmp_path, damage):
+    result = run(tmp_path, 'def test_ok():\n    pass\n')
+    assert result['issues'] == []
+    directory = tmp_path / 'evidence/custom'
+    inventory_file = directory / 'source-inventory.json'
+    expected = json.loads(inventory_file.read_text())
+    events_file = directory / 'events.jsonl'
+    events = [json.loads(line) for line in events_file.read_text().splitlines()]
+    collection = next(item for item in events if item['event'] == 'collection')
+    if damage == 'missing_inventory':
+        inventory_file.unlink()
+    elif damage == 'invalid_inventory':
+        inventory_file.write_text('{broken')
+    elif damage in ('missing_expected', 'invalid_expected', 'changed_snapshot'):
+        inventory = dict(expected)
+        if damage == 'missing_expected':
+            del inventory['expected']
+        else:
+            inventory['expected'] = None if damage == 'invalid_expected' else []
+        inventory_file.write_text(json.dumps(inventory))
+    elif damage == 'missing_collection':
+        events.remove(collection)
+    elif damage == 'missing_collected':
+        del collection['source_files']
+    elif damage == 'invalid_collected':
+        collection['source_files'] = None
+    else:
+        collection['source_files'] = sorted(collection['source_files'] + ['/unexpected_test.py'])
+    events_file.write_text(''.join(json.dumps(item) + '\n' for item in events))
+    issues = gate.check_evidence(directory, (), source_inventory=expected)
+    assert any(('source inventory evidence' if damage != 'unexpected_source'
+                else 'functional source inventory mismatch') in issue for issue in issues)
+    inventory = gate.check_source_inventory(directory, expected)
+    assert inventory['enforced'] is True
+    assert inventory['expected'] == expected['expected']
 
 
 def test_missing_timeout_plugin_config_is_fatal(tmp_path):

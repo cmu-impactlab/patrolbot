@@ -39,6 +39,7 @@ def event(kind, **fields):
 def pytest_configure(config):
     package = Path(os.environ['PATROLBOT_NATIVE_PACKAGE'])
     config._native_exclusions = tuple(package / path for path in EXCLUSIONS)
+    config._native_collected_files = set()
     if (config.getoption('ignore') != list(map(str, config._native_exclusions))
             or config.getoption('ignore_glob')):
         raise pytest.UsageError('native gate permits only its declared absolute exclusions')
@@ -68,9 +69,20 @@ def pytest_ignore_collect(collection_path, config):
         outcome.force_result(True)
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    outcome = yield
+    report = outcome.get_result()
+    # Successful file collectors include legitimate modules with zero test items.
+    if isinstance(collector, pytest.File) and report.passed:
+        collector.config._native_collected_files.add(str(collector.path))
+
+
 def pytest_collection_finish(session):
     event('collection', nodeids=[item.nodeid for item in session.items],
-          files=sorted({str(item.path) for item in session.items}))
+          files=sorted({str(item.path) for item in session.items}),
+          source_files=sorted(session.config._native_collected_files
+                              | {str(item.path) for item in session.items}))
 
 
 def pytest_deselected(items):
@@ -97,13 +109,57 @@ def pytest_sessionfinish(session, exitstatus):
     event('finish', exitstatus=int(exitstatus))
 
 
-def check_evidence(directory, sentinels, exclusions=None):
+def check_source_inventory(directory, expected=None):
+    """Compare parent-owned source enumeration with successful child collection."""
+    result = {'enforced': None, 'expected': [], 'collected': [],
+              'missing': [], 'unexpected': [], 'issues': []}
+    result.update(expected or {})
+    try:
+        inventory = json.loads((directory / 'source-inventory.json').read_text())
+        if (not isinstance(inventory, dict) or set(inventory) != {'enforced', 'expected'}
+                or type(inventory['enforced']) is not bool):
+            raise ValueError('invalid source inventory schema')
+        sources = inventory['expected']
+        if (not isinstance(sources, list)
+                or any(not isinstance(path, str) or not Path(path).is_absolute()
+                       for path in sources)
+                or sources != sorted(set(sources))
+                or (not inventory['enforced'] and sources)):
+            raise ValueError('invalid expected source paths')
+        if expected is not None and inventory != expected:
+            raise ValueError('source inventory differs from pre-child snapshot')
+        result.update(inventory)
+        events = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
+        collections = [item for item in events if item['event'] == 'collection']
+        if len(collections) != 1:
+            raise ValueError('missing or duplicate file collection inventory')
+        collected = collections[0]['source_files']
+        if (not isinstance(collected, list)
+                or any(not isinstance(path, str) or not Path(path).is_absolute()
+                       for path in collected)
+                or collected != sorted(set(collected))):
+            raise ValueError('invalid collected source paths')
+        result['collected'] = collected
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        result['issues'].append(f'missing or invalid source inventory evidence: {error}')
+    if result['enforced']:
+        result['missing'] = sorted(set(result['expected']) - set(result['collected']))
+        result['unexpected'] = sorted(set(result['collected']) - set(result['expected']))
+        if result['missing'] or result['unexpected']:
+            result['issues'].append(
+                f"functional source inventory mismatch: missing={result['missing']}, "
+                f"unexpected={result['unexpected']}")
+    return result
+
+
+def check_evidence(directory, sentinels, exclusions=None, source_inventory=None):
     """Require collection, every test phase, clean shutdown, and parseable JUnit."""
     issues = []
     try:
         events = [json.loads(line) for line in (directory / 'events.jsonl').read_text().splitlines()]
     except (OSError, ValueError) as error:
         return [f'missing or invalid pytest evidence: {error}']
+    issues.extend(check_source_inventory(directory, source_inventory)['issues'])
     collections = [item for item in events if item['event'] == 'collection']
     configurations = [item for item in events if item['event'] == 'configuration']
     if len(configurations) != 1:
@@ -186,6 +242,12 @@ def run_suite(name, package, evidence, deadline, paths=()):
     directory = evidence / name
     directory.mkdir(parents=True, exist_ok=False)
     (directory / 'ros').mkdir()
+    # Enumerate before launching pytest: hooks/config cannot hide source files.
+    source_inventory = {'enforced': not paths, 'expected': sorted(
+        str(path) for path in (package / 'test').rglob('*.py')
+        if path.is_file() and (path.match('test_*.py') or path.match('*_test.py'))
+        and str(path) not in exclusions) if not paths else []}
+    (directory / 'source-inventory.json').write_text(json.dumps(source_inventory, indent=2) + '\n')
     command = [sys.executable, '-B', '-m', 'pytest', '-q', '-ra', '--strict-config',
                '-p', 'no:cacheprovider', '-p', 'native_ci_gate',
                '-W', 'error::pytest.PytestUnhandledThreadExceptionWarning',
@@ -219,7 +281,7 @@ def run_suite(name, package, evidence, deadline, paths=()):
                 except ProcessLookupError:
                     pass
             cleanup = retire_process_group(process)
-    issues = check_evidence(directory, SENTINELS.get(name, ()), exclusions)
+    issues = check_evidence(directory, SENTINELS.get(name, ()), exclusions, source_inventory)
     if leaked_children:
         issues.append('pytest left a live process group after shutdown')
     if timed_out:
@@ -231,6 +293,7 @@ def run_suite(name, package, evidence, deadline, paths=()):
     if process.returncode:
         issues.append(f'pytest process exit: {process.returncode}')
     summary = {'suite': name, 'command': command, 'cwd': str(package),
+               'source_inventory': check_source_inventory(directory, source_inventory),
                'expected_exclusions': list(EXCLUSIONS), 'allowed_skips': [],
                'deadline_seconds': deadline, 'elapsed_seconds': time.monotonic() - started,
                'returncode': process.returncode, 'timed_out': timed_out,

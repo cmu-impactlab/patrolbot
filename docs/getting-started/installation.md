@@ -28,8 +28,8 @@ do **not** reinstall the OS or ROS; you build/deploy the PatrolBot packages on t
 sudo apt update
 sudo apt install -y \
   ros-jazzy-nav2-bringup ros-jazzy-nav2-msgs \
-  ros-jazzy-twist-mux ros-jazzy-joy ros-jazzy-teleop-twist-joy \
-  ros-jazzy-nav2-velocity-smoother ros-jazzy-slam-toolbox \
+  ros-jazzy-twist-mux ros-jazzy-joy \
+  ros-jazzy-nav2-velocity-smoother \
   python3-colcon-common-extensions
 ```
 

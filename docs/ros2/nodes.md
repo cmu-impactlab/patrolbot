@@ -255,7 +255,7 @@ managers patched with `bond_timeout: 0.0`.
 | `amcl` | Adaptive Monte-Carlo localization (differential model) | Sub `/scan`, `/odom`; pub TF `map→odom`; forced initial pose disabled |
 | `planner_server` | Global planner `GridBased` = NavFn | Action `compute_path_to_pose`; uses global costmap |
 | `controller_server` | Local controller RPP @ 5 Hz, `desired_linear_vel` 0.22 | Action `follow_path`; pub `input/nav_controller` |
-| `nav_command_mux` | Upstream autonomous-command arbiter | controller/behavior/reserved docking inputs; pub `cmd_vel_nav` |
+| `nav_command_mux` | Upstream autonomous-command arbiter | controller/behavior/guarded undock turning inputs; pub `cmd_vel_nav` |
 | `velocity_smoother` | Smooths selected autonomous output | Sub `cmd_vel_nav`; pub `cmd_vel_smoothed` |
 | `collision_monitor` | Direction-aware scan/sonar safety gate, `base_shift_correction: False` | Sub `cmd_vel_smoothed`, `/scan`, `/sonar`; pub `input/navi` |
 | `bt_navigator` | Behavior-tree orchestration | Actions `navigate_to_pose`, `navigate_through_poses` |

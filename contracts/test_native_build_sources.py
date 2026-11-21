@@ -16,6 +16,16 @@ def selected(text):
     return set(re.search(r'--packages-select (.*?) --cmake-args', text).group(1).split())
 
 
+def test_narrow_cleanup_keeps_shipped_manual_and_mux_dependencies():
+    for path in (ROOT / 'docker').glob('Dockerfile*'):
+        text = path.read_text()
+        assert 'slam-toolbox' not in text, path
+        assert 'teleop-twist-joy' not in text, path
+    for name in ('Dockerfile', 'Dockerfile.floor-validation'):
+        text = (ROOT / 'docker' / name).read_text()
+        assert '-joy ' in text and '-twist-mux ' in text
+
+
 def test_every_native_patch_package_is_extracted_and_compiled():
     patched = set()
     for path in (ROOT / 'docker/nav2-patches').glob('*.patch'):

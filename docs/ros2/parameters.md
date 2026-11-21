@@ -130,8 +130,9 @@ the SBC's exclusive `UNDOCK` state machine, which is configured by
 hardware facts, not deployment tuning, and must not be changeable from the Pi.
 
 The `nav_command_mux` separately arbitrates autonomous producers before smoothing and collision
-monitoring: controller priority 5, behavior priority 7, and reserved docking priority 9, each with
-a 0.25 s timeout. `/input/docking` intentionally has no publisher.
+monitoring: controller priority 5, behavior priority 7, and docking priority 9, each with
+a 0.25 s timeout. Guarded `undock_turn` publishes to `/input/docking` for its owned turn;
+automatic dock-in remains unlaunched.
 
 ## twist_mux (`mux.yaml`)
 

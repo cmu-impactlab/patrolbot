@@ -64,6 +64,34 @@ SERVER_MAINTENANCE_ROOT = (
 )
 
 
+def test_narrow_cleanup_keeps_shipped_manual_and_mux_paths():
+    dependencies = {node.text for node in ET.parse(
+        PACKAGE_ROOT / 'package.xml').findall('exec_depend')}
+    assert {'joy', 'twist_mux'} <= dependencies
+    assert not dependencies & {'slam_toolbox', 'teleop_twist_joy'}
+    assert not (PACKAGE_ROOT / 'scripts/twist_mux.yaml').exists()
+    assert (PACKAGE_ROOT / 'scripts/lms200_sanitizer.py').is_file()
+    assert '  scripts\n' in (PACKAGE_ROOT / 'CMakeLists.txt').read_text()
+    manual = (PACKAGE_ROOT / 'launch/manual_control.launch.py').read_text()
+    assert "package='joy'" in manual
+    assert "executable='patrolbot_joy_teleop.py'" in manual
+    assert (PACKAGE_ROOT / 'scripts/patrolbot_joy_teleop.py').is_file()
+    mux = ET.parse(LAUNCH_PACKAGE_ROOT / 'launch/mobile_base.xml').find(
+        "node[@pkg='twist_mux']")
+    assert mux.find('param').get('from') == (
+        '$(find-pkg-share patrolbot-launch)/param/defaults/mux.yaml')
+    final = yaml.safe_load((LAUNCH_PACKAGE_ROOT / 'param/defaults/mux.yaml').read_text())[
+        'cmd_vel_mux']['ros__parameters']['topics']
+    assert final['joy'] == {'topic': 'input/joy', 'priority': 8, 'timeout': 0.5}
+    assert final['undock_turn'] == {
+        'topic': 'input/undock_turn', 'priority': 9, 'timeout': 0.25}
+    upstream = yaml.safe_load(PARAMS_FILE.read_text())['nav_command_mux'][
+        'ros__parameters']['topics']
+    assert upstream['docking'] == {
+        'topic': 'input/docking', 'priority': 9, 'timeout': 0.25}
+    assert "node.create_publisher(Twist, '/input/docking', 10)" in UNDOCK_TURN_FILE.read_text()
+
+
 class SafetyContractTest(unittest.TestCase):
     """Protect incident-verified settings and command-path containment."""
 

@@ -20,10 +20,9 @@ Real components retained as fallbacks or references, but not part of the running
   [package page](../packages/rosaria2.md).
 - **`lms200_sanitizer.py`** — fixes SICK LMS-200 header fields (`/bad_scan → /good_scan`); no
   `/bad_scan` publisher exists in the current stack, so it has nothing to consume.
-- **`patrolbot_navigation/scripts/twist_mux.yaml`** — a reference velocity-priority config; the
-  active twist_mux runs from `patrolbot-launch`'s `mux.yaml`.
 - **`patrolbot_nav.rviz`** — operator RViz layout for manual visualization.
-- **Dock-in prototype** — `patrolbot_docking_plugins`, docking-server YAML and reserved mux input remain; guarded undock is a separate active path.
+- **Dock-in prototype** — `patrolbot_docking_plugins` and docking-server YAML remain
+  unlaunched; guarded undock turning actively publishes to `/input/docking`.
 
 ## Retained active components
 

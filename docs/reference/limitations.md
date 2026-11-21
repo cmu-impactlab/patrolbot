@@ -45,10 +45,10 @@ The Nav2 `docking_server` is absent from the running graph. Its direct velocity 
 straight to the base and would bypass the priority mux and the safety chain, so PatrolBot uses
 its own guarded undock action instead.
 
-`/input/docking` exists as an input to `nav_command_mux` at priority 9 and has **zero
-publishers**. Publishing to it would outrank normal path following, though the command would
-still pass through the collision monitor. It **MUST** remain publisher-free unless the
-publisher has been reviewed against the [safety chain](../safety/safety-chain.md).
+Guarded `undock_turn` publishes to `/input/docking`, the priority-9 input to
+`nav_command_mux`. Its owned turn outranks normal path following and still passes through
+the collision monitor. Any additional producer **MUST** be reviewed against the
+[safety chain](../safety/safety-chain.md). Automatic dock-in remains parked and unlaunched.
 
 ## Planning sees one horizontal plane; the rear is sonar-only
 

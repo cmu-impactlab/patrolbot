@@ -91,8 +91,8 @@ chain](software-architecture.md#the-cmd_vel-arbitration-chain):
 1. `bt_navigator` runs the behavior tree; `planner_server` (NavFn) computes a global path in `map`.
 2. `controller_server` (RPP) produces `input/nav_controller` at 5 Hz; behavior commands use
    `input/nav_behavior`.
-3. `nav_command_mux` selects the autonomous producer and emits `cmd_vel_nav`; its reserved docking
-   input has no publisher.
+3. `nav_command_mux` selects the autonomous producer and emits `cmd_vel_nav`; guarded
+   `undock_turn` publishes its owned turn to `/input/docking` at priority 9.
 4. The Nav2 `velocity_smoother` shapes it to `cmd_vel_smoothed`.
 5. `collision_monitor` applies direction-aware scan and sonar stop polygons and emits `input/navi`
    (priority 5).

@@ -239,6 +239,19 @@ def test_fixed_operation_plan_is_allowlisted():
         plan.build(scope='bringup', revision=3, digest='rm -rf /')
 
 
+def test_public_activation_exports_and_plan_injection_remain_compatible():
+    from patrolbot_bridge import tuning_activation as activation
+
+    assert {'FixedOperationPlan', 'HOST_SERVICES'} <= set(activation.__all__)
+    assert all(hasattr(activation, name) for name in activation.__all__)
+    assert activation.HOST_SERVICES == {
+        'bringup': ('patrolbot-bringup',), 'navigation': ('patrolbot-navigation',)}
+    plan = FixedOperationPlan()
+    coordinator = ActivationCoordinator(None, Owner(), UnavailableBackend(), plan=plan)
+    assert coordinator.plan is plan
+    assert not hasattr(ActivationCoordinator, '_digest_for')
+
+
 def test_evidence_from_runtime_treats_non_booleans_as_unknown():
     evidence = evidence_from_runtime({'raw_odom_fresh': 1, 'stationary': True,
                                       'hardware_ok': 'yes'})

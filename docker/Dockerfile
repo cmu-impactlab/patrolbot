@@ -11,8 +11,6 @@ RUN --mount=type=tmpfs,target=/var/cache/apt/archives \
       cmake \
       build-essential \
       ros-${ROS_DISTRO}-nav2-bringup \
-      ros-${ROS_DISTRO}-slam-toolbox \
-      ros-${ROS_DISTRO}-teleop-twist-joy \
       ros-${ROS_DISTRO}-twist-mux \
       ros-${ROS_DISTRO}-joy \
       ros-${ROS_DISTRO}-tf2-ros \

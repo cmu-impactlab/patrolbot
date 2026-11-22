@@ -271,6 +271,19 @@ a specific remaining blocker, not permission to expand RuntimeControls or toolin
   preserve timestamps and distinguish it from actual scanner failure (S3/#65).
 - Planner no-path and costmap timeout need separate diagnoses from scan staleness;
   source-only localization-independent undock does not fix either.
+- Raw odometry `position-discontinuity` is separate from AMCL age. The unchanged
+  validator rejects a position step above `0.30 * (receipt_dt + 0.05)` metres
+  with checked-in defaults. Bounded live logs show position and reported-speed
+  rejections inside stable SBC process lifetimes, but lack rejected coordinates
+  and acquisition timing. Offline probes on both previous/current revisions
+  reproduce receipt-compression false rejection and eventual admission of a
+  persistent same-origin reset as elapsed allowance grows. Neither proves the
+  live cause. Capture bounded numeric rejection context and source timing before
+  choosing a fix; do not relax bounds, reset anchors on rejection or infer an
+  origin change from a numeric jump. Keep this safety-design work separate.
+  No recovered diagnostic is currently emitted, so a displayed last rejection
+  alone does not establish ongoing failure. Preserve counters when clarifying
+  current health.
 - Pi 84–85°C, CPU pressure and bridge latest-value drops: S5 performance/power
   evidence still needed; active throttling has not been established.
 - Boot clock initially +60 s, corrected after containers start: S6 signed-request

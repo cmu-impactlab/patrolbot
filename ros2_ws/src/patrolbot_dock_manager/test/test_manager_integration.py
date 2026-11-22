@@ -858,21 +858,24 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
     would silently undo the whole guard on every robot that never sets it.
     """
     manager, world, client_node = harness
+    assert manager.get_parameter('allow_degenerate_localization').value is False
     assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
     assert wait_until(lambda: manager._snapshot().localization_valid)
 
     _drive_degenerate(world)
     assert wait_until(lambda: not manager._snapshot().localization_valid)
-    # Authorized 2026-10-16: admission no longer consults the filter, so
-    # the degenerate estimate does not block the precheck. It still cannot
-    # survive the VERIFY_LOCALIZATION step: the goal fails there, before
-    # any hardware is asked.
+    # The invalid estimate stays invalid; undock uses local measured motion,
+    # not this map-localization override, for both reverse and bounded turn.
+    assert not manager._snapshot().degenerate_localization_override_engaged
     goal_handle = send_undock(client_node)
     assert goal_handle.accepted
     wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
-    assert not wrapped.result.success
-    assert wrapped.result.code == Undock.Result.LOCALIZATION_FAILED
-    assert world.undock_calls == 0
+    assert wrapped.result.success, wrapped.result.message
+    assert wrapped.result.code == Undock.Result.OK
+    assert world.undock_calls == 1
+    assert len(world.spin_goals) == 1
+    assert not manager._snapshot().localization_valid
+    assert not manager._snapshot().degenerate_localization_override_engaged
 
 
 def test_the_override_admits_a_degenerate_covariance_when_enabled(

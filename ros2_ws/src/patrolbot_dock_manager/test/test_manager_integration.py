@@ -873,7 +873,8 @@ def test_the_degenerate_covariance_override_is_off_unless_asked_for(harness):
     assert wrapped.result.success, wrapped.result.message
     assert wrapped.result.code == Undock.Result.OK
     assert world.undock_calls == 1
-    assert len(world.spin_goals) == 1
+    assert world.turn_calls == 1
+    assert world.spin_calls == 0
     assert not manager._snapshot().localization_valid
     assert not manager._snapshot().degenerate_localization_override_engaged
 

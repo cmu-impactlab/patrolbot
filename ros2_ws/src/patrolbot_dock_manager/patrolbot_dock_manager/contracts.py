@@ -42,15 +42,12 @@ def odometry_values_finite(position_x, position_y, orientation, linear_x, angula
     return all(math.isfinite(value) for value in values)
 
 
-# Nine states, down from sixteen: the six that used to command and monitor
-# contact separation now live inside one SBC operation.
+# Local undock phases; legacy localization constants remain on the action wire.
 HAPPY_PATH = (
     'IDLE',
     'PRECHECK',
-    'VERIFY_LOCALIZATION',
     'VERIFY_COMMAND_PATH',
     'HARDWARE_UNDOCK',
-    'RESTORE_LOCALIZATION',
     'TURN_AWAY_FROM_DOCK',
     'STOPPED',
     'COMPLETE',

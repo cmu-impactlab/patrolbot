@@ -129,8 +129,12 @@ a measured profile for this dock. That refusal is designed behavior.
 During undock the robot reverses, so the `rear_velocity_stop` polygon governs — four sparse
 sonar transducers with `min_points: 1`. A single echo halts the motion.
 
-After an undock reaches `HANDOFF_READY`, Nav2 takes over. Do not send a navigation goal before
-the handoff completes.
+The standard undock checks the stopped physical handoff, then runs its bounded
+bridge-owned Nav2 Spin using local odometry and the collision chain. It does not
+require or refresh AMCL, seed a pose, or resume global navigation. Success requires
+a stopped completion; navigation afterwards requires separate valid localization.
+Pending or unknown map/lifecycle ownership can still refuse the operation.
+See the [deployment acceptance checklist](v1-deployment-acceptance-20261122.md).
 
 ## Navigation goals
 

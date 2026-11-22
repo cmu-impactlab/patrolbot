@@ -5,7 +5,8 @@ Contact separation is not performed here. The SBC owns charger release, motor
 enable, reverse velocity, encoder displacement, charge-state recovery, stall
 detection and rear sonar/bumper safety as one exclusive, stateful operation.
 This node validates the Pi-side preconditions, requests that operation, relays
-its progress, and resumes Nav2 once the SBC reports the robot physically clear.
+its progress, and requests a local-only turn once the SBC reports physical clearance.
+Global navigation remains held until separately valid localization is supplied.
 
 It publishes no Twist and no longer uses Nav2 BackUp to escape the charging
 contacts. The 180 degree turn afterwards is still a Nav2 Spin, so it keeps full
@@ -310,7 +311,7 @@ class DockManager(Node):
         return response
 
     def _readiness_timer(self):
-        snapshot = self._snapshot()
+        snapshot = self._snapshot(for_undock=True)
         now = time.monotonic()
         with self._lock:
             base_age = now - self._base_state_at if self._base_state_at else 1e6
@@ -537,18 +538,6 @@ class DockManager(Node):
                 )
             expected_session = self._snapshot().session_generation
 
-            # AMCL can age out while the robot sits still, and the SBC will move
-            # it in a moment, so refresh the estimate before anything moves.
-            self._transition('VERIFY_LOCALIZATION', correlation_id)
-            if not self._wait_for_localization(goal_handle, 2.0, correlation_id):
-                return self._abort(
-                    goal_handle,
-                    Undock.Result.LOCALIZATION_FAILED,
-                    'localization invalid immediately before undocking',
-                    initial_charge,
-                    manual_recovery=False,
-                )
-
             self._transition('VERIFY_COMMAND_PATH', correlation_id)
             self._refresh_command_path(force=True)
             if not self._snapshot().command_path_valid:
@@ -570,7 +559,6 @@ class DockManager(Node):
             hardware_ok, hardware_reason, hardware_result = self._run_hardware_undock(
                 goal_handle, correlation_id
             )
-            hardware_completed_at = time.monotonic()
             traveled = self._hardware_distance
             if not hardware_ok:
                 code = self._undock_result_code(goal_handle, hardware_result, hardware_reason)
@@ -578,25 +566,6 @@ class DockManager(Node):
                     goal_handle,
                     code,
                     hardware_reason,
-                    initial_charge,
-                    manual_recovery=True,
-                    distance=traveled,
-                )
-
-                # Localization is restored BEFORE the handoff gate, because the
-                # gate checks it: the robot has just moved half a metre, so the
-                # pre-undock AMCL sample is necessarily stale by now.
-            self._transition('RESTORE_LOCALIZATION', correlation_id)
-            if not self._wait_for_localization(
-                goal_handle,
-                float(self.get_parameter('post_undock_localization_timeout').value),
-                correlation_id,
-                newer_than=hardware_completed_at,
-            ):
-                return self._abort(
-                    goal_handle,
-                    Undock.Result.LOCALIZATION_FAILED,
-                    'localization did not recover after the hardware undock',
                     initial_charge,
                     manual_recovery=True,
                     distance=traveled,
@@ -780,8 +749,6 @@ class DockManager(Node):
         independent telemetry path before anything commands velocity.
         """
         deadline = time.monotonic() + timeout
-        attempts = 0
-        attempt_limit = self._localization_update_attempt_limit()
         last_failures = ['handoff not evaluated']
         while time.monotonic() < deadline:
             if goal_handle.is_cancel_requested:
@@ -790,13 +757,6 @@ class DockManager(Node):
             failures = resume_failures(state, expected_session)
             if not failures:
                 return True, ''
-                # Pose sync stays here even though admission no longer gates on
-                # localization: Nav2 must not take control without a fresh pose.
-                # Only the admission precheck was authorized to drop it.
-            localization_satisfied = bool(state.localization_fresh and state.localization_valid)
-            if not localization_satisfied and attempts < attempt_limit:
-                if self._request_localization_update(force=attempts == 0):
-                    attempts += 1
             last_failures = failures
             self._publish_feedback(goal_handle, deadline, correlation_id)
             time.sleep(0.05)
@@ -1108,14 +1068,7 @@ class DockManager(Node):
             rear_clear=rear_clear,
             odom_fresh=odom_age <= timeout,
             stationary=stationary,
-            # Raw, deliberately. The VERIFY/RESTORE localization flow steps
-            # treat it as proof that a pose arrived recently, and
-            # _wait_for_localization's default newer_than=0.0 would otherwise
-            # accept an arbitrarily old pose as authorization for the 0.53 m
-            # hardware undock. The parked-robot allowance is a usability
-            # relaxation for consumers that are not about to move the robot,
-            # and must not reach this. Undock admission itself no longer
-            # consults localization (authorized 2026-10-16).
+            # Report AMCL age truthfully; local undock does not consume it.
             localization_fresh=pose_age <= timeout,
             localization_valid=(localization_valid and pose_still_describes_the_robot),
             dock_pose_valid=dock_pose_valid and pose_still_describes_the_robot,

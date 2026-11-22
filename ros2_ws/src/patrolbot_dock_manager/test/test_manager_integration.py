@@ -112,6 +112,7 @@ class FakeWorld(Node):
         # encoder_degraded_warning and encoder_failure.
         self.fault_flags = 0
         self.hardware_completed_at = 0.0
+        self.handoff_confirmed_at = 0.0
         self.localization_resumed_at = 0.0
         self.spin_called_at = 0.0
         self.spin_calls = 0
@@ -286,6 +287,7 @@ class FakeWorld(Node):
         monotonic_now = time.monotonic()
         if self._dock_state_clear_at and monotonic_now >= self._dock_state_clear_at:
             self.dock_state = 'CLEAR_CONFIRMED'
+            self.handoff_confirmed_at = monotonic_now
             self._dock_state_clear_at = 0.0
         if self._localization_resume_at and monotonic_now >= self._localization_resume_at:
             self.localization_enabled = True
@@ -539,19 +541,21 @@ def test_operator_dock_pose_initialization_and_hardware_undock(harness):
     assert world.charge_state == 3
 
 
-def test_waits_for_post_result_localization_and_delayed_handoff(harness):
-    """A terminal success may arrive before either Pi telemetry path catches up."""
+def test_waits_for_delayed_hardware_handoff_without_localization(harness):
+    """Hardware telemetry must catch up; AMCL need not return."""
     _manager, world, client_node = harness
     world.handoff_telemetry_delay = 0.20
     world.pause_localization_during_undock = True
-    world.localization_restore_delay = 0.25
+    world.localization_restore_delay = None
 
     goal_handle = send_undock(client_node)
     wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
 
     assert wrapped.result.success
-    assert world.localization_resumed_at > world.hardware_completed_at
-    assert world.turn_called_at >= world.localization_resumed_at
+    assert world.localization_resumed_at == 0.0
+    assert world.handoff_confirmed_at > world.hardware_completed_at
+    assert world.turn_called_at >= world.handoff_confirmed_at
+    assert world.nomotion_update_calls == 0
     assert world.turn_calls == 1
     assert world.spin_calls == 0
 
@@ -570,8 +574,8 @@ def test_handoff_telemetry_timeout_stays_stopped(harness):
     assert world.spin_calls == 0
 
 
-def test_post_result_localization_timeout_stays_stopped(harness):
-    """A pre-undock AMCL sample is not accepted after physical separation."""
+def test_silent_amcl_does_not_block_post_reverse_turn(harness):
+    """Local-only handoff completes without restoring a map estimate."""
     _manager, world, client_node = harness
     world.pause_localization_during_undock = True
     world.localization_restore_delay = None
@@ -579,9 +583,10 @@ def test_post_result_localization_timeout_stays_stopped(harness):
     goal_handle = send_undock(client_node)
     wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
 
-    assert not wrapped.result.success
-    assert wrapped.result.code == Undock.Result.LOCALIZATION_FAILED
+    assert wrapped.result.success
+    assert world.turn_calls == 1
     assert world.spin_calls == 0
+    assert world.nomotion_update_calls == 0
 
 
 def test_hardware_failure_is_reported_without_a_nav2_turn(harness):
@@ -698,10 +703,8 @@ def test_docked_state_never_triggers_background_localization_requests(no_pose_ha
 
 @pytest.mark.parametrize(
     ('phase', 'expect_ok', 'expect_updates'),
-    # Authorized 2026-10-16: admission no longer consults AMCL, so the
-    # precheck passes on a silent filter without requesting updates. The
-    # localization step and the handoff pose sync still do.
-    (('precheck', True, 0), ('localization', False, 5), ('handoff', False, 5)),
+    # Only the standalone localization helper requests AMCL; undock never does.
+    (('precheck', True, 0), ('localization', False, 5), ('handoff', False, 0)),
 )
 def test_explicit_phases_request_updates_only_where_a_pose_is_needed(
     no_pose_harness, phase, expect_ok, expect_updates
@@ -767,7 +770,7 @@ def test_parked_freshness_neither_grants_nor_blocks_motion_precheck(harness):
     # Authorized 2026-10-16: admission is E-stop plus charging contact and
     # no longer consults localization, so a stale-but-valid pose neither
     # grants nor blocks the motion precheck. Freshness stays enforced by
-    # the VERIFY/RESTORE localization flow steps, not by admission.
+    # separate navigation admission, not undock.
     manager, world, client_node = harness
     seen = []
     client_node.create_subscription(
@@ -819,7 +822,7 @@ def test_a_frozen_filter_is_refused_however_small_its_variance(harness):
     assert wait_until(lambda: not manager._snapshot().localization_valid)
     # Authorized 2026-10-16: admission no longer consults the filter, so
     # the degenerate estimate does not block the precheck. Pose gating
-    # moved to the VERIFY/RESTORE localization flow steps, not admission.
+    # retained for separate navigation admission.
     assert precheck_ready(manager)
 
     # And it recovers when AMCL does, rather than latching off.
@@ -1122,7 +1125,7 @@ def test_localization_fresh_stays_a_statement_about_age(harness):
     ), 'precondition: the pose message went stale while parked'
     # Authorized 2026-10-16: admission no longer reads localization_fresh,
     # so a stale pose neither grants nor blocks the precheck. Freshness
-    # stays enforced by the VERIFY/RESTORE localization flow steps.
+    # remains independent of the local-only undock path.
     assert precheck_ready(manager)
 
 
@@ -1132,7 +1135,7 @@ def test_the_undock_precheck_ignores_pose_freshness_by_authorization(harness):
 
     The parked allowance still governs what localization_valid means, but
     a stale pose no longer blocks the undock precheck. Freshness stays
-    enforced by the VERIFY/RESTORE localization flow steps, not admission.
+    required separately for navigation, not undock.
     """
     manager, world, _client_node = harness
     assert wait_until(lambda: manager._snapshot().dock_state == 'DOCKED_CONFIRMED')
@@ -1284,3 +1287,31 @@ def test_localization_override_cannot_bypass_missing_lidar(harness_with_degenera
     assert wait_until(lambda: not manager._snapshot().hardware_state_valid)
     assert not precheck_ready(manager)
     assert world.undock_calls == 0
+
+
+@pytest.mark.parametrize('amcl', ['missing', 'stale', 'invalid'])
+def test_unlocalized_standard_undock_and_readiness(no_pose_harness, amcl):
+    manager, world, client_node = no_pose_harness
+    world.localization_enabled = False
+    world.recovery_required = True
+    world.recovery_stage = 'wait-operator-seed'
+    if amcl != 'missing':
+        world.localization_enabled = True
+        world.localization_needs_a_request = False
+        if amcl == 'invalid':
+            world.position_variance = world.cross_variance = world.yaw_variance = 0.0
+        assert wait_until(lambda: manager._localization is not None)
+        world.localization_enabled = False
+        if amcl == 'stale':
+            assert wait_until(lambda: not manager._snapshot().localization_fresh)
+    seen = []
+    subscription = client_node.create_subscription(
+        DockReadiness, '/patrolbot/dock_readiness', seen.append, 10)
+    assert wait_until(lambda: bool(seen) and seen[-1].ready_for_undock)
+    assert not seen[-1].localization_valid
+    wrapped = wait_future(send_undock(client_node).get_result_async(), timeout=15.0)
+    assert wrapped.result.success
+    assert world.undock_calls == world.turn_calls == 1
+    assert world.nomotion_update_calls == 0
+    assert not manager._snapshot().localization_valid
+    client_node.destroy_subscription(subscription)

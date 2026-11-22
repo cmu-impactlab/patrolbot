@@ -126,3 +126,9 @@ def drive_intent(axes, buttons, deadzone):
 
     attempting = linear != 0.0 or angular != 0.0
     return attempting, linear, angular
+
+
+def trim_speed(current, step, minimum, ceiling):
+    """Physical trim cannot exceed the selected ceiling or turn down into a raise."""
+    target = round(max(current + step, minimum), 2)
+    return min(ceiling, target, current if step < 0 else ceiling)

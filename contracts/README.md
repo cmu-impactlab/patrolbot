@@ -195,3 +195,14 @@ validator, the contract tests, and a selected set of existing portable
 teleop/safety tests with `PYTHONPATH=ros2_ws/src/patrolbot_bridge`. Those tests
 install a mocked ROS graph; there is no native ROS, no robot contact and no graph
 introspection.
+
+## Runtime Controls v1
+
+`runtime-controls.schema.json`, `runtime-controls.response.schema.json` and
+`runtime-controls.fixtures.json` mirror the dashboard contract. They define fixed
+runtime manual requests and generation-bound producer evidence, separate from
+saved tuning revisions. Real manual mutation uses distinct authenticated native
+reservation/consumer phases and explicit readback. Navigation remains unavailable
+for the documented route-source restart/coexistence reason. See
+[Runtime Controls](../docs/runtime-controls.md). Offline tests do not commission
+native DDS or hardware behavior.

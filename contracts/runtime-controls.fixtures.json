@@ -1,0 +1,464 @@
+{
+  "valid": [
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "read",
+      "request_id": "12345678-1234-4234-8234-123456789abc"
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.05,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.3,
+        "angular_rad_s": 0.7
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "navigation",
+      "values": {
+        "profile": "low"
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "navigation",
+      "values": {
+        "custom_m_s": 0.165
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "reconcile",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {}
+    }
+  ],
+  "invalid": [
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": -1,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": true,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": "0.1",
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": null,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.049,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.301,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 1e+100,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.1,
+        "angular_rad_s": 0
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.1,
+        "angular_rad_s": false
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.1,
+        "angular_rad_s": "0.5"
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.1,
+        "angular_rad_s": 0.099
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.1,
+        "angular_rad_s": 0.701
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.1,
+        "angular_rad_s": null
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": true,
+      "operation": "read",
+      "request_id": "12345678-1234-4234-8234-123456789abc"
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "read",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "actor": {
+        "role": "administrator"
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "stale",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.05,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "navigation",
+      "values": {
+        "profile": "fast"
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "navigation",
+      "values": {
+        "profile": []
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "navigation",
+      "values": {
+        "custom_m_s": 0
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "navigation",
+      "values": {
+        "custom_m_s": 0.165,
+        "profile": "medium"
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "set",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "/controller_server",
+      "values": {
+        "linear_m_s": 0.05,
+        "angular_rad_s": 0.1
+      }
+    },
+    {
+      "contract": "patrolbot-runtime-controls",
+      "version": 1,
+      "operation": "reconcile",
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "target": "manual",
+      "values": {
+        "linear_m_s": 0.3
+      }
+    }
+  ],
+  "responses": [
+    {
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "outcome": "ok",
+      "detail": "",
+      "snapshot": {
+        "contract": "patrolbot-runtime-controls",
+        "version": 1,
+        "robot_id": "fixture",
+        "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "consumer_generation": null,
+        "pending": null,
+        "status": "unavailable",
+        "observed": null,
+        "manual": {
+          "requested": null,
+          "confirmed": null,
+          "reason": "Runtime manual updates unavailable: consumers lack a shared idle reservation and generation-bound effective trim readback.",
+          "linear_m_s": {
+            "min": 0.05,
+            "max": 0.3,
+            "step": 0.05
+          },
+          "angular_rad_s": {
+            "min": 0.1,
+            "max": 0.7,
+            "step": 0.1
+          }
+        },
+        "navigation": {
+          "requested": null,
+          "confirmed": null,
+          "reason": "Navigation updates unavailable: no exclusive speed-limit arbiter retains independent safety restrictions; Nav2 has no application acknowledgement.",
+          "baseline_m_s": null,
+          "min_m_s": 0.08,
+          "max_m_s": null,
+          "presets": {
+            "low": {
+              "fraction": 0.5,
+              "m_s": null
+            },
+            "medium": {
+              "fraction": 0.75,
+              "m_s": null
+            },
+            "high": {
+              "fraction": 1.0,
+              "m_s": null
+            }
+          }
+        }
+      }
+    },
+    {
+      "request_id": "12345678-1234-4234-8234-123456789abc",
+      "outcome": "confirmed",
+      "detail": "",
+      "snapshot": {
+        "contract": "patrolbot-runtime-controls",
+        "version": 1,
+        "robot_id": "fixture",
+        "state_generation": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "consumer_generation": "33333333-3333-4333-8333-333333333333",
+        "pending": null,
+        "status": "confirmed",
+        "observed": null,
+        "manual": {
+          "requested": {
+            "linear_m_s": 0.1,
+            "angular_rad_s": 0.3
+          },
+          "confirmed": {
+            "web": {
+              "available": true,
+              "generation": "44444444-4444-4444-8444-444444444444",
+              "hardware_generation": 2,
+              "reservation": "",
+              "linear_m_s": 0.1,
+              "angular_rad_s": 0.3,
+              "effective_linear_m_s": 0.1,
+              "effective_angular_rad_s": 0.3,
+              "upper_linear_m_s": 0.3,
+              "upper_angular_rad_s": 0.7
+            },
+            "f710": {
+              "available": true,
+              "generation": "44444444-4444-4444-8444-444444444444",
+              "hardware_generation": 2,
+              "reservation": "",
+              "linear_m_s": 0.1,
+              "angular_rad_s": 0.3,
+              "effective_linear_m_s": 0.1,
+              "effective_angular_rad_s": 0.3,
+              "upper_linear_m_s": 0.3,
+              "upper_angular_rad_s": 0.7
+            }
+          },
+          "reason": "",
+          "linear_m_s": {
+            "min": 0.05,
+            "max": 0.3,
+            "step": 0.05
+          },
+          "angular_rad_s": {
+            "min": 0.1,
+            "max": 0.7,
+            "step": 0.1
+          }
+        },
+        "navigation": {
+          "requested": null,
+          "confirmed": null,
+          "reason": "Navigation updates unavailable: no exclusive speed-limit arbiter retains independent safety restrictions; Nav2 has no application acknowledgement.",
+          "baseline_m_s": null,
+          "min_m_s": 0.08,
+          "max_m_s": null,
+          "presets": {
+            "low": {
+              "fraction": 0.5,
+              "m_s": null
+            },
+            "medium": {
+              "fraction": 0.75,
+              "m_s": null
+            },
+            "high": {
+              "fraction": 1.0,
+              "m_s": null
+            }
+          }
+        }
+      }
+    }
+  ]
+}

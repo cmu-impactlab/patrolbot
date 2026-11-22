@@ -2,6 +2,8 @@
 
 import ast
 import json
+import threading
+from types import MethodType
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,9 +25,14 @@ def _callback():
                  'strict_json_loads': strict_json_loads,
                  'AuthorizationError': AuthorizationError,
                  'verify_tuning_authorization': verify}
-    code = ast.Module(body=[method], type_ignores=[])
+    guarded = next(method for method in node.body if isinstance(method, ast.FunctionDef) and method.name == '_tuning_callback_guarded')
+    code = ast.Module(body=[method, guarded], type_ignores=[])
     exec(compile(ast.fix_missing_locations(code), str(SOURCE), 'exec'), namespace)
-    return namespace['_tuning_callback']
+    def invoke(bridge, request, response):
+        bridge._epoch = SimpleNamespace(lock=threading.RLock(), runtime_hold=False)
+        bridge._tuning_callback_guarded = MethodType(namespace['_tuning_callback_guarded'], bridge)
+        return namespace['_tuning_callback'](bridge, request, response)
+    return invoke
 
 
 def _invoke(payload):

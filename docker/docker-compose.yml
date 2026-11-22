@@ -42,6 +42,9 @@ services:
       PATROLBOT_ROLE: bringup
       PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
       SDL_JOYSTICK_DISABLE_UDEV: "1"
+      PATROLBOT_TUNING_AUTH_KEY_FILE: /run/patrolbot-secrets/tuning.key
+      PATROLBOT_RUNTIME_CONTROLS_ENABLED: "${PATROLBOT_RUNTIME_CONTROLS_ENABLED:-0}"
+      PATROLBOT_ROBOT_ID: "${PATROLBOT_ROBOT_ID:-patrolbot-01}"
     command: ["ros2", "run", "patrolbot_bridge", "tuning_run", "--role", "bringup"]
     volumes:
       - patrolbot-state:/var/lib/patrolbot:ro
@@ -49,6 +52,7 @@ services:
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_navigation:/opt/patrolbot_ws/src/patrolbot_navigation:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bringup:/root/.ros/log
       - /dev/input:/dev/input:rw
+      - patrolbot-secrets:/run/patrolbot-secrets:ro
     device_cgroup_rules:
       - "c 13:* rw"
 
@@ -67,6 +71,7 @@ services:
       PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
       PATROLBOT_TUNING_RUNTIME_ENABLED: "${PATROLBOT_TUNING_RUNTIME_ENABLED:-0}"
       PATROLBOT_TUNING_AUTH_KEY_FILE: /run/patrolbot-secrets/tuning.key
+      PATROLBOT_RUNTIME_CONTROLS_ENABLED: "${PATROLBOT_RUNTIME_CONTROLS_ENABLED:-0}"
       PATROLBOT_ROBOT_ID: "${PATROLBOT_ROBOT_ID:-patrolbot-01}"
     command:
       - ros2
@@ -99,6 +104,9 @@ services:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       ROS_AUTOMATIC_DISCOVERY_RANGE: *ros_discovery_range
       PATROLBOT_ROLE: web-bridge
+      PATROLBOT_TUNING_AUTH_KEY_FILE: /run/patrolbot-secrets/tuning.key
+      PATROLBOT_RUNTIME_CONTROLS_ENABLED: "${PATROLBOT_RUNTIME_CONTROLS_ENABLED:-0}"
+      PATROLBOT_ROBOT_ID: "${PATROLBOT_ROBOT_ID:-patrolbot-01}"
       # Keep the opt-in profile from making unrelated core-stack Compose
       # operations require dashboard secrets. The shell command below enforces
       # both values only when this profile is actually started.
@@ -123,6 +131,7 @@ services:
         --ros-args -p server_url:="$$WEB_BRIDGE_SERVER_URL" -p token:="$$WEB_BRIDGE_TOKEN"
     volumes:
       - ${WEB_BRIDGE_ROOT:-/home/ubuntu/patrolbot-dashboard}/ros2_ws/src/patrolbot_web_bridge:/opt/web_bridge:ro
+      - patrolbot-secrets:/run/patrolbot-secrets:ro
       - type: bind
         source: /run/patrolbot-system-reset
         target: /run/patrolbot-system-reset

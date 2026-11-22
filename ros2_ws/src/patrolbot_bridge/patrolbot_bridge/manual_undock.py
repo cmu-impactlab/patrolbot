@@ -102,7 +102,7 @@ class ManualUndockRuntime:
     def admission_problem(self):
         n, e = self.node, self.node._epoch
         now = time.monotonic()
-        if (self.busy or n._undock_turn.busy or e.undock_hold or e.tuning_hold
+        if (self.busy or n._undock_turn.busy or e.undock_hold or e.tuning_hold or getattr(e, 'runtime_hold', False)
                 or self.web_session_active):
             return 'another undock or tuning operation owns the robot'
         if n._stop_event.is_set() or not self.sensors_ready():

@@ -352,6 +352,24 @@ class PatrolBotBridge(Node):
         self._tuning_policy = PolicyCache(self._probe_tuning_limits,
                                           required=self._tuning_state_expected())
         self._init_tuning()
+        from .runtime_controls import RuntimeControls
+        from .runtime_backend import RuntimeBackend
+        from patrolbot_interfaces.srv import RuntimeControls as RuntimeControlsService
+        runtime_key = None
+        try:
+            runtime_key = load_tuning_key(os.environ.get('PATROLBOT_TUNING_AUTH_KEY_FILE', ''))
+        except (AuthorizationError, OSError):
+            self.get_logger().warning('Runtime mutations disabled: private signing key unavailable.')
+        self._runtime_backend = RuntimeBackend(self, runtime_key,
+            enabled=os.environ.get('PATROLBOT_RUNTIME_CONTROLS_ENABLED', '') == '1')
+        self._runtime_controls = RuntimeControls(
+            os.environ.get('PATROLBOT_ROBOT_ID', 'patrolbot-01'),
+            lambda: self._parameter_observer.current()
+            if getattr(self, '_parameter_observer', None) is not None else None,
+            self._runtime_backend, runtime_key)
+        self.runtime_controls_srv = self.create_service(
+            RuntimeControlsService, '/patrolbot/runtime_controls', self._runtime_controls.callback,
+            callback_group=MutuallyExclusiveCallbackGroup())
         self._tuning_requests = MutuallyExclusiveCallbackGroup()
         self.tuning_srv = self.create_service(
             RobotTuning, '/patrolbot/tuning', self._tuning_callback,
@@ -1427,6 +1445,11 @@ class PatrolBotBridge(Node):
                     return self._fill_control_response(
                         response, None, 6, 'hardware session changed', started
                     )
+                if (getattr(self._epoch, 'runtime_hold', False)
+                        and command not in (COMMAND_MOTOR_DISABLE,)):
+                    self._discard_pending_control(key, pending)
+                    return self._fill_control_response(
+                        response, None, 3, 'runtime settings reservation owns admission', started)
                 if command == COMMAND_DOCK_RESET:
                     manual = getattr(self, '_manual_undock', None)
                     now = time.monotonic()
@@ -1687,7 +1710,7 @@ class PatrolBotBridge(Node):
             )
             return GoalResponse.REJECT
         with self._epoch.lock, self._undock_goal_lock:
-            if self._undock_goal_reserved:
+            if getattr(self._epoch, 'runtime_hold', False) or self._undock_goal_reserved:
                 self.get_logger().error('Hardware undock rejected: another goal is active.')
                 return GoalResponse.REJECT
             if not self._undock_turn.reserve_reverse(bool(request.validation_mode)):
@@ -2248,6 +2271,10 @@ class PatrolBotBridge(Node):
             self._tuning_readback_lock.release()
 
     def _tuning_callback(self, request, response):
+        with self._epoch.lock:
+            return self._tuning_callback_guarded(request, response)
+
+    def _tuning_callback_guarded(self, request, response):
         """
         Serve inspection and short-lived server-authorized tuning mutations.
 
@@ -2268,6 +2295,8 @@ class PatrolBotBridge(Node):
                           and isinstance(payload.get('request'), dict) else None)
                 request_id = raw_id if isinstance(raw_id, str) and len(raw_id) <= 128 else None
                 if operation not in ('read', 'status'):
+                    if getattr(self._epoch, 'runtime_hold', False):
+                        raise ServiceError('refused', 'runtime reservation owns admission')
                     try:
                         payload = verify_tuning_authorization(
                             payload, getattr(self, '_tuning_authorization_key', None),
@@ -2371,7 +2400,7 @@ class PatrolBotBridge(Node):
             raw_odom_ready=raw_odom_ready,
             map_blocked=map_blocked,
             mutation_blocked=mutation_blocked,
-            tuning_hold=epoch.tuning_hold,
+            tuning_hold=epoch.tuning_hold or getattr(epoch, 'runtime_block_drive', False),
         )
 
     def cmd_vel_callback(self, msg, info=None):
@@ -2389,6 +2418,8 @@ class PatrolBotBridge(Node):
             # idempotent hardware-control request on the TCP stream.
             with self._epoch.lock, self.sock_lock:
                 undock_drive = False
+                if (msg.linear.x != 0.0 or msg.angular.z != 0.0) and getattr(self._epoch, 'runtime_block_drive', False):
+                    return
                 if msg.linear.x != 0.0 or msg.angular.z != 0.0:
                     manual_undock = getattr(self, '_manual_undock', None)
                     if manual_undock is not None and manual_undock.busy:

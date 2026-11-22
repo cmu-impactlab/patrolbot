@@ -55,6 +55,8 @@ class EpochRuntime(MapRuntimeMixin):
         # unknown activation job blocks autonomy (commands_allowed) and manual
         # DRIVE, including the manual deadman bypass.
         self.tuning_hold = False
+        self.runtime_hold = False
+        self.runtime_block_drive = False
         self._tuning_hold_sources = {}
         self._tuning_hold_reason = ''
         self._lidar_reseed = False
@@ -184,7 +186,7 @@ class EpochRuntime(MapRuntimeMixin):
         with self.lock:
             if self.undock_hold:
                 return False
-            if self.tuning_hold:
+            if self.tuning_hold or getattr(self, 'runtime_block_drive', False):
                 return False
             if getattr(self, '_tuning_nav_pending', False):
                 return False
@@ -306,7 +308,7 @@ class EpochRuntime(MapRuntimeMixin):
 
     def seed(self, message):
         with self.lock:
-            if self.tuning_hold:
+            if self.tuning_hold or getattr(self, 'runtime_hold', False):
                 return
             if self.undock_hold:
                 self.node._undock_turn.revoke('initial pose requested during undock')
@@ -554,6 +556,8 @@ class EpochRuntime(MapRuntimeMixin):
                 return
             self._poll_tf_readiness()
             self.poll_navigation_idle()
+            if getattr(self, 'runtime_hold', False):
+                return
             self.tick_tuning_map_gate()
             if self.tick_map():
                 return

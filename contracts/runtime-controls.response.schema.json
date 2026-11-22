@@ -1,0 +1,493 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "outcome",
+    "detail",
+    "snapshot"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "unavailable",
+        "confirmed",
+        "rejected",
+        "unknown",
+        "partial"
+      ]
+    },
+    "detail": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "snapshot": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/state"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Runtime Controls v1 result and consumer evidence",
+  "$defs": {
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "version",
+        "robot_id",
+        "state_generation",
+        "consumer_generation",
+        "pending",
+        "status",
+        "observed",
+        "manual",
+        "navigation"
+      ],
+      "properties": {
+        "contract": {
+          "const": "patrolbot-runtime-controls"
+        },
+        "version": {
+          "const": 1
+        },
+        "robot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "state_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "consumer_generation": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ]
+        },
+        "pending": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+            }
+          ]
+        },
+        "status": {
+          "enum": [
+            "unavailable",
+            "default",
+            "pending",
+            "confirmed",
+            "rejected",
+            "partial",
+            "unknown"
+          ]
+        },
+        "observed": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source",
+                "age_s",
+                "hardware_session_generation",
+                "values"
+              ],
+              "properties": {
+                "source": {
+                  "const": "ros_parameters"
+                },
+                "age_s": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 3
+                },
+                "hardware_session_generation": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "values": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "max_linear_m_s": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 10
+                    },
+                    "max_angular_rad_s": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 10
+                    },
+                    "f710_linear_m_s": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 10
+                    },
+                    "f710_angular_rad_s": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 10
+                    },
+                    "nav_cruise_m_s": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 10
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "manual": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requested",
+            "confirmed",
+            "reason",
+            "linear_m_s",
+            "angular_rad_s"
+          ],
+          "properties": {
+            "requested": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "linear_m_s",
+                    "angular_rad_s"
+                  ],
+                  "properties": {
+                    "linear_m_s": {
+                      "type": "number",
+                      "minimum": 0.05,
+                      "maximum": 0.3
+                    },
+                    "angular_rad_s": {
+                      "type": "number",
+                      "minimum": 0.1,
+                      "maximum": 0.7
+                    }
+                  }
+                }
+              ]
+            },
+            "confirmed": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "web",
+                    "f710"
+                  ],
+                  "properties": {
+                    "web": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "available",
+                        "generation",
+                        "hardware_generation",
+                        "reservation",
+                        "linear_m_s",
+                        "angular_rad_s",
+                        "effective_linear_m_s",
+                        "effective_angular_rad_s",
+                        "upper_linear_m_s",
+                        "upper_angular_rad_s"
+                      ],
+                      "properties": {
+                        "available": {
+                          "type": "boolean"
+                        },
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                        },
+                        "hardware_generation": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "reservation": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                            }
+                          ]
+                        },
+                        "linear_m_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.3
+                        },
+                        "angular_rad_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.7
+                        },
+                        "effective_linear_m_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.3
+                        },
+                        "effective_angular_rad_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.7
+                        },
+                        "upper_linear_m_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.3
+                        },
+                        "upper_angular_rad_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.7
+                        }
+                      }
+                    },
+                    "f710": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "available",
+                        "generation",
+                        "hardware_generation",
+                        "reservation",
+                        "linear_m_s",
+                        "angular_rad_s",
+                        "effective_linear_m_s",
+                        "effective_angular_rad_s",
+                        "upper_linear_m_s",
+                        "upper_angular_rad_s"
+                      ],
+                      "properties": {
+                        "available": {
+                          "type": "boolean"
+                        },
+                        "generation": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                        },
+                        "hardware_generation": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "reservation": {
+                          "anyOf": [
+                            {
+                              "const": ""
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                            }
+                          ]
+                        },
+                        "linear_m_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.3
+                        },
+                        "angular_rad_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.7
+                        },
+                        "effective_linear_m_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.3
+                        },
+                        "effective_angular_rad_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.7
+                        },
+                        "upper_linear_m_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.3
+                        },
+                        "upper_angular_rad_s": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 0.7
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "linear_m_s": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "min",
+                "max",
+                "step"
+              ],
+              "properties": {
+                "min": {
+                  "const": 0.05
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 0.3
+                },
+                "step": {
+                  "const": 0.05
+                }
+              }
+            },
+            "angular_rad_s": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "min",
+                "max",
+                "step"
+              ],
+              "properties": {
+                "min": {
+                  "const": 0.1
+                },
+                "max": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 0.7
+                },
+                "step": {
+                  "const": 0.1
+                }
+              }
+            }
+          }
+        },
+        "navigation": {
+          "const": {
+            "requested": null,
+            "confirmed": null,
+            "reason": "Navigation updates unavailable: no exclusive speed-limit arbiter retains independent safety restrictions; Nav2 has no application acknowledgement.",
+            "baseline_m_s": null,
+            "min_m_s": 0.08,
+            "max_m_s": null,
+            "presets": {
+              "low": {
+                "fraction": 0.5,
+                "m_s": null
+              },
+              "medium": {
+                "fraction": 0.75,
+                "m_s": null
+              },
+              "high": {
+                "fraction": 1.0,
+                "m_s": null
+              }
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "not": {
+                  "const": "unavailable"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "consumer_generation": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+              },
+              "manual": {
+                "properties": {
+                  "confirmed": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": [
+              "ok",
+              "confirmed"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "snapshot": {
+            "$ref": "#/$defs/state"
+          }
+        }
+      }
+    }
+  ]
+}

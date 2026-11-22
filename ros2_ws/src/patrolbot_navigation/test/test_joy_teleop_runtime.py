@@ -70,6 +70,7 @@ class Client:
 
 @pytest.fixture
 def teleop(monkeypatch):
+    monkeypatch.delenv('PATROLBOT_TUNING_AUTH_KEY_FILE', raising=False)
     class Node:
         def __init__(self, name):
             self.now, self.parameters, self.clients, self.messages = 1.0, {}, {}, []
@@ -79,6 +80,14 @@ def teleop(monkeypatch):
 
         def get_parameter(self, name):
             return SimpleNamespace(value=self.parameters[name])
+
+        def set_parameters_atomically(self, parameters):
+            result = self.validate_parameters(parameters)
+            if result.successful:
+                for parameter in parameters:
+                    self.parameters[parameter.name] = parameter.value
+                self.commit_parameters(parameters)
+            return result
 
         def get_clock(self):
             return SimpleNamespace(now=lambda: SimpleNamespace(nanoseconds=int(self.now * 1e9)))
@@ -123,6 +132,7 @@ def teleop(monkeypatch):
         'rclpy': {}, 'rclpy.node': {'Node': Node},
         'rclpy.executors': {'ExternalShutdownException': type('Shutdown', (Exception,), {})},
         'rclpy.qos': {'qos_profile_action_status_default': object()},
+        'rclpy.parameter': {'Parameter': lambda name, value: SimpleNamespace(name=name, value=value)},
         'action_msgs': {}, 'action_msgs.msg': {
             'GoalStatus': SimpleNamespace(STATUS_ACCEPTED=1, STATUS_EXECUTING=2,
                                           STATUS_CANCELING=3),
@@ -134,7 +144,8 @@ def teleop(monkeypatch):
         'std_srvs': {}, 'std_srvs.srv': {'Trigger': SimpleNamespace(Request=SimpleNamespace)},
         'rcl_interfaces': {}, 'rcl_interfaces.msg': {'SetParametersResult': SimpleNamespace},
         'patrolbot_interfaces': {}, 'patrolbot_interfaces.msg': {'BaseState': object},
-        'patrolbot_interfaces.srv': {'SetLidarPower': SimpleNamespace(Request=SimpleNamespace)},
+        'patrolbot_interfaces.srv': {'SetLidarPower': SimpleNamespace(Request=SimpleNamespace),
+                                   'RuntimeManual': SimpleNamespace(Request=SimpleNamespace)},
     }
     for name, attributes in modules.items():
         module = ModuleType(name)
@@ -573,3 +584,133 @@ def test_queued_base_state_age_is_added_to_measured_age_before_toggle(teleop, fi
     chord(teleop)
     cancel_done(teleop)
     assert not power_client(teleop).calls
+
+
+def test_selected_ceiling_survives_physical_trim_up(teleop):
+    teleop.parameters['max_linear'] = .165
+    teleop.parameters['max_angular'] = .333
+    teleop.max_lin, teleop.max_ang = .165, .333
+    message = joy(teleop.now, rb=True)
+    message.buttons[3] = message.buttons[1] = 1
+    teleop.joy_cb(message)
+    assert teleop.max_lin == .165
+    assert teleop.max_ang == .333
+
+
+def runtime_request(node, phase, request_id=None, linear=.1, angular=.3):
+    from patrolbot_bridge.runtime_consumer_authorization import claims, sign
+    from uuid import uuid4
+    current = node._runtime_manual.state()
+    request = SimpleNamespace(phase=phase, request_id=request_id or str(uuid4()),
+        expected_generation=current['generation'], hardware_generation=current['hardware_generation'],
+        linear_m_s=linear, angular_rad_s=angular)
+    request.authorization_json = sign(claims(request), dict(id=1, username='offline', role='operator'),
+                                     b'offline-consumer-key-material-32bytes', 'offline', 'f710')
+    return request
+
+
+def runtime_ready(node):
+    node._runtime_manual.key = b'offline-consumer-key-material-32bytes'
+    node._runtime_manual.robot_id = 'offline'
+    node._base_state_cb(state(node.now))
+    released = joy(node.now)
+    released.buttons += [0, 0]
+    node.joy_cb(released)
+    return released
+
+
+def test_signed_runtime_atomic_update_no_velocity_and_held_input_never_rearms(teleop):
+    node = teleop
+    released = runtime_ready(node)
+    before = len(node.messages)
+    prepare = runtime_request(node, 'prepare')
+    assert node._runtime_manual.handle(prepare, SimpleNamespace()).accepted
+    assert len(node.messages) == before
+    commit = runtime_request(node, 'commit', prepare.request_id)
+    result = node._runtime_manual.handle(commit, SimpleNamespace())
+    assert result.accepted
+    assert (node.get_parameter('max_linear').value, node.get_parameter('max_angular').value) == (.1, .3)
+    assert node.max_lin <= .1 and node.max_ang <= .3
+    assert len(node.messages) == before
+    held = joy(node.now, rb=True, linear=1.)
+    held.buttons += [0, 0]
+    node.joy_cb(held)
+    release = runtime_request(node, 'release', prepare.request_id)
+    assert node._runtime_manual.handle(release, SimpleNamespace()).accepted
+    node.joy_cb(held)
+    assert not node.active and node.lin_tgt == node.lin_cmd == 0
+    assert len(node.messages) == before
+    node.joy_cb(released)
+    assert node._runtime_manual.require_release
+    node.now += .01
+    fresh = joy(node.now)
+    fresh.buttons += [0, 0]
+    node.joy_cb(fresh)
+    assert not node._runtime_manual.require_release
+    node.joy_cb(held)
+    assert node.active
+    assert node.lin_tgt <= .1
+
+
+def test_runtime_rejects_unsigned_external_parameters_and_held_or_stale_input(teleop):
+    node = teleop
+    runtime_ready(node)
+    original = (node.max_lin, node.max_ang)
+    request = runtime_request(node, 'prepare')
+    request.authorization_json = '{}'
+    assert not node._runtime_manual.handle(request, SimpleNamespace()).accepted
+    params = [SimpleNamespace(name='max_linear', value=.1), SimpleNamespace(name='max_angular', value=.3)]
+    assert not node._validate_tuning_parameters(params).successful
+    assert (node.max_lin, node.max_ang) == original
+    held = joy(node.now, rb=True)
+    held.buttons += [0, 0]
+    node.joy_cb(held)
+    assert not node._runtime_manual.handle(runtime_request(node, 'prepare'), SimpleNamespace()).accepted
+    node.now += 1
+    assert not node._runtime_manual.handle(runtime_request(node, 'prepare'), SimpleNamespace()).accepted
+
+
+def test_runtime_validation_rejection_never_mutates_parameter_or_trim_cache(teleop):
+    node = teleop
+    runtime_ready(node)
+    prepare = runtime_request(node, 'prepare')
+    assert node._runtime_manual.handle(prepare, SimpleNamespace()).accepted
+    original = (dict(node.parameters), node.max_lin, node.max_ang)
+    node._runtime_write = True
+    try:
+        result = node.set_parameters_atomically([
+            SimpleNamespace(name='max_linear', value=.31),
+            SimpleNamespace(name='max_angular', value=.3)])
+    finally:
+        node._runtime_write = False
+    assert not result.successful
+    assert (dict(node.parameters), node.max_lin, node.max_ang) == original
+
+
+@pytest.mark.parametrize('stamp_offset', [-1., -.01, 0., .1])
+def test_runtime_release_rejects_pre_cutoff_stale_or_future_neutral(teleop, stamp_offset):
+    node = teleop
+    runtime_ready(node)
+    prepare = runtime_request(node, 'prepare')
+    assert node._runtime_manual.handle(prepare, SimpleNamespace()).accepted
+    node.now += .01
+    held = joy(node.now, rb=True, linear=1.)
+    held.buttons += [0, 0]
+    node.joy_cb(held)
+    release = runtime_request(node, 'release', prepare.request_id)
+    assert node._runtime_manual.handle(release, SimpleNamespace()).accepted
+    before = list(node.messages)
+    neutral = joy(node.now + stamp_offset)
+    neutral.buttons += [0, 0]
+    node.joy_cb(neutral)
+    assert node._runtime_manual.require_release
+    node.joy_cb(held)
+    assert not node.active and node.lin_tgt == node.lin_cmd == 0
+    assert node.messages == before
+    node.now += .02
+    fresh = joy(node.now)
+    fresh.buttons += [0, 0]
+    node.joy_cb(fresh)
+    assert not node._runtime_manual.require_release
+    assert not node.active and node.lin_tgt == node.lin_cmd == 0
+    assert node.messages == before

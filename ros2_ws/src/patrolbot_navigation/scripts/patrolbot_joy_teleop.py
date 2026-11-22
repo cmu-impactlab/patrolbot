@@ -57,6 +57,7 @@ from joystick_policy import (
     button_pressed,
     ramp_toward,
     rising_edge,
+    trim_speed,
 )
 
 # ---- Button map (Logitech F710, XInput) ----
@@ -170,8 +171,28 @@ class JoyTeleop(Node):
         self.lidar_power = self.create_client(
             SetLidarPower, '/patrolbot/set_lidar_power')
         self.create_timer(self.dt, self.tick)
+        from patrolbot_bridge.runtime_manual import ManualRuntime
+        from patrolbot_interfaces.srv import RuntimeManual
+        self._runtime_write = False
+        self._runtime_joy_neutral = False
+        self._runtime_joy_at = None
+        self._runtime_joy_stamp = None
+        self._runtime_upper = (self.max_lin, self.max_ang)
+        from patrolbot_bridge.runtime_authorization import load_key, AuthorizationError
+        runtime_key = None
+        try:
+            runtime_key = load_key(os.environ.get('PATROLBOT_TUNING_AUTH_KEY_FILE', ''))
+        except (AuthorizationError, OSError):
+            pass
+        self._runtime_manual = ManualRuntime(self._runtime_observe, self._runtime_idle,
+            self._runtime_apply, key=runtime_key, clock=lambda: self.get_clock().now().nanoseconds / 1e9,
+            robot_id=os.environ.get('PATROLBOT_ROBOT_ID', 'patrolbot-01'), consumer='f710')
+        self.create_service(RuntimeManual, '/patrolbot/joy_runtime_manual',
+                            self._runtime_manual.handle)
         policy_callbacks = (hasattr(self, 'add_post_set_parameters_callback')
                             and hasattr(self, 'add_on_set_parameters_callback'))
+        if not policy_callbacks:
+            self._runtime_manual.key = None
         self.declare_parameter('tuning_policy_version', 1 if policy_callbacks else 0)
         if policy_callbacks:
             self.add_on_set_parameters_callback(self._validate_tuning_parameters)
@@ -181,6 +202,41 @@ class JoyTeleop(Node):
             'Joy teleop ready (XInput). Hold RB + left stick (or D-pad) to drive. '
             'LB+RB+LT+RT=LiDAR power (release all to rearm). '
             f'A/Y=linear -/+, X/B=angular -/+. max {self.max_lin} m/s / {self.max_ang} rad/s.')
+
+    def _runtime_observe(self):
+        return dict(hardware_generation=self._lidar_generation or 0,
+                    linear_m_s=self.get_parameter('max_linear').value,
+                    angular_rad_s=self.get_parameter('max_angular').value,
+                    effective_linear_m_s=self.max_lin, effective_angular_rad_s=self.max_ang,
+                    upper_linear_m_s=min(self._runtime_upper[0], self.lin_cap),
+                    upper_angular_rad_s=min(self._runtime_upper[1], self.ang_cap))
+
+    def _runtime_idle(self):
+        now = self.get_clock().now().nanoseconds / 1e9
+        return bool(self._base_state is not None and self._base_state.link_connected
+                    and self._base_state.hardware_state_valid and self._base_state_at is not None
+                    and 0 <= now - self._base_state_at <= BASE_STATE_TIMEOUT
+                    and self._runtime_joy_at is not None
+                    and 0 <= now - self._runtime_joy_at <= JOY_TIMEOUT
+                    and self._runtime_joy_stamp is not None
+                    and 0 <= now - self._runtime_joy_stamp <= JOY_TIMEOUT
+                    and self._runtime_joy_neutral and not self._tuning_hold
+                    and not self._manual_undock_active and not self._lidar_in_flight
+                    and not self.active and not self._takeover_pending
+                    and not self._cancel_in_flight
+                    and self.lin_cmd == self.ang_cmd == self.lin_tgt == self.ang_tgt == 0.)
+
+    def _runtime_apply(self, linear, angular):
+        from rclpy.parameter import Parameter
+        self._runtime_write = True
+        try:
+            result = self.set_parameters_atomically([
+                Parameter('max_linear', value=float(linear)),
+                Parameter('max_angular', value=float(angular))])
+            if not result.successful:
+                raise ValueError(result.reason)
+        finally:
+            self._runtime_write = False
 
     def _validate_tuning_parameters(self, parameters):
         from rcl_interfaces.msg import SetParametersResult
@@ -201,7 +257,11 @@ class JoyTeleop(Node):
                            <= values['max_angular_cap'])
         # Never mutate a live proportional/ramped command underneath a held
         # controller. Runtime tuning owns the stationary admission boundary.
-        valid = valid and self._tuning_hold and not (self.active or self._tuning_deadman_held
+        runtime = getattr(self, '_runtime_manual', None)
+        reserved = bool(runtime and runtime.held and self._runtime_write
+                        and set(changes) == {'max_linear', 'max_angular'}
+                        and self._runtime_idle())
+        valid = valid and (reserved or (self._tuning_hold and not (runtime and runtime.held))) and not (self.active or self._tuning_deadman_held
                                or abs(self.lin_cmd) > 1e-9
                                or abs(self.ang_cmd) > 1e-9 or self._takeover_pending)
         return SetParametersResult(successful=valid, reason='' if valid else
@@ -224,6 +284,8 @@ class JoyTeleop(Node):
         self.active = False
         self.deadman_was_down = False
         self._last_joy = None
+        if getattr(self, '_runtime_manual', None) is not None:
+            self._runtime_manual.state()
 
     def _tuning_hold_cb(self, message):
         self._tuning_hold = bool(message.data)
@@ -257,6 +319,8 @@ class JoyTeleop(Node):
         self._lidar_generation = message.session_generation
         self._base_state = message
         self._base_state_at = self.get_clock().now().nanoseconds / 1e9
+        if getattr(self, '_runtime_manual', None) is not None:
+            self._runtime_manual.state()
 
     def _block_undock_input(self):
         self.active = self.deadman_was_down = False
@@ -420,6 +484,18 @@ class JoyTeleop(Node):
         self._try_lidar_toggle()
 
     def joy_cb(self, m):
+        runtime = getattr(self, '_runtime_manual', None)
+        if runtime is not None:
+            self._runtime_joy_at = self.get_clock().now().nanoseconds / 1e9
+            self._runtime_joy_stamp = m.header.stamp.sec + m.header.stamp.nanosec / 1e9
+            self._runtime_joy_neutral = neutral_input(m.axes, m.buttons)
+            if runtime.held or runtime.require_release:
+                # A held input observed during the reservation cannot arm on release.
+                if (not runtime.held and self._runtime_joy_neutral
+                        and self._runtime_joy_stamp > runtime.release_cutoff
+                        and 0 <= self._runtime_joy_at - self._runtime_joy_stamp <= JOY_TIMEOUT):
+                    runtime.require_release = False
+                return
         b = m.buttons
         a = m.axes
         stamp_ns = m.header.stamp.sec * 1_000_000_000 + m.header.stamp.nanosec
@@ -467,17 +543,31 @@ class JoyTeleop(Node):
         changed = False
         if self._edge(b, BTN_LIN_UP):
             self._operator_linear_trim = True
-            self.max_lin = round(min(self.max_lin + self.lin_step, self.lin_cap), 2); changed = True
+            self.max_lin = trim_speed(
+                self.max_lin, self.lin_step, self.min_lin,
+                min(self.lin_cap, self.get_parameter('max_linear').value))
+            changed = True
         if self._edge(b, BTN_LIN_DOWN):
             self._operator_linear_trim = True
-            self.max_lin = round(max(self.max_lin - self.lin_step, self.min_lin), 2); changed = True
+            self.max_lin = trim_speed(
+                self.max_lin, -self.lin_step, self.min_lin,
+                min(self.lin_cap, self.get_parameter('max_linear').value))
+            changed = True
         if self._edge(b, BTN_ANG_UP):
             self._operator_angular_trim = True
-            self.max_ang = round(min(self.max_ang + self.ang_step, self.ang_cap), 2); changed = True
+            self.max_ang = trim_speed(
+                self.max_ang, self.ang_step, self.min_ang,
+                min(self.ang_cap, self.get_parameter('max_angular').value))
+            changed = True
         if self._edge(b, BTN_ANG_DOWN):
             self._operator_angular_trim = True
-            self.max_ang = round(max(self.max_ang - self.ang_step, self.min_ang), 2); changed = True
+            self.max_ang = trim_speed(
+                self.max_ang, -self.ang_step, self.min_ang,
+                min(self.ang_cap, self.get_parameter('max_angular').value))
+            changed = True
         if changed:
+            if runtime is not None:
+                runtime.state()
             self.get_logger().info(f'max_linear={self.max_lin} m/s   max_angular={self.max_ang} rad/s')
         self.prev_btns = list(b)
 

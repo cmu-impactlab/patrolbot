@@ -279,7 +279,7 @@ class UndockTurnRuntime:
 
     def reserve_reverse(self, validation_mode=False):
         with self.epoch.lock:
-            if getattr(self.epoch, 'tuning_hold', False):
+            if getattr(self.epoch, 'tuning_hold', False) or getattr(self.epoch, 'runtime_hold', False):
                 return False
             if self.busy or self.hardware_problem(
                 charging=True, stationary=True, allow_uncommissioned=validation_mode

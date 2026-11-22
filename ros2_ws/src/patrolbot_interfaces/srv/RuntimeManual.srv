@@ -1,0 +1,21 @@
+# Fixed consumer protocol; no arbitrary parameters or motion commands.
+string phase
+string request_id
+string expected_generation
+uint64 hardware_generation
+float64 linear_m_s
+float64 angular_rad_s
+string authorization_json
+---
+bool available
+bool accepted
+string detail
+string generation
+uint64 hardware_generation
+string reservation
+float64 linear_m_s
+float64 angular_rad_s
+float64 effective_linear_m_s
+float64 effective_angular_rad_s
+float64 upper_linear_m_s
+float64 upper_angular_rad_s

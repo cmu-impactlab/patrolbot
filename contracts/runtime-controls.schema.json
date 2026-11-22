@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://patrolbot.local/contracts/runtime-controls.schema.json",
+  "title": "Runtime Controls v1 bounded requests",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "version",
+        "operation",
+        "request_id"
+      ],
+      "properties": {
+        "contract": {
+          "const": "patrolbot-runtime-controls"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "operation": {
+          "const": "read"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "version",
+        "operation",
+        "request_id",
+        "state_generation",
+        "target",
+        "values"
+      ],
+      "properties": {
+        "contract": {
+          "const": "patrolbot-runtime-controls"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "operation": {
+          "const": "set"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "state_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "target": {
+          "const": "manual"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "linear_m_s",
+            "angular_rad_s"
+          ],
+          "properties": {
+            "linear_m_s": {
+              "type": "number",
+              "minimum": 0.05,
+              "maximum": 0.3
+            },
+            "angular_rad_s": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 0.7
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "version",
+        "operation",
+        "request_id",
+        "state_generation",
+        "target",
+        "values"
+      ],
+      "properties": {
+        "contract": {
+          "const": "patrolbot-runtime-controls"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "operation": {
+          "const": "set"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "state_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "target": {
+          "const": "navigation"
+        },
+        "values": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "profile"
+              ],
+              "properties": {
+                "profile": {
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "custom_m_s"
+              ],
+              "properties": {
+                "custom_m_s": {
+                  "type": "number",
+                  "minimum": 0.08,
+                  "maximum": 0.3
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "version",
+        "operation",
+        "request_id",
+        "state_generation",
+        "target",
+        "values"
+      ],
+      "properties": {
+        "contract": {
+          "const": "patrolbot-runtime-controls"
+        },
+        "version": {
+          "type": "integer",
+          "const": 1
+        },
+        "operation": {
+          "const": "reconcile"
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "state_generation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "target": {
+          "const": "manual"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": false,
+          "maxProperties": 0
+        }
+      }
+    }
+  ]
+}

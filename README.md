@@ -54,3 +54,6 @@ python -B docker/run-portable-review-tests.py
 The runner isolates pytest groups and runs all five ARIA-free C++ binaries.
 It excludes native ROS, live integration and ament lint suites before collection.
 See [Testing](docs/development/testing.md) for those separate checks.
+
+Before pushing, use the [local pre-push verifier](docker/README.md#local-pre-push-verification)
+to capture current source and run both complete gates with retained evidence.

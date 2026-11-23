@@ -1073,10 +1073,9 @@ int main(int argc, char** argv) {
              "Sonar enabled. Motors were NOT enabled at startup.");
 
   // ARIA already asks the base for its uARCS CONFIG packet during connection
-  // negotiation and parses it, but nothing has ever read the result. It carries
-  // the odometry calibration constants and the gyro configuration, none of which
-  // are recorded anywhere. Log them once; this reads memory ARIA already holds
-  // and issues no new command to the base.
+  // negotiation. Record the cached calibration and firmware-reported limits,
+  // then distinguish those from ARIA's effective host-side settings. Reading
+  // these getters issues no command to the base.
   {
     const ArRobotConfigPacketReader* config = robot.getOrigRobotConfig();
     int waitedMs = 0;
@@ -1098,11 +1097,32 @@ int main(int argc, char** argv) {
                  config->getDriftFactor(), config->getHasGyro() ? 1 : 0,
                  config->getGyroType(), config->getGyroFWVersion(),
                  config->getGyroCW(), config->getGyroCCW());
+      const char* firmware = config->getFirmwareVersion();
+      ArLog::log(ArLog::Normal,
+                 "uARCS MOTION CONFIG: Firmware=%.32s TransVelTopMmS=%d "
+                 "TransVelMaxMmS=%d TransAccelMmS2=%d TransDecelMmS2=%d "
+                 "RotVelTopDegS=%d RotVelMaxDegS=%d RotAccelDegS2=%d "
+                 "RotDecelDegS2=%d",
+                 firmware[0] == '\0' ? "unknown" : firmware,
+                 config->getTransVelTop(), config->getTransVelMax(),
+                 config->getTransAccel(), config->getTransDecel(),
+                 config->getRotVelTop(), config->getRotVelMax(),
+                 config->getRotAccel(), config->getRotDecel());
+      ArLog::log(ArLog::Normal,
+                 "ARIA MOTION LIMITS: AbsoluteTransVelMaxMmS=%.1f "
+                 "TransVelMaxMmS=%.1f TransAccelMmS2=%.1f TransDecelMmS2=%.1f "
+                 "AbsoluteRotVelMaxDegS=%.1f RotVelMaxDegS=%.1f "
+                 "RotAccelDegS2=%.1f RotDecelDegS2=%.1f",
+                 robot.getAbsoluteMaxTransVel(), robot.getTransVelMax(),
+                 robot.getTransAccel(), robot.getTransDecel(),
+                 robot.getAbsoluteMaxRotVel(), robot.getRotVelMax(),
+                 robot.getRotAccel(), robot.getRotDecel());
       robot.unlock();
     } else {
       ArLog::log(ArLog::Terse,
                  "uARCS CONFIG: packet did not arrive within 3000 ms; "
                  "calibration constants unknown.");
+      ArLog::log(ArLog::Terse, "uARCS MOTION CONFIG: unavailable");
     }
   }
 

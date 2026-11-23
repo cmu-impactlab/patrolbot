@@ -114,7 +114,21 @@ runtime directory must already exist; the bind mount will not create a fake
 empty directory if supervisor installation is missing. The
 supervisor restarts existing containers without recreating them, preserving socket
 access across its own reset. The web bridge advertises `software_reset` only when
-`PATROLBOT_RESET_SOCKET` is configured and the local management configuration is present.
+either `WEB_BRIDGE_ENABLE_COMMANDS=1` (normal operation) or the separate explicit
+`WEB_BRIDGE_ENABLE_RESET=1` opt-in is set, `PATROLBOT_RESET_SOCKET` is configured,
+and the supervisor answers successfully. For reset-only maintenance set
+`WEB_BRIDGE_ENABLE_COMMANDS=0` and `WEB_BRIDGE_ENABLE_RESET=1` in `docker/.env`.
+Both switches default to `0`: the socket mount alone does not enable reset, and
+existing read-only deployments stay read-only. Reset-only constructs no motion
+executor or manual drive adapter; drive, undock, motor power, charge release,
+LiDAR changes and all other commands remain disabled. Existing operator
+authorization and explicit confirmation are still required. The bridge receives
+no Docker/SSH access; the fixed-operation supervisor remains the sole executor.
+
+This dashboard route requires a reachable web bridge. It cannot recover a bridge
+that is down; that needs the separately authorized host maintenance procedure.
+Status survives bridge restarts, but requests are never replayed or automatically
+retried. Unknown outcomes need reconciliation or a new explicitly confirmed reset.
 Mount the directory rather than the socket inode so listener restarts remain
 reachable. Preserve that runtime directory across systemd restarts with
 `RuntimeDirectoryPreserve=restart`; replacing it leaves an existing container

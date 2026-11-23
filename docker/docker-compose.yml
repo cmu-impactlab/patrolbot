@@ -105,6 +105,7 @@ services:
       WEB_BRIDGE_SERVER_URL: "${WEB_BRIDGE_SERVER_URL:-}"
       WEB_BRIDGE_TOKEN: "${WEB_BRIDGE_TOKEN:-}"
       WEB_BRIDGE_ENABLE_COMMANDS: "${WEB_BRIDGE_ENABLE_COMMANDS:-0}"
+      WEB_BRIDGE_ENABLE_RESET: "${WEB_BRIDGE_ENABLE_RESET:-0}"
       # Standard commissioned management integration, not a deployment overlay.
       # Availability/authorization still come from the host supervisor and UI.
       PATROLBOT_RESET_SOCKET: /run/patrolbot-system-reset/supervisor.sock

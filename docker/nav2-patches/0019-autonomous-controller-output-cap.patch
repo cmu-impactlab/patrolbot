@@ -1,0 +1,93 @@
+diff --git a/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp b/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp
+index c0c9a54..c25e534 100644
+--- a/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp
++++ b/nav2_regulated_pure_pursuit_controller/include/nav2_regulated_pure_pursuit_controller/regulated_pure_pursuit_controller.hpp
+@@ -221,6 +221,9 @@ protected:
+   bool finished_cancelling_ = false;
+   bool is_rotating_to_heading_ = false;
+   bool has_reached_xy_tolerance_ = false;
++  bool patrolbot_output_cap_enabled_ = false;
++  double patrolbot_output_cap_linear_ = 0.22;
++  double patrolbot_output_cap_angular_ = 0.70;
+ 
+   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::Path>> global_path_pub_;
+   std::shared_ptr<rclcpp_lifecycle::LifecyclePublisher<geometry_msgs::msg::PointStamped>>
+diff --git a/nav2_regulated_pure_pursuit_controller/src/regulated_pure_pursuit_controller.cpp b/nav2_regulated_pure_pursuit_controller/src/regulated_pure_pursuit_controller.cpp
+index fe85215..c44146a 100644
+--- a/nav2_regulated_pure_pursuit_controller/src/regulated_pure_pursuit_controller.cpp
++++ b/nav2_regulated_pure_pursuit_controller/src/regulated_pure_pursuit_controller.cpp
+@@ -14,6 +14,7 @@
+ // limitations under the License.
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <string>
+ #include <limits>
+ #include <memory>
+@@ -26,6 +27,7 @@
+ #include "nav2_util/node_utils.hpp"
+ #include "nav2_util/geometry_utils.hpp"
+ #include "nav2_costmap_2d/costmap_filters/filter_values.hpp"
++#include "rcl_interfaces/msg/parameter_descriptor.hpp"
+ 
+ using std::hypot;
+ using std::min;
+@@ -53,6 +55,32 @@ void RegulatedPurePursuitController::configure(
+   plugin_name_ = name;
+   logger_ = node->get_logger();
+ 
++  // Fixed at configuration time. Dynamic RPP parameters and SpeedLimit may
++  // adjust the requested speed, but cannot change this output boundary.
++  rcl_interfaces::msg::ParameterDescriptor cap_descriptor;
++  cap_descriptor.read_only = true;
++  const auto cap_key = plugin_name_ + ".patrolbot_output_cap.";
++  const auto declare_cap = [&](const std::string & key, const rclcpp::ParameterValue & value) {
++      if (!node->has_parameter(key)) {
++        node->declare_parameter(key, value, cap_descriptor);
++      }
++      if (!node->describe_parameter(key).read_only) {
++        throw nav2_core::ControllerException("PatrolBot path cap parameter must be read only");
++      }
++    };
++  declare_cap(cap_key + "enabled", rclcpp::ParameterValue(false));
++  declare_cap(cap_key + "linear_m_s", rclcpp::ParameterValue(0.22));
++  declare_cap(cap_key + "angular_rad_s", rclcpp::ParameterValue(0.70));
++  patrolbot_output_cap_enabled_ = node->get_parameter(cap_key + "enabled").as_bool();
++  patrolbot_output_cap_linear_ = node->get_parameter(cap_key + "linear_m_s").as_double();
++  patrolbot_output_cap_angular_ = node->get_parameter(cap_key + "angular_rad_s").as_double();
++  if (!std::isfinite(patrolbot_output_cap_linear_) || patrolbot_output_cap_linear_ < 0.0 ||
++    patrolbot_output_cap_linear_ > 0.26 || !std::isfinite(patrolbot_output_cap_angular_) ||
++    patrolbot_output_cap_angular_ < 0.0 || patrolbot_output_cap_angular_ > 0.70)
++  {
++    throw nav2_core::ControllerException("PatrolBot path cap exceeds the commissioned bounds");
++  }
++
+   // Handles storage and dynamic configuration of parameters.
+   // Returns pointer to data current param settings.
+   param_handler_ = std::make_unique<ParameterHandler>(
+@@ -271,6 +299,25 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
+     angular_vel = linear_vel * regulation_curvature;
+   }
+ 
++  if (patrolbot_output_cap_enabled_) {
++    if (!std::isfinite(linear_vel) || linear_vel < 0.0 || !std::isfinite(angular_vel)) {
++      throw nav2_core::NoValidControl("PatrolBot path cap requires a finite forward command");
++    }
++    const double scale = min(
++      linear_vel > patrolbot_output_cap_linear_ ? patrolbot_output_cap_linear_ / linear_vel : 1.0,
++      abs(angular_vel) > patrolbot_output_cap_angular_ ?
++      patrolbot_output_cap_angular_ / abs(angular_vel) : 1.0);
++    linear_vel *= scale;
++    angular_vel *= scale;
++    // If rounding put either axis outside its bound, stop both axes together.
++    if (linear_vel > patrolbot_output_cap_linear_ ||
++      abs(angular_vel) > patrolbot_output_cap_angular_)
++    {
++      linear_vel = 0.0;
++      angular_vel = 0.0;
++    }
++  }
++
+   // Collision checking on this velocity heading
+   const double & carrot_dist = hypot(carrot_pose.pose.position.x, carrot_pose.pose.position.y);
+   if (params_->use_collision_detection &&

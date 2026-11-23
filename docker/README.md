@@ -252,3 +252,62 @@ ls -1dt ~/backups/*/ | tail -n +3 | xargs -r rm -rf   # keep the 2 newest
 
 Do not run Docker and the old bare-metal services simultaneously. Joystick and
 Nav2 goal tests require a clear robot area and an operator at the deadman/E-stop.
+
+## Local pre-push verification
+
+Run from a quiet checkout before every push (no Git hook is installed):
+
+```bash
+python3 -B docker/local-pre-push.py \
+  --results /absolute/path/outside-checkout/pre-push-001 \
+  --python /absolute/path/to/test-venv/bin/python \
+  --image "$PATROLBOT_NATIVE_IMAGE"
+```
+
+Default `--gate both` runs the **full** existing portable runner and native
+functional gate, continuing to native after a portable failure. `--gate portable`
+or `--gate native` explicitly selects one; this is partial verification. The
+portable interpreter needs `contracts/requirements-test.txt`, plus the host C++
+toolchain/Make. `--python` defaults to the calling interpreter; `--image` defaults
+to `PATROLBOT_NATIVE_IMAGE`. Missing tools/images/dependencies fail; nothing is
+installed, pulled, retried, or skipped by this wrapper. No live cutover is included.
+
+The snapshot contains current working-tree bytes of tracked and nonignored
+untracked files, including unstaged edits and deletions, rather than just HEAD or
+the index. Ignored paths are excluded. Unexpected credential paths, symlinks,
+and special files fail closed. Keep credentials in ignored files: arbitrary
+secrets inside source files cannot be detected.
+Do not edit during capture; rerun after any source change. The normalized
+`source.tar`, SHA-256 manifest and HEAD identify exactly what was tested. The
+results directory must be new and outside the checkout; it is created with
+owner-only access because evidence includes source and logs.
+
+Portable compilation runs in a disposable source copy, with `MAKEFLAGS=-j2` and
+a 30-minute deadline. Its combined log, exit status and hardware test artifacts
+are retained. Native runs against the captured source mounted read-only, copies
+it into disposable `/work`, and rebuilds interfaces, bridge, dock manager and
+navigation before invoking `native_ci_gate.py` without diagnostic selectors.
+There is no writable checkout mount. The cached image is resolved to its immutable
+ID without pulling. It uses the standard local Unix socket
+(`/var/run/docker.sock`), not a configured remote Docker context. The container
+uses no network, private IPC, localhost DDS, no devices,
+no capabilities, a read-only root, 2 CPUs, 4 GiB RAM/no extra swap, 512 PIDs, and
+a 30-minute outer deadline. `/tmp` remains noexec; only the disposable 2 GiB
+`/work` tmpfs permits writable execution for compiler probes/generated binaries.
+The named container is removed on completion/timeout/interruption. Hard host or
+process termination may require manual removal of the name in `native/result.json`.
+
+`summary.json` records actual aggregate/gate exits (nonzero on failure), snapshot
+identity and errors. Each gate has `result.json` with its exact command, exit and
+time, plus `output.log`; native also retains image inspection, `build.log`, colcon
+logs, per-suite pytest/JUnit/events/source inventories/summaries and ROS logs under
+`native/tests/`. Build failure prevents native tests and remains a failure. Native
+suite deadlines and evidence checks remain those of the existing gate. Disposable
+build/install directories are removed; retained evidence is never overwritten.
+
+Offline results depend on the cached image's ROS/Nav2/pytest/dependency versions.
+Candidate package sources/interfaces are rebuilt, but dependency freshness and
+hosted CI's current image are **not** verified: an old cache can differ from CI
+(e.g. launch-testing collection hooks). Refresh the dependency image separately
+when network access is authorized; this runner never performs that refresh and
+does not claim lint, robot, deployment or live-stack validation.

@@ -46,6 +46,7 @@ class EpochRuntime(MapRuntimeMixin):
         self._phase = 'wait-localization-manager'
         self._future = None
         self._future_kind = None
+        self._lifecycle_outcome_unknown = False
         self._deadline = None
         self._failed = False
         self._navigation_ready = False
@@ -186,6 +187,8 @@ class EpochRuntime(MapRuntimeMixin):
                 return False
             if self.tuning_hold:
                 return False
+            if self.mutation_unresolved:
+                return False
             if getattr(self, '_tuning_nav_pending', False):
                 return False
             if not self.node._lidar_ready():
@@ -325,6 +328,8 @@ class EpochRuntime(MapRuntimeMixin):
                 and (
                     self.maps.stage != 'wait-localization'
                     or self.stamp_ns(message) != self.maps.seed_stamp
+                    or self.maps.token.origin != self.recovery.token
+                    or self.maps.token.session != self.guard.session
                 )
             ):
                 return
@@ -387,6 +392,14 @@ class EpochRuntime(MapRuntimeMixin):
     def pose(self, message):
         with self.lock:
             if self.undock_hold:
+                return
+            if self.maps and self.maps.hold and (
+                self.maps.stage == 'failed'
+                or self.maps.seed_stamp is None
+                or self.maps.token.origin != self.recovery.token
+                or self.maps.token.session != self.guard.session
+                or self.stamp_ns(message) <= self.maps.seed_stamp
+            ):
                 return
             if (
                 not self.node._lidar_ready()
@@ -487,6 +500,14 @@ class EpochRuntime(MapRuntimeMixin):
             if not self.node._lidar_ready():
                 return
             stamp = self.stamp_ns(message)
+            if self.maps and self.maps.hold and (
+                self.maps.stage == 'failed'
+                or self.maps.seed_stamp is None
+                or stamp != self.maps.seed_stamp
+                or self.maps.token.origin != self.recovery.token
+                or self.maps.token.session != self.guard.session
+            ):
+                return
             if (
                 message.header.frame_id != 'map'
                 or not self.streams_allowed
@@ -507,6 +528,15 @@ class EpochRuntime(MapRuntimeMixin):
         )
 
     def _request(self, phase):
+        try:
+            self._request_stage(phase)
+        except Exception as exc:
+            self._lifecycle_outcome_unknown |= self._future_kind == 'mutation'
+            self._failed = True
+            self.node.get_logger().error(
+                f'AMCL epoch dispatch outcome unknown; recovery held: {exc}')
+
+    def _request_stage(self, phase):
         self._future_kind = (
             'read-only' if phase in ('wait-localization-manager', 'inspect') else 'mutation'
         )
@@ -555,6 +585,8 @@ class EpochRuntime(MapRuntimeMixin):
             self._poll_tf_readiness()
             self.poll_navigation_idle()
             self.tick_tuning_map_gate()
+            if getattr(self, '_tuning_gate_outcome_unknown', False):
+                return
             if self.tick_map():
                 return
             self.tick_startup_map()
@@ -584,13 +616,33 @@ class EpochRuntime(MapRuntimeMixin):
                         # not start overlapping transitions or cancel-and-retry.
                     return
                 future, self._future = self._future, None
+                future_kind = self._future_kind
                 self._future_kind = None
+                # An exceptional response cannot establish that a mutation has
+                # stopped executing, even when its old origin was superseded.
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    self._lifecycle_outcome_unknown |= future_kind == 'mutation'
+                    self._failed = True
+                    self.node.get_logger().error(
+                        f'AMCL epoch response unknown; recovery held: {exc}')
+                    return
+                if (
+                    future_kind == 'mutation'
+                    and self._phase != 'reset-parameters'
+                    and getattr(result, 'success', False) is not True
+                ):
+                    self._lifecycle_outcome_unknown = True
+                    self._failed = True
+                    self.node.get_logger().error(
+                        'AMCL lifecycle mutation completion unconfirmed; recovery held')
+                    return
                 if token != self._token:
                     self._phase = 'wait-localization-manager'
                     self._failed = False
                 else:
                     try:
-                        result = future.result()
                         if self._phase == 'wait-localization-manager':
                             if result.success:
                                 self._phase = 'inspect'
@@ -603,6 +655,7 @@ class EpochRuntime(MapRuntimeMixin):
                                 raise RuntimeError('AMCL reset parameters refused')
                             self._phase = 'configure'
                         elif not result.success:
+                            self._lifecycle_outcome_unknown |= future_kind == 'mutation'
                             raise RuntimeError('lifecycle transition refused')
                         elif self._phase == 'pause-navigation':
                             self._phase = 'resume-navigation'
@@ -629,6 +682,8 @@ class EpochRuntime(MapRuntimeMixin):
                             f'AMCL epoch reset failed; recovery held: {exc}'
                         )
             if not self.guard.ready or token is None:
+                return
+            if self._lifecycle_outcome_unknown:
                 return
             if token != self._token:
                 self._token = token

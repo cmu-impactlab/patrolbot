@@ -87,6 +87,17 @@ def _namespace():
 _BRIDGE = _namespace()
 
 
+def mutation_owner(**fields):
+    # Exercise the shared production fence even in these ROS-free node doubles.
+    methods = _class_methods(PACKAGE / 'map_runtime.py', 'MapRuntimeMixin',
+                             {'mutation_unresolved', 'tuning_gate_unresolved'})
+    namespace = {}
+    exec(compile(ast.Module(body=methods, type_ignores=[]),
+                 str(PACKAGE / 'map_runtime.py'), 'exec'), namespace)
+    owner = type('MutationOwner', (NS,), {m.name: namespace[m.name] for m in methods})
+    return owner(_lifecycle_outcome_unknown=False, **fields)
+
+
 class RecordingSocket:
     def __init__(self):
         self.writes = []
@@ -120,7 +131,7 @@ def make_bridge(
 ):
     """Stand-in node carrying exactly the fields the real callbacks read."""
     now = time.monotonic()
-    epoch = NS(
+    epoch = mutation_owner(
         lock=threading.RLock(),
         commands_allowed=commands_allowed,
         undock_hold=undock_hold,
@@ -216,6 +227,29 @@ def test_settled_failed_map_still_admits_manual_drive():
     assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
 
 
+@pytest.mark.parametrize('unavailable', [
+    {'map_error': 'map catalog unavailable'},
+    {'maps_present': False},
+    {'failed': True},  # Settled error, not an executing mutation.
+])
+def test_f710_remains_available_when_localization_is_unavailable(unavailable):
+    bridge = make_bridge(commands_allowed=False, manual_age=0.1,
+                         web_manual_age=None, **unavailable)
+    assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
+    assert not bridge._epoch.commands_allowed
+    bridge._manual_active_at = time.monotonic() - 1.0
+    assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
+
+
+@pytest.mark.parametrize('latch', ['_map_outcome_unknown', '_lifecycle_outcome_unknown',
+                                   '_tuning_gate_outcome_unknown'])
+def test_unknown_owner_blocks_f710_even_after_a_settled_failure_flag(latch):
+    bridge = make_bridge(commands_allowed=False, manual_age=0.1, maps_present=False, failed=True)
+    setattr(bridge._epoch, latch, True)
+    assert drive(bridge, linear=0.05) == []
+    assert drive(bridge) == ['DRIVE:0.0:0.0\n']
+
+
 def test_read_only_readiness_future_does_not_block_manual_drive():
     bridge = make_bridge(commands_allowed=False, manual_age=0.0, future='read-only')
     assert drive(bridge, linear=0.05) == ['DRIVE:0.05:0.0\n']
@@ -229,14 +263,11 @@ def test_read_only_readiness_future_does_not_block_manual_drive():
         {'raw_odom_age': 1.0},
         {'pose_received': False},
         {'undock_hold': True},
-        {'map_error': 'map catalog unavailable'},
-        {'maps_present': False},
         {'maps_hold': True, 'maps_stage': 'hold'},
         {'maps_hold': True, 'maps_stage': 'wait-localization'},
         {'map_goal': True},
         {'map_future': True},
         {'future': 'mutation'},
-        {'failed': True},
         {'tuning_hold': True},
     ],
 )

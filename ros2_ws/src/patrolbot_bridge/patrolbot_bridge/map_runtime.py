@@ -30,12 +30,21 @@ def map_identity(grid):
 class MapRuntimeMixin:
     # Bounded observation of the single requested stationary scan update.
     MAP_REFRESH_TIMEOUT = 5.0
+    # Never evict a consumed request: eviction would permit an old replay.
+    MAP_REQUEST_LIMIT = 4096
 
     def init_maps(self):
         self._map_error = ''
         self.maps = None
         self._map_goal = None
+        self._map_action_pending = False
+        self._map_refusal = None
+        self._map_seen_requests = set()
         self._map_future = None
+        self._map_future_owner = None
+        self._map_future_step = None
+        self._map_future_mutation = False
+        self._map_outcome_unknown = False
         self._map_step = None
         self._map_identity = None
         self._map_deadline = None
@@ -49,6 +58,7 @@ class MapRuntimeMixin:
         self._tuning_nav_pending = False
         self._tuning_nav_reserved = False
         self._tuning_map_probe = None
+        self._tuning_gate_outcome_unknown = False
         self._tuning_nav_release = self.node.create_client(SetBool, '/bt_navigator/tuning_hold')
         try:
             catalog = MapCatalog(
@@ -157,7 +167,10 @@ class MapRuntimeMixin:
         map, but the navigator's atomic goal gate and core DRIVE admission stay
         closed until that exact map identity is confirmed. No pose is injected.
         """
-        if not getattr(self, '_tuning_nav_pending', False):
+        # Map admission excludes pending gate mutations. Do not start another
+        # one until the map action publishes its terminal result and identity.
+        if (not getattr(self, '_tuning_nav_pending', False)
+                or self._tuning_gate_outcome_unknown or self._map_action_pending):
             return
         if not getattr(self, '_tuning_nav_reserved', False):
             future = self._tuning_map_probe
@@ -169,13 +182,17 @@ class MapRuntimeMixin:
                     if not future.result().success:
                         return
                 except Exception:
+                    self._tuning_gate_outcome_unknown = True
                     return
                 self._tuning_nav_reserved = True
                 self._tuning_map_phase = 'global-map'
             elif self._tuning_nav_release.service_is_ready():
                 request = SetBool.Request()
                 request.data = True
-                self._tuning_map_probe = self._tuning_nav_release.call_async(request)
+                try:
+                    self._tuning_map_probe = self._tuning_nav_release.call_async(request)
+                except Exception:
+                    self._tuning_gate_outcome_unknown = True
                 return
             else:
                 return
@@ -198,13 +215,40 @@ class MapRuntimeMixin:
                     self._tuning_nav_pending = False
                     return
             except Exception:
+                # Read-only map probes may retry; a gate mutation may still run.
+                self._tuning_gate_outcome_unknown |= self._tuning_map_phase == 'release'
                 return
         if self._tuning_map_phase == 'global-map' and self._global_map.service_is_ready():
-            self._tuning_map_probe = self._global_map.call_async(Trigger.Request())
+            try:
+                self._tuning_map_probe = self._global_map.call_async(Trigger.Request())
+            except Exception:
+                return
         elif self._tuning_map_phase == 'release' and self._tuning_nav_release.service_is_ready():
             request = SetBool.Request()
             request.data = False
-            self._tuning_map_probe = self._tuning_nav_release.call_async(request)
+            try:
+                self._tuning_map_probe = self._tuning_nav_release.call_async(request)
+            except Exception:
+                self._tuning_gate_outcome_unknown = True
+
+    @property
+    def tuning_gate_unresolved(self):
+        return bool(
+            getattr(self, '_tuning_gate_outcome_unknown', False)
+            or (getattr(self, '_tuning_map_probe', None) is not None and (
+                not self._tuning_nav_reserved or self._tuning_map_phase == 'release'))
+        )
+
+    @property
+    def mutation_unresolved(self):
+        """Caller holds the epoch lock; settled failures alone are not owners."""
+        return bool(
+            getattr(self, '_map_outcome_unknown', False)
+            or self._lifecycle_outcome_unknown
+            or self.tuning_gate_unresolved
+            or getattr(self, '_map_future', None) is not None
+            or (self._future is not None and self._future_kind != 'read-only')
+        )
 
     @property
     def map_hold(self):
@@ -214,25 +258,57 @@ class MapRuntimeMixin:
 
     def _map_accept(self, request):
         with self.lock:
-            if getattr(self, 'tuning_hold', False):
-                return GoalResponse.REJECT
-            if self.undock_hold:
-                self.node._undock_turn.revoke('map localization requested during undock')
-                return GoalResponse.REJECT
-            if (
-                not self.node._lidar_ready()
-                or self._map_error
-                or self.maps is None
-                or self._map_goal is not None
-                or self._future is not None
-                or self._map_future is not None
-                or not self.guard.ready
-                or self.recovery.stage not in (EpochRecovery.READY, EpochRecovery.WAIT_SEED)
-                or self._navigation_status
-                or self._navigation_idle_at is None
-                or not 0 <= time.monotonic() - self._navigation_idle_at <= 0.5
+            recordable = len(request.request_id) == 36
+            # Reserve even diagnostic-only actions through their terminal result.
+            # In particular, do not admit a second goal before execute starts.
+            if self._map_action_pending or self._map_goal is not None or (
+                self.maps and self.maps.stage not in ('idle', 'ready', 'failed')
             ):
+                if recordable and len(self._map_seen_requests) < self.MAP_REQUEST_LIMIT:
+                    self._map_seen_requests.add(request.request_id)
                 return GoalResponse.REJECT
+            if request.request_id in self._map_seen_requests:
+                return self._map_refuse(
+                    request, 'request already consumed; submit a new explicit request_id')
+            if not recordable:
+                return self._map_refuse(request, 'request_id must be a canonical UUID')
+            if len(self._map_seen_requests) >= self.MAP_REQUEST_LIMIT:
+                return self._map_refuse(
+                    request, 'map request history full; explicit stack recovery required')
+            # Even a refused envelope must never become a future mutation when
+            # telemetry recovers or a delayed transport replay reaches us.
+            self._map_seen_requests.add(request.request_id)
+            if getattr(self, 'tuning_hold', False):
+                return self._map_refuse(request, 'tuning activation owns the robot')
+            if self.undock_hold:
+                return self._map_refuse(request, 'undock owns the robot')
+            if not self.node._lidar_ready():
+                return self._map_refuse(request, 'fresh ready LiDAR required')
+            if self._map_error or self.maps is None:
+                return self._map_refuse(request, 'map state unavailable: ' + self._map_error)
+            if self._future is not None:
+                return self._map_refuse(request, 'epoch lifecycle request pending; hold retained')
+            if getattr(self, '_lifecycle_outcome_unknown', False):
+                return self._map_refuse(
+                    request, 'epoch lifecycle outcome unknown; stack recovery required')
+            if self.tuning_gate_unresolved:
+                return self._map_refuse(
+                    request, 'tuning navigation gate mutation unresolved; '
+                    'stack recovery required if outcome unknown; hold retained')
+            if (
+                not self.guard.ready or self.recovery.token is None
+                or self.guard.epoch != self.recovery.token.epoch
+                or self.recovery.stage == EpochRecovery.WAIT_ORIGIN
+            ):
+                return self._map_refuse(request, 'trusted odometry origin/transport required')
+            if self._navigation_status:
+                return self._map_refuse(request, 'navigation owns the robot')
+            problem = self.navigation_idle_problem()
+            if problem:
+                return self._map_refuse(request, problem)
+            problem = self._map_settlement_problem()
+            if problem:
+                return self._map_refuse(request, problem)
             pose = request.pose.pose
             q = pose.orientation
             values = (
@@ -248,9 +324,14 @@ class MapRuntimeMixin:
             if (
                 not all(math.isfinite(v) for v in values)
                 or abs(sum(v * v for v in (q.x, q.y, q.z, q.w)) - 1) > 1e-3
+                or abs(pose.position.z) > 1e-7
+                or abs(q.x) > 1e-7 or abs(q.y) > 1e-7
                 or not valid_planar_covariance(request.pose.covariance)
             ):
-                return GoalResponse.REJECT
+                return self._map_refuse(
+                    request,
+                    'finite planar map pose, unit quaternion and valid covariance required',
+                )
             now = time.monotonic()
             with (
                 self.node._state_lock,
@@ -258,11 +339,12 @@ class MapRuntimeMixin:
                 self.node._control_lock,
                 self.node._undock_goal_lock,
             ):
-                age = max(
-                    now - self.node._pose_at,
-                    now - self.node._flags_at,
-                    now - self.node._charge_state_at,
-                )
+                problem = self._map_base_problem(now)
+                if problem:
+                    return self._map_refuse(request, problem)
+                odom_at, vx, vth = self._map_odometry(now)
+                age = max(now - stamp for stamp in (
+                    odom_at, self.node._flags_at, self.node._charge_state_at))
                 try:
                     self.maps.begin(
                         request.request_id,
@@ -273,20 +355,37 @@ class MapRuntimeMixin:
                         self.recovery.token,
                         self.guard.session,
                         age,
-                        self.node._vx,
-                        self.node._vth,
+                        vx,
+                        vth,
                         self._navigation_status,
                         self.node._undock_active or self.node._undock_goal_reserved,
                         bool(self.node._pending_controls),
+                        retry_token=self.maps.token if self.maps.stage == 'failed' else None,
                     )
-                except ValueError:
-                    return GoalResponse.REJECT
-                    # The shared cmd_vel guard reads this hold under this same lock.
+                except ValueError as exc:
+                    return self._map_refuse(request, str(exc))
+                # The shared cmd_vel guard reads this hold under this same lock.
+            self._map_action_pending = True
+            self._map_refusal = None
             self._navigation_ready = False
             self._accepted_seed_stamp = None
             self._pending_pose = None
+            self._pending_pose_received_at = None
             self._map_request = request
             self._pose_anchor = None
+            self._map_seed_floor_ns = max(
+                self.node.get_clock().now().nanoseconds, self.recovery._seed_ns or 0)
+            self.withdraw(reset_odometry=False)
+            self._token = self.recovery.token
+            self._phase = 'map-recovery'
+            self._failed = False
+            self._map_identity = None
+            if self._tuning_nav_pending:
+                # A read-only costmap probe can be retired. A gate mutation was
+                # excluded above; never let old map evidence release admission.
+                self._tuning_map_probe = None
+                self._tuning_map_phase = 'global-map'
+                self._tuning_map_identity = None
             self._map_deadline = now + 110.0
             self._map_refresh_requested = False
             self._map_refresh_started = None
@@ -297,10 +396,95 @@ class MapRuntimeMixin:
             self.maps.advance(self.maps.token, 'hold')
             return GoalResponse.ACCEPT
 
+    def _map_refuse(self, request, reason):
+        """Accept only a serialized terminal REJECTED result, never a mutation."""
+        self._map_action_pending = True
+        self._map_refusal = (request.request_id, reason)
+        return GoalResponse.ACCEPT
+
+    def _map_odometry(self, now):
+        if self.recovery.stage == EpochRecovery.WAIT_RESET:
+            # Publication is deliberately blocked until reset. Raw evidence
+            # admits only the transaction, never TF, reset completion or pose.
+            manual = getattr(self.node, '_manual_undock', None)
+            if manual is not None and manual.raw.ready(
+                now=now, session=self.guard.session, epoch=self.guard.epoch
+            ):
+                return (manual.raw.received,
+                        manual.raw.sample.linear_x, manual.raw.sample.angular_z)
+            return None
+        if self.node._pose_received:
+            return self.node._pose_at, self.node._vx, self.node._vth
+        return None
+
+    def _map_base_problem(self, now):
+        # Caller holds state/pose locks. Check each age: max() hides future/NaN
+        # telemetry. An AMCL estimate and motor-disable are deliberately absent.
+        if not self.node._link_connected:
+            return 'base transport disconnected'
+        if self.node._fault_flags:
+            return 'hardware fault active'
+        odometry = self._map_odometry(now)
+        if odometry is None:
+            return 'fresh current-origin odometry required'
+        odom_at, vx, vth = odometry
+        if any(not 0 <= now - stamp <= 0.5 for stamp in (
+            odom_at, self.node._flags_at, self.node._charge_state_at
+        )):
+            return 'fresh base telemetry required (age outside [0, 0.5]s)'
+        if not all(math.isfinite(v) for v in (vx, vth)):
+            return 'finite base telemetry required'
+        if abs(vx) > 0.005 or abs(vth) > 0.01:
+            return 'stationary base required (linear <= 0.005m/s, angular <= 0.01rad/s)'
+        return ''
+
+    def _map_settlement_problem(self):
+        if self._map_outcome_unknown:
+            return 'map lifecycle/mutation outcome unknown; stack recovery required; hold retained'
+        future = self._map_future
+        if future is not None:
+            if self.maps.stage != 'failed' or not future.done():
+                return 'map service request pending; hold retained'
+            # A terminal response proves this request is no longer executing.
+            # Retire it WITHOUT invoking any old stage/readback/persistence code.
+            try:
+                response = future.result()
+            except Exception:
+                if self._map_future_mutation:
+                    self._map_outcome_unknown = True
+                    return (
+                        'map lifecycle/mutation outcome unknown; '
+                        'stack recovery required; hold retained'
+                    )
+            else:
+                if not self._map_response_settled(response):
+                    self._map_outcome_unknown = True
+                    return (
+                        'lifecycle mutation completion unconfirmed (negative response); '
+                        'outcome unknown; stack recovery required; hold retained'
+                    )
+            self._map_future = None
+            self._map_future_owner = None
+            self._map_future_step = None
+        return ''
+
+    def _map_response_settled(self, response):
+        # A lifecycle manager may return false after a downstream transition
+        # times out. The response alone is not proof that child work stopped.
+        # Atomic parameter refusal / LoadMap error / read-only observation do
+        # not carry that same ambiguity and can be reconciled explicitly.
+        if self._map_future_step in (
+            'pause', 'resume', 'deactivate', 'cleanup', 'configure', 'activate'
+        ):
+            return getattr(response, 'success', False) is True
+        return True
+
     def _map_cancel(self, goal):
         with self.lock:
             if (
-                self.maps
+                self._map_refusal is None
+                and self._map_action_pending
+                and self.maps
                 and self.maps.token
                 and self.maps.token.request_id == goal.request.request_id
             ):
@@ -309,12 +493,50 @@ class MapRuntimeMixin:
 
     def _map_execute(self, goal):
         with self.lock:
+            expected_id = (
+                self._map_refusal[0] if self._map_refusal is not None
+                else self.maps.token.request_id if self.maps and self.maps.token else None
+            )
+            if not self._map_action_pending or goal.request.request_id != expected_id:
+                # A retired execute callback cannot acquire/release a newer slot.
+                result = LocalizeOnMap.Result()
+                result.request_id = goal.request.request_id
+                result.code = result.REJECTED
+                result.message = 'retired map action execution ignored'
+                result.localized = False
+                result.map_activated = False
+                goal.abort()
+                return result
+            if self._map_refusal is not None:
+                request_id, reason = self._map_refusal
+                result = LocalizeOnMap.Result()
+                result.request_id = request_id
+                result.code = result.REJECTED
+                result.message = reason
+                result.localized = False
+                result.map_activated = False
+                active = self.maps.active if self.maps else None
+                result.active_map_id = active['map_id'] if active else ''
+                result.active_map_revision = active['revision'] if active else ''
+                if goal.is_cancel_requested:
+                    goal.canceled()
+                else:
+                    goal.abort()
+                self._map_refusal = None
+                self._map_action_pending = False
+                return result
             self._map_goal = goal
         while self.node.context.ok() and not self.node._stop_event.is_set():
             with self.lock:
                 tx = self.maps
                 if tx.stage not in ('ready', 'failed') and time.monotonic() > self._map_deadline:
                     tx.fail('map localization timed out')
+                if tx.stage == 'ready' and self.tuning_gate_unresolved:
+                    # An unexpected overlap makes the gate ordering unknown.
+                    # Preserve the future and fail closed, not on old evidence.
+                    self._tuning_gate_outcome_unknown = True
+                    tx.fail('tuning navigation gate overlapped map localization; '
+                            'stack recovery required')
                 feedback = LocalizeOnMap.Feedback()
                 feedback.request_id = goal.request.request_id
                 feedback.stage = tx.stage
@@ -362,10 +584,13 @@ class MapRuntimeMixin:
                     else:
                         goal.abort()
                     self._map_goal = None
+                    self._map_action_pending = False
                     return result
             time.sleep(0.1)
         with self.lock:
             self.maps.fail('bridge shutdown')
+            self._map_action_pending = False
+            self._map_goal = None
         goal.abort()
         result = LocalizeOnMap.Result()
         result.code = result.FAILED
@@ -380,23 +605,47 @@ class MapRuntimeMixin:
         if self._map_future is None:
             if not client.service_is_ready():
                 return False
-            self._map_future = client.call_async(request)
+            self._map_future_owner = self.maps.token
+            self._map_future_step = self._map_step
+            self._map_future_mutation = self._map_step not in (
+                'inspect', 'readback', 'amcl-map', 'costmap-map',
+                'startup-readback', 'startup-amcl',
+            )
+            try:
+                self._map_future = client.call_async(request)
+            except Exception:
+                self._map_outcome_unknown |= self._map_future_mutation
+                raise
             return False
         if not self._map_future.done():
             return False
         future, self._map_future = self._map_future, None
-        result = future.result()
+        if (self._map_future_owner != self.maps.token
+                or self._map_future_step != self._map_step):
+            self._map_outcome_unknown |= self._map_future_mutation
+            raise RuntimeError('retired map service response; hold retained')
+        try:
+            result = future.result()
+        except Exception:
+            self._map_outcome_unknown |= self._map_future_mutation
+            raise
+        if not self._map_response_settled(result):
+            self._map_outcome_unknown = True
+            raise RuntimeError(
+                'lifecycle mutation completion unconfirmed: ' + self._map_future_step)
         if not check(result):
             raise RuntimeError('map stage readback failed: ' + self._map_step)
-        self._map_step = next_step
+        if next_step is not None:
+            self._map_step = next_step
         return True
 
     def tick_map(self):
         """
         Return True while this transaction owns all lifecycle clients.
 
-        A pending timed-out mutation is never canceled/retried. Failure keeps
-        this owner and its hold until an explicit operator stack recovery.
+        Failure never starts work automatically. Only a new explicit request can
+        replace a settled failed owner, continuously retaining the motion hold.
+        Pending or unknown mutations cannot be unlocked by a timeout/retry.
         """
         tx = self.maps
         if tx is None or tx.stage in ('idle', 'ready'):
@@ -418,23 +667,7 @@ class MapRuntimeMixin:
             return True
         now = time.monotonic()
         with self.node._state_lock, self.node._pose_lock:
-            if (
-                not self.node._link_connected
-                or self.node._fault_flags
-                or self.node._undock_active
-                or any(
-                    not 0 <= now - stamp <= 0.5
-                    for stamp in (
-                        self.node._pose_at,
-                        self.node._flags_at,
-                        self.node._charge_state_at,
-                    )
-                )
-                or not math.isfinite(self.node._vx)
-                or not math.isfinite(self.node._vth)
-                or abs(self.node._vx) > 0.005
-                or abs(self.node._vth) > 0.01
-            ):
+            if self._map_base_problem(now) or self.node._undock_active:
                 tx.fail('fresh stationary base telemetry lost during map recovery')
                 return True
         if (
@@ -534,12 +767,8 @@ class MapRuntimeMixin:
             )
         elif step in ('amcl-map', 'costmap-map'):
             client = self._amcl_map if step == 'amcl-map' else self._global_map
-            if self._map_future is None:
-                if client.service_is_ready():
-                    self._map_future = client.call_async(Trigger.Request())
-            elif self._map_future.done():
-                r = self._map_future.result()
-                self._map_future = None
+
+            def consumed(r):
                 if r.success and r.message == self._map_identity:
                     if step == 'amcl-map':
                         self.map_activated_stamp_ns = self.node.get_clock().now().nanoseconds
@@ -559,6 +788,11 @@ class MapRuntimeMixin:
                         self._map_refresh_requested = True
                         self._map_refresh_deadline = time.monotonic() + self.MAP_REFRESH_TIMEOUT
                         self._map_step = 'refresh-localization'
+                return True
+
+            # This read-only poll may legitimately return not-yet-consumed.
+            # Its handler selects the next stage rather than a fixed next_step.
+            self._map_call(client, Trigger.Request(), None, consumed)
         elif step == 'refresh-localization':
             if self._map_refresh_started is None:
                 if not self._refresh_localization.service_is_ready():
@@ -579,6 +813,8 @@ class MapRuntimeMixin:
                 tx.advance(token, 'wait-tf')
                 self._map_step = 'seed'
         elif step == 'seed':
+            if self.node.get_clock().now().nanoseconds <= self._map_seed_floor_ns:
+                return
             msg = PoseWithCovarianceStamped()
             msg.header.frame_id = 'map'
             msg.header.stamp = self.node.get_clock().now().to_msg()
@@ -738,15 +974,14 @@ class MapRuntimeMixin:
 
                 self._map_call(self._get_map, GetMap.Request(), 'startup-amcl', readback)
             elif self._map_step == 'startup-amcl':
-                if self._map_future is None:
-                    if self._amcl_map.service_is_ready():
-                        self._map_future = self._amcl_map.call_async(Trigger.Request())
-                elif self._map_future.done():
-                    r = self._map_future.result()
-                    self._map_future = None
+
+                def consumed(r):
                     if r.success and r.message == self._map_identity:
                         self.maps.active = self._startup_map
                         self.map_activated_stamp_ns = self.node.get_clock().now().nanoseconds
                         self._map_step = None
+                    return True
+
+                self._map_call(self._amcl_map, Trigger.Request(), None, consumed)
         except Exception as exc:
             self._map_error = str(exc)

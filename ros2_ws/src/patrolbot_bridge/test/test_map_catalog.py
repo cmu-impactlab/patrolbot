@@ -127,3 +127,23 @@ def test_ordering_concurrency_activation_and_single_seed():
         assert transaction.hold
         transaction.advance(token, transaction.stage)
     assert not transaction.hold
+
+
+def test_explicit_failed_generation_replacement_never_drops_hold():
+    transaction = MapTransaction(MapCatalog(MAPS))
+    retired = begin(transaction)
+    transaction.fail('definite sensor failure with no pending lifecycle work')
+    replacement = '986e4515-5de8-4332-bb9a-7de5773ee93d'
+    with pytest.raises(ValueError, match='not been settled'):
+        begin(transaction, request_id=replacement)
+    with pytest.raises(ValueError, match='not been settled'):
+        begin(transaction, request_id=replacement, retry_token=object())
+    current = begin(transaction, request_id=replacement, retry_token=retired)
+    assert transaction.hold and transaction.stage == 'hold'
+    assert current.generation == retired.generation + 1
+    assert not transaction.advance(retired, 'hold')
+    assert not transaction.seeded(retired, 123)
+    assert transaction.seed_stamp is None
+    transaction.fail('new definite failure')
+    with pytest.raises(ValueError, match='consumed'):
+        begin(transaction, request_id=replacement, retry_token=current)

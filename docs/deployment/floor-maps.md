@@ -21,6 +21,33 @@ handling, or between-floor navigation is implemented.
   activation. The transaction never republishes its pose seed.
 - Cancellation, disconnected transport, stale/moving base telemetry, timeout,
   or partial failure retain the hold. No automatic rollback or old-goal resume.
+  A **new explicit** authorized Set location request can replace a failed
+  transaction after its service calls have definitively settled and current
+  transport/origin, idle navigation and fresh stationary hardware are proven.
+  It restarts the full pause/inspect/reset/map-readback sequence under a
+  continuous hold; it does not require a previous AMCL pose, a ready map or
+  disabled motors. Entering an estimate is not localization verification.
+  Pending calls retain ownership, even after timeout/cancel. An exceptional
+  mutation response/dispatch, or an unconfirmed negative lifecycle response,
+  is an unknown outcome and still requires separate
+  operator stack recovery; waiting longer does not clear it.
+  Request IDs, including refused/busy attempts, are single-use for the bridge
+  process lifetime. Retrying requires a fresh request ID and operator action.
+  The request history is bounded and never evicts old IDs. If it fills, the
+  bridge refuses new localization requests until explicit stack recovery.
+- A missing map catalog or a settled localization failure still blocks
+  autonomous navigation, but does not alone disable F710 manual drive. The
+  controller still requires fresh deadman and hardware evidence; pending or
+  unknown mutations, exclusive undock, and physical safety interlocks retain
+  their existing authority. The controller does not enable the motors.
+- Non-busy admission refusals use the existing action's terminal `REJECTED`
+  result and concrete `message`, with `localized=false` and
+  `map_activated=false`, without publishing a seed or invoking any mutation.
+  ROS goal acceptance here acknowledges result delivery, not acceptance of a
+  physical pose. The existing dashboard forwards this terminal message.
+  A concurrent map action still receives ROS goal rejection (no result payload);
+  its dashboard wording should say “map localization action busy; wait for its
+  terminal result, then explicitly retry”, not generic “preconditions”.
 - The durable `patrolbot-state` volume stores `active-map.json` atomically. An
   absent selection in an available volume defaults to Floor 2. Corrupt state,
   missing volume, unknown maps and changed revisions fail closed. Restart always

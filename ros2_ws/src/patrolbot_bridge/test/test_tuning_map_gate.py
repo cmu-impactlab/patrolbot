@@ -43,6 +43,7 @@ def make_map_gate():
     exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])),
                  str(SOURCE), 'exec'), namespace)
     owner = NS(_tuning_nav_pending=True, _tuning_nav_reserved=True,
+               _tuning_gate_outcome_unknown=False, _map_action_pending=False,
                node=NS(_tuning_navigation_released=lambda: None),
                guard=NS(ready=True), recovery=NS(stage='wait-seed'),
                _navigation_ready=False, _tuning_map_probe=None, _tuning_map_phase='global-map',

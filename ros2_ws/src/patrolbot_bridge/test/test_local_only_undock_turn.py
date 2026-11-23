@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from patrolbot_bridge.epoch_recovery import EpochRecovery
+from test_manual_drive_forwarding import mutation_owner
 
 
 def done(value):
@@ -56,10 +57,12 @@ def rig():
     recovery = EpochRecovery()
     recovery.observe_origin('00000000-0000-0000-0000-000000000001')
     recovery.reset_complete(recovery.token, 1)
-    epoch = NS(lock=threading.RLock(), guard=NS(ready=True, epoch='origin'), recovery=recovery,
-               tuning_hold=False, _future=None, _map_future=None, _map_goal=None,
-               maps=NS(hold=False), _failed=False, _navigation_ready=False,
-               _localization_active=Mock(), _get=Mock(), withdraw=Mock())
+    epoch = mutation_owner(
+        lock=threading.RLock(), guard=NS(ready=True, epoch='origin'), recovery=recovery,
+        tuning_hold=False, _future=None, _map_future=None, _map_goal=None,
+        maps=NS(hold=False), _failed=False, _navigation_ready=False,
+        _localization_active=Mock(), _get=Mock(), withdraw=Mock(),
+    )
     node._epoch = epoch
     node._state_lock = threading.RLock()
     node._pose_lock = threading.RLock()

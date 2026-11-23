@@ -61,13 +61,21 @@ class WatchdogCaptureTests(unittest.TestCase):
         allowed=function(ROOT/'ros2_ws/src/patrolbot_bridge/patrolbot_bridge/epoch_runtime.py',
                          'commands_allowed').fget
         allowed.__globals__.update(time=time, math=math)
-        runtime=SimpleNamespace(lock=threading.RLock(), tuning_hold=False, map_hold=False, undock_hold=False,
+        source=ROOT/'ros2_ws/src/patrolbot_bridge/patrolbot_bridge/map_runtime.py'
+        class EpochDouble(SimpleNamespace):
+            mutation_unresolved=function(source, 'mutation_unresolved')
+            tuning_gate_unresolved=function(source, 'tuning_gate_unresolved')
+
+        runtime=EpochDouble(lock=threading.RLock(), tuning_hold=False, map_hold=False, undock_hold=False,
             guard=SimpleNamespace(ready=True), recovery=SimpleNamespace(required=False),
-            _navigation_ready=True, first_tf_ns=1,
+            _navigation_ready=True, first_tf_ns=1, _lifecycle_outcome_unknown=False, _future=None,
             node=SimpleNamespace(_lidar_ready=lambda:True, _pose_lock=threading.Lock(),
                 _pose_at=time.monotonic(), _pose_received=True, _odom_tf_timeout=10.))
         self.assertTrue(allowed(runtime))
         runtime.recovery.required=True
+        self.assertFalse(allowed(runtime))
+        runtime.recovery.required=False
+        runtime._lifecycle_outcome_unknown=True
         self.assertFalse(allowed(runtime))
 
     def test_floor_capture_sensor_qos_accepts_best_effort_and_latched_tf(self):

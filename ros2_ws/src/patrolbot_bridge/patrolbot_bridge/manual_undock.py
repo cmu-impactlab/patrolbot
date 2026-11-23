@@ -107,8 +107,7 @@ class ManualUndockRuntime:
             return 'another undock or tuning operation owns the robot'
         if n._stop_event.is_set() or not self.sensors_ready():
             return 'bridge stopping or LiDAR unavailable'
-        if (e._failed or e._map_error or e._map_goal is not None or e._map_future is not None
-                or (e._future is not None and e._future_kind != 'read-only')
+        if (e._failed or e._map_error or e._map_goal is not None or e.mutation_unresolved
                 or (e.maps and e.maps.hold and e.maps.stage != 'failed')
                 or e._navigation_status or any(n._undock_turn.actions.values())):
             return 'navigation or a hardware/map/lifecycle mutation is active or unknown'
@@ -189,7 +188,8 @@ class ManualUndockRuntime:
                         or n._motor_disable_generation != motor_generation
                         or e.guard.epoch != epoch or not self.sensors_ready()
                         or n._estop_pressed or n._dock_state != 'DOCKED_CONFIRMED'
-                        or n._charge_state <= 0 or e.tuning_hold or n._stop_event.is_set()):
+                        or n._charge_state <= 0 or e.tuning_hold or e.mutation_unresolved
+                        or n._stop_event.is_set()):
                     raise RuntimeError('hardware ownership changed before dispatch')
                 n.sock.sendall(format_manual_undock_request(request_id))
             n.get_logger().info('Manual undock dispatched once: ' + request_id)

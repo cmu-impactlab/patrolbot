@@ -2,8 +2,11 @@
 Fail-closed map-localization ordering, owned by EpochRuntime.
 
 All acknowledgements are scoped to one request and origin/transport generation.
-A failed transaction remains held even if a late success arrives. This policy
-never publishes velocity, seeds, changes lifecycle state, or guesses rollback.
+A failed transaction remains held even if a late success arrives. Only the
+runtime owner, after proving settlement and fresh stationary admission, may
+replace that exact failed generation with a new explicit request, without an
+intermediate unheld state. This policy never publishes velocity, seeds, changes
+lifecycle state, or guesses rollback.
 """
 
 from dataclasses import dataclass
@@ -63,6 +66,7 @@ class MapTransaction:
         navigation,
         undock,
         hardware_busy,
+        retry_token=None,
     ):
         try:
             if str(UUID(request_id)) != request_id:
@@ -71,8 +75,14 @@ class MapTransaction:
             raise ValueError('request_id must be a canonical UUID') from None
         if not authorized:
             raise ValueError('operator authorization required')
-        if self.stage not in ('idle', 'ready') or request_id in self._seen:
-            raise ValueError('map recovery busy or request already consumed')
+        if request_id in self._seen:
+            raise ValueError('request already consumed; submit a new explicit request_id')
+        # Only the lifecycle owner can supply a settled failed generation.
+        # Never drop its hold through an intermediate idle/ready state.
+        if self.stage not in ('idle', 'ready') and not (
+            self.stage == 'failed' and self.token is not None and retry_token == self.token
+        ):
+            raise ValueError('map recovery busy; failed owner has not been settled')
         if origin is None or not all(math.isfinite(v) for v in (telemetry_age, linear, angular)):
             raise ValueError('base telemetry unavailable')
         if not 0 <= telemetry_age <= 0.5 or abs(linear) > 0.005 or abs(angular) > 0.01:

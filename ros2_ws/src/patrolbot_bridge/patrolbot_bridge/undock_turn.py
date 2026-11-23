@@ -286,8 +286,7 @@ class UndockTurnRuntime:
             ):
                 return False
             if (
-                (self.epoch._future is not None and self.epoch._future_kind != 'read-only')
-                or self.epoch._map_future is not None
+                self.epoch.mutation_unresolved
                 or self.epoch._map_goal is not None
                 or (self.epoch.maps and self.epoch.maps.hold)
                 or self.epoch._failed

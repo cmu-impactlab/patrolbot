@@ -2349,21 +2349,11 @@ class PatrolBotBridge(Node):
         manual = getattr(self, '_manual_undock', None)
         if manual is not None:
             raw_odom_ready = raw_odom_ready or manual.sensors_ready()
-        # A settled map (ready or failed) or no map at all allows manual
-        # DRIVE; an in-flight transaction or unknown map state does not.
-        map_blocked = bool(
-            epoch._map_error
-            or epoch.maps is None
-            or (epoch.maps.hold and epoch.maps.stage != 'failed')
-        )
-        # In-flight or unknown lifecycle/map mutation ownership blocks
-        # manual DRIVE; a read-only readiness probe does not.
-        mutation_blocked = bool(
-            epoch._failed
-            or epoch._map_goal is not None
-            or epoch._map_future is not None
-            or (epoch._future is not None and epoch._future_kind != 'read-only')
-        )
+        # Catalog/readback errors and settled epoch failures are not motion
+        # owners. Keep their autonomy holds, but do not gate the controller
+        # on localization when hardware evidence is good.
+        map_blocked = bool(epoch.maps and epoch.maps.hold and epoch.maps.stage != 'failed')
+        mutation_blocked = bool(epoch._map_goal is not None or epoch.mutation_unresolved)
         # Either human channel's fresh evidence counts; a channel that stops
         # reporting simply ages out. F710-over-dashboard ordering is enforced
         # by the mux priorities, not by this predicate.

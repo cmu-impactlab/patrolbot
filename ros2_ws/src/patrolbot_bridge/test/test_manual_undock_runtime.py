@@ -8,6 +8,8 @@ from types import ModuleType, SimpleNamespace as NS
 
 import pytest
 
+from test_manual_drive_forwarding import mutation_owner
+
 
 @pytest.fixture
 def runtime(monkeypatch):
@@ -40,7 +42,7 @@ def runtime(monkeypatch):
     def require_seed(stamp):
         recovery.stage, recovery.token = 'wait-seed', 'new'
     recovery.require_seed = require_seed
-    epoch = NS(
+    epoch = mutation_owner(
         lock=threading.RLock(), undock_hold=False, tuning_hold=False,
         _failed=False, _map_error='', _map_goal=None, _map_future=None,
         _future=None, _future_kind=None, maps=NS(hold=False, stage='ready'),
@@ -186,6 +188,41 @@ def test_session_changes_between_reservation_and_dispatch_never_move(runtime):
     r.thread.target()
     assert r.unknown and r.busy
     assert not any(w.startswith(b'MANUAL_UNDOCK:') for w in runtime.writes if isinstance(w, bytes))
+
+
+@pytest.mark.parametrize('owner', ['map', 'epoch', 'tuning', 'tuning-reserve', 'tuning-release'])
+def test_unresolved_shared_owner_refuses_hardware_manual_undock(runtime, owner):
+    r, n = runtime.obj, runtime.node
+    e = n._epoch
+    if owner == 'map':
+        e._map_outcome_unknown = True
+    elif owner == 'epoch':
+        e._lifecycle_outcome_unknown = True
+    elif owner == 'tuning':
+        e._tuning_gate_outcome_unknown = True
+    else:
+        e._tuning_map_probe = object()
+        e._tuning_nav_reserved = owner == 'tuning-release'
+        e._tuning_map_phase = owner.removeprefix('tuning-')
+    with e.lock:
+        r.start()
+    assert not r.busy and not n._undock_goal_reserved
+    assert not n._hardware_operation_lock.locked()
+    assert runtime.writes == []
+
+
+@pytest.mark.parametrize('owner', ['_map_outcome_unknown', '_lifecycle_outcome_unknown',
+                                   '_tuning_gate_outcome_unknown'])
+def test_unresolved_owner_before_final_dispatch_still_allows_safety_disable(runtime, owner):
+    r, n = runtime.obj, runtime.node
+    with n._epoch.lock:
+        r.start()
+    assert r.busy and n._hardware_operation_lock.locked()
+    setattr(n._epoch, owner, True)
+    r.thread.target()
+    assert r.busy and r.unknown and n._epoch.undock_hold
+    assert n._hardware_operation_lock.locked()
+    assert len(runtime.writes) == 1 and runtime.writes[0].startswith(b'MOTOR_DISABLE:')
 
 
 def test_controller_loss_does_not_set_cancellation_but_new_start_edge_does(runtime):

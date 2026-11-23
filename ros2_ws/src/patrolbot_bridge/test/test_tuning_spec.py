@@ -42,6 +42,26 @@ def test_producers_are_clamped_to_the_cap_not_raised():
         assert value <= cap + 1e-9
 
 
+def test_legacy_active_targets_are_not_replayed_as_a_fresh_edit():
+    # Historical nominal targets can be above the final cap. The commissioned
+    # startup generator clamps them; submitting the same values as new edits
+    # is deliberately refused. A speed UI migration must keep those paths
+    # separate and must not replay a pending draft as a replacement baseline.
+    active = {
+        'max_angular_rad_s': 0.70,
+        'nav2.controller.rotate_to_heading_angular_vel': 0.90,
+        'nav2.velocity_smoother.max_velocity_theta': 1.00,
+    }
+    nav = yaml.safe_load(spec.generated_artifacts(active, INDEX)['navigation.yaml'])
+    assert nav['controller_server']['ros__parameters']['FollowPath'][
+        'rotate_to_heading_angular_vel'] == 0.70
+    assert nav['velocity_smoother']['ros__parameters']['max_velocity'][2] == 0.70
+    problems = spec.validate_overrides(
+        INDEX, {}, [{'id': key, 'value': value} for key, value in active.items()])
+    assert len(problems) == 2
+    assert all(problem.startswith('dependency_violation: ') for problem in problems)
+
+
 def test_bringup_overlay_is_symmetric_with_zero_lateral():
     overlay = spec.bringup_overlay({'max_linear_m_s': 0.2, 'max_angular_rad_s': 0.4}, INDEX)
     params = overlay['teleop_velocity_smoother']['ros__parameters']

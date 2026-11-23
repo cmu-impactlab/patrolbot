@@ -129,6 +129,25 @@ class SafetyContractTest(unittest.TestCase):
         collision = self.params['collision_monitor']['ros__parameters']
         self.assertIs(collision['base_shift_correction'], False)
 
+    def test_autonomous_speed_baseline_matches_protected_forward_bands(self):
+        """Do not widen cruise or the smoother without reviewing protection."""
+        controller = self.params['controller_server']['ros__parameters']['FollowPath']
+        self.assertEqual(controller['desired_linear_vel'], 0.22)
+        smoother = self.params['velocity_smoother']['ros__parameters']
+        self.assertEqual(smoother['max_velocity'][0], 0.26)
+        collision = self.params['collision_monitor']['ros__parameters']
+        for name in ('front_velocity_stop', 'rear_velocity_stop'):
+            with self.subTest(polygon=name):
+                bands = collision[name]
+                self.assertEqual(bands['rotation_or_stopped']['linear_max'],
+                                 bands['forward']['linear_min'])
+                self.assertEqual(bands['forward']['linear_max'], smoother['max_velocity'][0])
+                # The monitor is upstream of the final 0.70 rad/s clamp.
+                self.assertGreaterEqual(bands['forward']['theta_max'],
+                                        smoother['max_velocity'][2])
+                self.assertLessEqual(bands['forward']['theta_min'],
+                                     smoother['min_velocity'][2])
+
     def test_undock_spin_matches_hardware_turn_cap(self):
         behavior = self.params['behavior_server']['ros__parameters']
         self.assertEqual(behavior['max_rotational_vel'], 0.7)

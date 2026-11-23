@@ -42,6 +42,7 @@ GROUPS = (
     'docker/tests',
     'docker/system-reset',
     'diagnostics/localization',
+    'diagnostics/navigation',
     'docker',
 )
 HARDWARE_TESTS = (

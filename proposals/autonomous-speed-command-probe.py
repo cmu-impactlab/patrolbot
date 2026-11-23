@@ -36,6 +36,7 @@ COMMAND = '/isolated_rpp_probe_cmd_vel'
 ODOM = '/isolated_rpp_probe_odom'
 SPEED_LIMIT = '/isolated_rpp_probe_speed_limit'
 SPEEDS = ('FollowPath.desired_linear_vel', 'FollowPath.rotate_to_heading_angular_vel')
+CAP_PREFIX = 'FollowPath.patrolbot_output_cap.'
 sys.path.insert(0, str(ROOT / 'ros2_ws/src/patrolbot_navigation/scripts'))
 
 from autonomous_speed_output import (  # noqa: E402
@@ -46,7 +47,7 @@ from autonomous_speed_output import (  # noqa: E402
 )
 
 
-def probe(node):
+def probe(node, cap_mode):
     def wait(future, label):
         rclpy.spin_until_future_complete(node, future, timeout_sec=4)
         assert future.done() and future.result() is not None, label
@@ -96,7 +97,7 @@ def probe(node):
         wx, wy, wz = twist.angular.x, twist.angular.y, twist.angular.z
         assert all(math.isfinite(v) for v in (vx, vy, vz, wx, wy, wz)), twist
         assert math.hypot(vx, vy, vz) <= 0.26 and math.hypot(wx, wy, wz) <= 0.70, twist
-        assert max(abs(v) for v in (vy, vz, wx, wy, wz)) < 1e-7, twist
+        assert max(abs(v) for v in (vy, vz, wx, wy)) < 1e-7, twist
         samples.append((vx, wz, time.monotonic()))
 
     node.create_subscription(Twist, COMMAND, observe, 10)
@@ -117,8 +118,23 @@ def probe(node):
         odom_pub.publish(msg)
 
     node.create_timer(0.05, publish_fixed_odom)
+    if cap_mode in ('invalid-linear', 'invalid-angular'):
+        request = ChangeState.Request()
+        request.transition.id = Transition.TRANSITION_CONFIGURE
+        assert not call(ChangeState, 'change_state', request).success
+        state = call(GetState, 'get_state', GetState.Request()).current_state
+        assert state.id != State.PRIMARY_STATE_ACTIVE and not samples
+        return
     transition(Transition.TRANSITION_CONFIGURE)
     transition(Transition.TRANSITION_ACTIVATE)
+    enabled = cap_mode == 'enabled'
+    if cap_mode:
+        for name, value in (('enabled', not enabled), ('linear_m_s', 0.25), ('angular_rad_s', 0.65)):
+            mutate = SetParametersAtomically.Request(parameters=[
+                Parameter(CAP_PREFIX + name, value=value).to_parameter_msg(),
+            ])
+            result = call(SetParametersAtomically, 'set_parameters_atomically', mutate).result
+            assert not result.successful and 'read-only' in result.reason.lower(), result
 
     def fixture_ready():
         publishers = node.get_publishers_info_by_topic(COMMAND)
@@ -153,7 +169,8 @@ def probe(node):
             assert not result.done(), (label, result.result())
             recent = samples[start_index:]
             return len(recent) >= 3 and all(
-                abs(x - expected_output) < 1e-6 for x, _, _ in recent[-3:])
+                abs(x - expected_output) < 1e-6 and abs(z) < 1e-7
+                for x, z, _ in recent[-3:])
 
         spin_for(settled, 3, (label, expected_output, samples))
         observed = samples[-3:]
@@ -177,14 +194,14 @@ def probe(node):
         speed_pub.publish(msg)
 
     try:
-        measure('initial', 0.22, baseline, 0)
+        measure('initial', 0.20 if enabled else 0.22, baseline, 0)
         set_pair(*updated)
         read(updated)
         measure('after atomic set and readback', 0.20, updated, len(samples))
         speed_limit(75.0, percentage=True)
         measure('route-style SpeedLimit 75%', 0.15, updated, len(samples))
         speed_limit(0.24, percentage=False)
-        measure('absolute SpeedLimit 0.24', 0.24, updated, len(samples))
+        measure('absolute SpeedLimit 0.24', 0.20 if enabled else 0.24, updated, len(samples))
         speed_limit(0.0, percentage=True)  # Nav2 no-limit sentinel; restore the base target.
         measure('SpeedLimit cleared', 0.20, updated, len(samples))
     finally:
@@ -192,6 +209,33 @@ def probe(node):
             cancel = wait(goal_handle.cancel_goal_async(), 'cancel synthetic FollowPath')
             assert cancel.goals_canceling, cancel
     assert wait(result, 'synthetic FollowPath terminal result').status == GoalStatus.STATUS_CANCELED
+    if cap_mode:
+        set_pair(*baseline)
+        goal.path.header.stamp = node.get_clock().now().to_msg()
+        for i, pose in enumerate(goal.path.poses):
+            pose.header.stamp = goal.path.header.stamp
+            pose.pose.position.x, pose.pose.position.y = 0.0, i / 10.0
+        turning = wait(client.send_goal_async(goal), 'send synthetic turn path')
+        assert turning.accepted
+        terminal = turning.get_result_async()
+        start = len(samples)
+
+        def turning_observed():
+            assert not terminal.done(), terminal.result()
+            recent = samples[start:]
+            return len(recent) >= 3 and all(
+                abs(x) < 1e-7 and abs(z - (0.60 if enabled else 0.64)) < 1e-6
+                for x, z, _ in recent[-3:])
+
+        try:
+            spin_for(turning_observed, 4, 'expected controller rotate-to-heading output')
+            print(json.dumps({'phase': 'rotate to path', 'cap_mode': cap_mode,
+                              'commands_linear_x_angular_z': [(x, z) for x, z, _ in samples[-3:]]}))
+        finally:
+            if not terminal.done():
+                cancel = wait(turning.cancel_goal_async(), 'cancel synthetic turn path')
+                assert cancel.goals_canceling
+        assert wait(terminal, 'synthetic turn terminal result').status == GoalStatus.STATUS_CANCELED
     transition(Transition.TRANSITION_DEACTIVATE)
     transition(Transition.TRANSITION_CLEANUP)
 
@@ -204,11 +248,15 @@ def main():
             or {p.name for p in Path('/sys/class/net').iterdir()} != {'lo'}
             or not __debug__):
         raise SystemExit('requires nonroot, Jazzy and isolated loopback-only Docker')
+    cap_mode = os.environ.get('PATROLBOT_NATIVE_OUTPUT_CAP_TEST')
+    assert cap_mode in (None, 'enabled', 'default', 'invalid-linear', 'invalid-angular'), cap_mode
     for package in ('nav2_controller', 'nav2_regulated_pure_pursuit_controller', 'nav2_msgs'):
         prefix = Path(get_package_prefix(package))
         manifest = Path(get_package_share_directory(package)) / 'package.xml'
         version = ElementTree.parse(manifest).findtext('version')
-        assert prefix.is_relative_to(INSTALL) and version == '1.3.12', (prefix, version)
+        install = (Path('/cap-build') if cap_mode and package == 'nav2_regulated_pure_pursuit_controller'
+                   else INSTALL)
+        assert prefix.is_relative_to(install) and version == '1.3.12', (prefix, version)
         print(f'{package}: {prefix}, version {version}')
     route_src = Path('/opt/scoped-native/src/nav2/nav2_route')
     for source_file in route_src.rglob('adjust_speed_limit.cpp'):
@@ -221,6 +269,12 @@ def main():
     params = controller['ros__parameters']
     params.update(odom_topic=ODOM, speed_limit_topic=SPEED_LIMIT, enable_stamped_cmd_vel=False)
     params['FollowPath']['rotate_to_heading_angular_vel'] = 0.70
+    if cap_mode and cap_mode != 'default':
+        params['FollowPath']['patrolbot_output_cap'] = {
+            'enabled': True,
+            'linear_m_s': 0.27 if cap_mode == 'invalid-linear' else 0.20,
+            'angular_rad_s': 0.71 if cap_mode == 'invalid-angular' else 0.60,
+        }
     params['progress_checker']['movement_time_allowance'] = 20.0
     config = {'controller_server': controller,
               'local_costmap': {'local_costmap': {'ros__parameters': {
@@ -242,7 +296,7 @@ def main():
                     '-r', f'cmd_vel:={COMMAND}',
                 ], stdout=log, stderr=subprocess.STDOUT)
                 try:
-                    probe(node)
+                    probe(node, cap_mode)
                 finally:
                     if proc.poll() is None:
                         proc.send_signal(signal.SIGINT)
@@ -259,7 +313,10 @@ def main():
     finally:
         node.destroy_node()
         rclpy.try_shutdown()
-    print('PASS: one straight FollowPath controller-output probe')
+    if cap_mode:
+        print(f'PASS: rebuilt native output cap ({cap_mode})')
+    else:
+        print('PASS: one straight FollowPath controller-output probe')
 
 
 if __name__ == '__main__':

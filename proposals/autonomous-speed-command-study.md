@@ -30,6 +30,37 @@ and closed-loop/stop acceptance downstream of smoothing and collision gating.
 It must not be inserted on any topic shared with manual controls, behavior
 recovery, or undock. Local replay does not approve a higher envelope.
 
+## Configured cap inside the native RPP plugin
+
+Patch `0019-autonomous-controller-output-cap.patch` adds a separate option
+inside `FollowPath` itself. The cap is off in the shipped configuration. An
+explicit test configuration selects the two caps at controller configuration
+time. These three parameters are read-only, the maximum accepted cap is
+0.26 m/s and 0.70 rad/s, and the plugin scales forward and angular commands
+together before its collision check. Lower commands (including route-imposed
+reductions) are preserved. It does not affect the behavior and undock
+producers or their shared safety chain.
+
+With a rebuilt RPP plugin in the same isolated harness, a startup cap of
+0.20 m/s and 0.60 rad/s kept the output at 0.20 when the independent absolute
+`SpeedLimit` requested 0.24. The rotation test observed 0.64 rad/s with the
+cap off and 0.60 rad/s with it on; attempted live parameter writes were
+refused. Over-limit linear and angular configurations were each refused
+before controller activation.
+
+This is a fixed cap, not live profile application. It does not prove all
+downstream output stays within the profile during acceleration or a
+source handoff, and it does not reserve direct goals for live changes.
+No launch, robot configuration, UI wiring, or deployment is included.
+
+For these additional cases, build `nav2_regulated_pure_pursuit_controller`
+from the checksum-pinned Jazzy sources and the production patch stack
+including 0019, using the cached Nav2 1.3.12 dependencies. Bind that separate
+install at `/cap-build` and source `/cap-build/local_setup.bash` after the
+cached overlay. Run the probe once for each `PATROLBOT_NATIVE_OUTPUT_CAP_TEST`
+value: `default`, `enabled`, `invalid-linear`, and `invalid-angular`.
+The probe checks that the plugin is loaded from the rebuilt prefix.
+
 ## Reproduce
 
 From this worktree, run [the separate probe](autonomous-speed-command-probe.py) using the cached image `patrolbot-ros-tests:localization-handoff-06d60c31f1fa` (`sha256:9d0deb9d528b165724c802d8c78dd197916dde63d270bf3db615284b02c03e0b`):

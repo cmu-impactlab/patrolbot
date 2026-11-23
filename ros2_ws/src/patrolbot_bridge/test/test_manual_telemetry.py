@@ -41,3 +41,23 @@ def test_continuity_survives_link_reconnect_but_explicit_new_origin_resets_it():
     new = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     raw.observe(frame(odom='2,0,0,0,0', epoch=new), 10.2, now=10.2, session=3, epoch=new)
     assert raw.ready(now=10.2, session=3, epoch=new)
+
+
+def test_manual_raw_evidence_keeps_original_age_and_requires_new_sip_after_reconnect():
+    raw = ManualTelemetry()
+
+    def observe(received, stamp, age, session=1):
+        raw.observe(f'{frame()}|ODOM_SOURCE_MS:{stamp},{age}', received, now=received,
+                    session=session, epoch=EPOCH, source_timing=True)
+
+    observe(10., 1000, 10)
+    assert raw.received == pytest.approx(9.99)
+    observe(10.1, 1000, 110)
+    assert raw.ready(now=10.1, session=1, epoch=EPOCH)
+    assert raw.received == pytest.approx(9.99)
+    assert raw.scan_at == pytest.approx(10.1)
+    observe(10.2, 1000, 210, session=2)
+    assert not raw.ready(now=10.2, session=2, epoch=EPOCH)
+    observe(10.3, 1300, 10, session=2)
+    assert raw.ready(now=10.3, session=2, epoch=EPOCH)
+    assert raw.received == pytest.approx(10.29)

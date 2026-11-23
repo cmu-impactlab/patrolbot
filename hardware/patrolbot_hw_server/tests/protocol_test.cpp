@@ -246,7 +246,8 @@ void test_control_frame_formatting() {
         "RESULT:CHARGE_RELEASE:" + kId + ":OK:0:charge_released:0:0:0\n");
   CHECK(formatHello() == "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1\n");
   CHECK(formatHello(kId) ==
-        "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1:ODOM_EPOCH=" + kId + "\n");
+        "HELLO:PROTOCOL=2:FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1,"
+        "ODOM_SOURCE_TIMING_V1:ODOM_EPOCH=" + kId + "\n");
   const ParsedCommand manual = parseCommand("MANUAL_UNDOCK:" + kId + ":.53:.1:45:0");
   CHECK(manual.type == COMMAND_UNDOCK && manual.manual_mode && !manual.validation_mode);
   CHECK(parseCommand("UNDOCK:" + kId + ":.53:.1:45:0").manual_mode == false);

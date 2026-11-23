@@ -3,7 +3,7 @@
 import math
 
 from .odom_epoch import parse_frame_epoch
-from .odom_validation import OdomSample, OdomValidator
+from .odom_validation import OdomSample, OdomValidator, parse_odom_source
 from .scan_timing import parse_laser_age
 
 
@@ -13,12 +13,13 @@ class ManualTelemetry:
     def __init__(self):
         self.origin = None
         self.session = None
+        self._sample_session = None
         self.sample = None
         self.received = self.scan_at = None
         self.validator = OdomValidator(max_linear_speed=.30, max_angular_speed=1.20,
                                        expected_period=.05)
 
-    def observe(self, line, received, *, now, session, epoch):
+    def observe(self, line, received, *, now, session, epoch, source_timing=False):
         self.sample = None
         self.received = self.scan_at = None
         try:
@@ -28,6 +29,7 @@ class ManualTelemetry:
                 return
             if epoch != self.origin:
                 self.validator.reset_epoch()
+                self._sample_session = None
             self.origin, self.session = epoch, session
             fields = line.split('|')
             if not fields[0].startswith('ODOM:') or not fields[1].startswith('LASER:'):
@@ -36,8 +38,17 @@ class ManualTelemetry:
             if len(values) != 5:
                 return
             sample = OdomSample(*values)
-            if not self.validator.check_and_accept(sample, received).accepted:
+            source = parse_odom_source(fields[2:], required=source_timing)
+            validation = self.validator.check_and_accept(
+                sample, received, source=source, queue_age=now - received,
+            )
+            if not validation.accepted:
                 return
+            if validation.repeated:
+                if self._sample_session != session:
+                    return
+            else:
+                self._sample_session = session
             scan = fields[1][6:].rstrip(',').split(',')
             if len(scan) < 2:
                 return
@@ -50,7 +61,7 @@ class ManualTelemetry:
             scan_at = received - age.age_ms / 1000.
             if not 0 <= now - scan_at <= .5:
                 return
-            self.sample, self.received, self.scan_at = sample, received, scan_at
+            self.sample, self.received, self.scan_at = sample, validation.fresh_at, scan_at
         except (IndexError, ValueError, TypeError, OverflowError):
             return
 

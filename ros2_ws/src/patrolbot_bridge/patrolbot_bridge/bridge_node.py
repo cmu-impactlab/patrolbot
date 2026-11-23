@@ -30,7 +30,12 @@ from patrolbot_bridge.lidar_state import LidarState
 from patrolbot_bridge.manual_active import manual_drive_bypass
 from patrolbot_bridge.manual_undock import ManualUndockRuntime
 from patrolbot_bridge.odom_covariance import OdomCovariance
-from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
+from patrolbot_bridge.odom_validation import (
+    OdomSample,
+    OdomValidator,
+    parse_odom_source,
+    SOURCE_TIMING_FEATURE,
+)
 from patrolbot_bridge.safety_telemetry import (
     battery_diagnostic,
     BATTERY_MIN_OPERATING_VOLTS,
@@ -335,6 +340,7 @@ class PatrolBotBridge(Node):
             expected_period=float(self.get_parameter('odom_expected_period').value),
         )
         self._odom_rejections = {}
+        self._odom_rejection_details = {}
         self._last_odom_rejection_warning = 0.0
         self._odom_tf_stale = False
         self._tf_send_lock = threading.Lock()
@@ -687,6 +693,8 @@ class PatrolBotBridge(Node):
 
     def _record_odom_rejection(self, reason, detail=''):
         self._odom_rejections[reason] = self._odom_rejections.get(reason, 0) + 1
+        if detail:
+            self._odom_rejection_details[reason] = detail
         now = time.monotonic()
         if now - self._last_odom_rejection_warning < 5.0:
             return
@@ -694,7 +702,11 @@ class PatrolBotBridge(Node):
         counts = ', '.join(
             f'{name}={count}' for name, count in sorted(self._odom_rejections.items())
         )
-        suffix = f' ({detail})' if detail else ''
+        # Keep the latest evidence per reason between reports. An overspeed
+        # burst must not hide the step from a co-occurring heading warning.
+        details = sorted(self._odom_rejection_details.items())
+        self._odom_rejection_details.clear()
+        suffix = ''.join(f' [{name}: {evidence}]' for name, evidence in details)
         self.get_logger().error(
             f'Rejected SBC navigation frame: {reason}{suffix}; '
             f'odometry rejection counts: {counts}.'
@@ -710,6 +722,8 @@ class PatrolBotBridge(Node):
         ] + [
             KeyValue(key=f'rejected_{name}', value=str(count))
             for name, count in sorted(self._odom_rejections.items())
+        ] + [
+            KeyValue(key=f'last_{name}', value=evidence) for name, evidence in details
         ]
         diagnostics = DiagnosticArray()
         diagnostics.header.stamp = self.get_clock().now().to_msg()
@@ -726,12 +740,16 @@ class PatrolBotBridge(Node):
                 manual.observe(line, time.monotonic() if received_at is None else received_at, session)
             if not allowed:
                 return
-            self._parse_telemetry_guarded(line, received_at)
+            self._parse_telemetry_guarded(
+                line, received_at, source_timing=self._epoch.guard.source_timing
+            )
 
-    def _parse_telemetry_guarded(self, line, received_at=None):
+    def _parse_telemetry_guarded(self, line, received_at=None, *, source_timing=False):
         try:
             receipt_clock = self.get_clock().now()
-            queue_age = 0.0 if received_at is None else time.monotonic() - received_at
+            now = time.monotonic()
+            received_at = now if received_at is None else received_at
+            queue_age = now - received_at
             if not math.isfinite(queue_age) or not 0 <= queue_age <= self._odom_tf_timeout:
                 self._record_odom_rejection('stale-or-future-queued-odometry')
                 return
@@ -742,73 +760,31 @@ class PatrolBotBridge(Node):
             parts = line.split('|')
             odom_fields = parts[0].replace('ODOM:', '').split(',')
             laser_fields = parts[1].replace('LASER:', '').strip().split(',')
-
-            x = float(odom_fields[0])
-            y = float(odom_fields[1])
-            th = float(odom_fields[2])
-            vx = float(odom_fields[3])
-            vth = float(odom_fields[4])
-
-            now = time.monotonic()
-            validation = self._odom_validator.check_and_accept(
-                OdomSample(x, y, th, vx, vth), received_at if received_at is not None else now
-            )
-            if not validation.accepted:
-                self._record_odom_rejection(validation.reason)
+            try:
+                source = parse_odom_source(parts[2:], required=source_timing)
+            except ValueError as exc:
+                self._record_odom_rejection(str(exc))
                 return
 
-            with self._pose_lock:
-                # Was odom->base_link absent immediately before this pose --
-                # either never published, or withdrawn as stale?
-                tf_was_absent = (
-                    not self._pose_received or now - self._pose_at > self._odom_tf_timeout
-                )
-                self._px, self._py, self._pth = x, y, th
-                self._vx, self._vth = vx, vth
-                self._pose_received = True
-                self._pose_at = received_at if received_at is not None else now
-                self._odom_covariance.update(x, y, th)
-                pose_covariance = self._odom_covariance.pose_covariance()
-                twist_covariance = self._odom_covariance.twist_covariance()
-
-            if self._undock_turn.phase in ('turn', 'stopping', 'restoring'):
-                self._undock_turn.observe_turn_odom()
-
-            if tf_was_absent:
-                # Publish the transform here rather than waiting up to 20 ms
-                # for the next timer tick. /scan below is stamped from the same
-                # instant as /odom, so leaving it to the timer would let the
-                # first scan after a reconnect reach the costmap message filter
-                # with no transform covering it -- exactly the ordering this
-                # node publishes TF at 50 Hz to avoid. The timer keeps the
-                # transform alive from here on; this only leads it back in.
-                if self._odom_tf_stale:
-                    self._odom_tf_stale = False
-                    self.get_logger().info('odom->base_link resumed; SBC pose is fresh again.')
-                self._broadcast_odom_tf(x, y, th)
-
-            q = get_quaternion_from_euler(th)
-            stamp = rclpy.time.Time(nanoseconds=receipt_clock.nanoseconds - queue_age_ns).to_msg()
-            self._epoch._odom_history.add(
-                stamp.sec * 1_000_000_000 + stamp.nanosec, (x, y, th), self._epoch.guard.epoch
+            sample = OdomSample(*(float(field) for field in odom_fields))
+            validation = self._odom_validator.check_and_accept(
+                sample, received_at, source=source, queue_age=queue_age,
+                max_age=self._odom_tf_timeout,
             )
+            if not validation.accepted:
+                self._record_odom_rejection(validation.reason, validation.detail)
+                return
 
-            # /odom — receipt-time estimate; acquisition time is not on the wire
-            odom_msg = Odometry()
-            odom_msg.header.stamp = stamp
-            odom_msg.header.frame_id = 'odom'
-            odom_msg.child_frame_id = 'base_link'
-            odom_msg.pose.pose.position.x = x
-            odom_msg.pose.pose.position.y = y
-            odom_msg.pose.pose.orientation.x = q[0]
-            odom_msg.pose.pose.orientation.y = q[1]
-            odom_msg.pose.pose.orientation.z = q[2]
-            odom_msg.pose.pose.orientation.w = q[3]
-            odom_msg.twist.twist.linear.x = vx
-            odom_msg.twist.twist.angular.z = vth
-            odom_msg.pose.covariance = pose_covariance
-            odom_msg.twist.covariance = twist_covariance
-            self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
+            if validation.repeated:
+                # A repeat cannot restore pose after a transport withdrawal,
+                # but it need not suppress a scan while the pose remains fresh.
+                with self._pose_lock:
+                    if not self._pose_received:
+                        return
+            else:
+                self._publish_validated_odom(
+                    sample, validation.fresh_at, now, receipt_clock.nanoseconds - queue_age_ns
+                )
 
             # /scan — preserve reported acquisition age plus local queue age.
             # After startup/reconnect, older scans may precede TF history and
@@ -864,9 +840,7 @@ class PatrolBotBridge(Node):
                 scan_msg = self._laser_scan_message(scan_stamp, ranges, self.SCAN_RANGE_MIN)
                 if not age.legacy:
                     with self._pose_lock:
-                        self._undock_scan_at = (
-                            received_at if received_at is not None else now
-                        ) - (age.age_ms or 0) / 1000.0
+                        self._undock_scan_at = received_at - (age.age_ms or 0) / 1000.0
                 self._publish_with_timing(self.scan_pub, scan_msg, '/scan')
                 if self.unfiltered_scan_pub is not None:
                     candidate = self._laser_scan_message(scan_stamp, raw_ranges, 0.0)
@@ -880,10 +854,56 @@ class PatrolBotBridge(Node):
                     throttle_duration_sec=10.0,
                 )
 
-        except (IndexError, ValueError) as exc:
+        except (IndexError, TypeError, ValueError) as exc:
             self._record_odom_rejection('malformed-telemetry', type(exc).__name__)
         except Exception as exc:
             self._record_odom_rejection('navigation-frame-error', type(exc).__name__)
+
+    def _publish_validated_odom(self, sample, fresh_at, now, receipt_ns):
+        x, y, th, vx, vth = sample.values()
+        with self._pose_lock:
+            tf_was_absent = (
+                not self._pose_received or now - self._pose_at > self._odom_tf_timeout
+            )
+            self._px, self._py, self._pth = x, y, th
+            self._vx, self._vth = vx, vth
+            self._pose_received = True
+            self._pose_at = fresh_at
+            self._odom_covariance.update(x, y, th)
+            pose_covariance = self._odom_covariance.pose_covariance()
+            twist_covariance = self._odom_covariance.twist_covariance()
+
+        if self._undock_turn.phase in ('turn', 'stopping', 'restoring'):
+            self._undock_turn.observe_turn_odom()
+
+        if tf_was_absent:
+            # Lead TF back in before the first scan after a gap; then the
+            # timer keeps it alive only while this odometry remains fresh.
+            if self._odom_tf_stale:
+                self._odom_tf_stale = False
+                self.get_logger().info('odom->base_link resumed; SBC pose is fresh again.')
+            self._broadcast_odom_tf(x, y, th)
+
+        q = get_quaternion_from_euler(th)
+        # Keep ROS message/history stamps on the existing receipt-time path.
+        # Source timing has no synchronized clock and is for validation/freshness.
+        stamp = Time(nanoseconds=receipt_ns).to_msg()
+        self._epoch._odom_history.add(receipt_ns, (x, y, th), self._epoch.guard.epoch)
+        odom_msg = Odometry()
+        odom_msg.header.stamp = stamp
+        odom_msg.header.frame_id = 'odom'
+        odom_msg.child_frame_id = 'base_link'
+        odom_msg.pose.pose.position.x = x
+        odom_msg.pose.pose.position.y = y
+        odom_msg.pose.pose.orientation.x = q[0]
+        odom_msg.pose.pose.orientation.y = q[1]
+        odom_msg.pose.pose.orientation.z = q[2]
+        odom_msg.pose.pose.orientation.w = q[3]
+        odom_msg.twist.twist.linear.x = vx
+        odom_msg.twist.twist.angular.z = vth
+        odom_msg.pose.covariance = pose_covariance
+        odom_msg.twist.covariance = twist_covariance
+        self._publish_with_timing(self.odom_pub, odom_msg, '/odom')
 
     @staticmethod
     def _laser_scan_message(stamp, ranges, range_min):
@@ -1591,7 +1611,10 @@ class PatrolBotBridge(Node):
             return
         if hello is None:
             return
-        self._epoch.announce(self._session_generation, hello.odom_epoch)
+        self._epoch.announce(
+            self._session_generation, hello.odom_epoch,
+            source_timing=SOURCE_TIMING_FEATURE in hello.features,
+        )
         with self._state_lock:
             self._server_hello = hello
         features = sorted(hello.features) or ['none']

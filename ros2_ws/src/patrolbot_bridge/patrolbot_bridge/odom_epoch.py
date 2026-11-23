@@ -50,6 +50,7 @@ class OdomEpochGuard:
 
     def __init__(self):
         self.epoch: Optional[str] = None
+        self.source_timing = False
         self.generation = 0
         self.session = 0
         self.ready = False
@@ -69,7 +70,7 @@ class OdomEpochGuard:
             self.ready = False
             self._poisoned = True
 
-    def announce(self, session, epoch):
+    def announce(self, session, epoch, *, source_timing=False):
         if session != self.session or session == 0:
             return EpochDecision(False, False, 'obsolete-session')
         if self._poisoned:
@@ -82,6 +83,10 @@ class OdomEpochGuard:
             self.ready = False
             self._poisoned = True
             return EpochDecision(False, False, 'epoch-changed-within-session')
+        if epoch == self.epoch and source_timing != self.source_timing:
+            self.ready = False
+            self._poisoned = True
+            return EpochDecision(False, False, 'source-timing-mode-changed-within-epoch')
         if epoch in self._retired:
             self.ready = False
             self._poisoned = True
@@ -91,6 +96,7 @@ class OdomEpochGuard:
             if self.epoch is not None:
                 self._retired.add(self.epoch)
             self.epoch = epoch
+            self.source_timing = source_timing
             self.generation += 1
         self._announced = epoch
         self.ready = True

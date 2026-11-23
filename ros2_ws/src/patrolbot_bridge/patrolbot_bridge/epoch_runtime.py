@@ -145,9 +145,9 @@ class EpochRuntime(MapRuntimeMixin):
                 self.node._pose_at = 0.0
                 self.node._undock_scan_at = 0.0
 
-    def announce(self, session, epoch):
+    def announce(self, session, epoch, *, source_timing=False):
         with self.lock:
-            decision = self.guard.announce(session, epoch)
+            decision = self.guard.announce(session, epoch, source_timing=source_timing)
             if not decision.accepted:
                 self.invalidate_transport(decision.reason)
                 return

@@ -82,6 +82,20 @@ class EpochTests(unittest.TestCase):
         self.assertFalse(decision.reset_required)
         self.assertFalse(guard.check_frame(session, frame()).accepted)
 
+    def test_timing_mode_can_change_only_with_a_new_origin(self):
+        guard = OdomEpochGuard()
+        first = guard.begin_session()
+        self.assertTrue(guard.announce(first, A, source_timing=True).accepted)
+        self.assertTrue(guard.source_timing)
+        second = guard.begin_session()
+        decision = guard.announce(second, A)
+        self.assertEqual(decision.reason, 'source-timing-mode-changed-within-epoch')
+        self.assertFalse(decision.reset_required)
+        self.assertFalse(guard.check_frame(second, frame()).accepted)
+        third = guard.begin_session()
+        self.assertTrue(guard.announce(third, B).reset_required)
+        self.assertFalse(guard.source_timing)
+
     def test_restarted_guard_has_no_established_origin(self):
         guard = OdomEpochGuard()
         session = guard.begin_session()

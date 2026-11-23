@@ -27,6 +27,7 @@
 #include "manual_turn_scan.hpp"
 #include "scan_timing.hpp"
 #include "lidar_power.hpp"
+#include "sip_odometry.hpp"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -1061,6 +1062,7 @@ int main(int argc, char** argv) {
     Aria::exit(1);
   }
 
+  patrolbot::SipOdometryObserver sip_odometry(robot);
   EncoderObserver encoder_observer(robot);
   encoder_observer.start(odom_epoch);
   robot.runAsync(true);
@@ -1451,6 +1453,7 @@ int main(int argc, char** argv) {
       const double th = robot.getTh() * M_PI / 180.0;
       motion.linear = robot.getVel() / 1000.;
       motion.angular = robot.getRotVel() * M_PI / 180.;
+      const patrolbot::SipOdometryStamp odom_stamp = sip_odometry.stamp();
       robot.unlock();
       telemetry << "ODOM:" << x << "," << y << "," << th << ","
                 << motion.linear << "," << motion.angular << "|LASER:";
@@ -1467,6 +1470,7 @@ int main(int argc, char** argv) {
       // Pi's clock epoch. Unknown/old scans carry no ranges and age -1.
       telemetry << "|LASER_AGE_MS:" << laserAgeMs
                 << "|ODOM_EPOCH:" << odom_epoch;
+      odom_stamp.appendTo(telemetry, ArTime());
       telemetry << "\n";
 
       if (++auxCounter >= auxInterval) {

@@ -22,7 +22,7 @@ from patrolbot_bridge.manual_active import manual_drive_bypass
 from patrolbot_bridge.manual_telemetry import ManualTelemetry
 from patrolbot_bridge.map_runtime import map_identity
 from patrolbot_bridge.odom_covariance import OdomCovariance
-from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
+from patrolbot_bridge.odom_validation import OdomSample, OdomValidator, parse_odom_source
 from patrolbot_bridge.scan_timing import compute_scan_stamp_ns, parse_laser_age
 from patrolbot_bridge.tuning_policy import clamp_drive
 from patrolbot_interfaces.action import LocalizeOnMap
@@ -1105,7 +1105,8 @@ def attach_boundaries(runtime):
     turn.revoke = Mock()
     turn.hardware_problem = Mock(return_value='')
     n._undock_turn = turn
-    names = {'_parse_telemetry', '_parse_telemetry_guarded', '_laser_scan_message',
+    names = {'_parse_telemetry', '_parse_telemetry_guarded', '_publish_validated_odom',
+             '_laser_scan_message',
              '_manual_drive_allowed', 'cmd_vel_callback'}
     bridge = source_class('bridge_node', 'PatrolBotBridge', names)
     for name in names:

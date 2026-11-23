@@ -219,6 +219,15 @@ def test_unknown_reverse_keeps_owner_and_zero_hold(rig):
     assert not rig.runtime.drive_allowed
 
 
+@pytest.mark.parametrize('prior_reason', ['', 'hardware or odometry is stale'])
+def test_reverse_result_only_reports_a_preexisting_revocation(rig, prior_reason):
+    assert rig.runtime.reserve_reverse()
+    assert rig.runtime.prepare_reverse(rig.hardware_goal) == ''
+    if prior_reason:
+        rig.runtime.revoke(prior_reason)
+    assert rig.runtime.reverse_result(rig.hardware_goal, NS(success=False)) == prior_reason
+
+
 def test_collision_zero_cannot_become_turn_velocity(rig):
     reverse(rig)
     runtime = rig.runtime
@@ -230,8 +239,106 @@ def test_collision_zero_cannot_become_turn_velocity(rig):
     command = runtime.final_pub.publish.call_args.args[0]
     assert command.linear.x == command.angular.z == 0.0
     runtime.manual(twist())
+    assert not runtime.reason
+    command = twist()
+    command.angular.z = 0.1
+    runtime.manual(command)
     assert not runtime.drive_allowed
     assert runtime.reason == 'manual command took ownership'
+
+
+def test_base_state_without_joystick_does_not_cancel_reverse(rig):
+    source = Path(__file__).parents[2] / 'patrolbot_navigation/scripts/patrolbot_joy_teleop.py'
+    teleop = next(n for n in ast.parse(source.read_text()).body
+                  if isinstance(n, ast.ClassDef) and n.name == 'JoyTeleop')
+    methods = [n for n in teleop.body if isinstance(n, ast.FunctionDef)
+               and n.name in ('_base_state_cb', '_block_undock_input')]
+    namespace = dict(Twist=twist, Bool=NS)
+    exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), namespace)
+    joy = NS(_last_joy=None, _lidar_generation=None, pub=Mock(), manual_pub=Mock(),
+             get_clock=rig.node.get_clock)
+    joy._block_undock_input = partial(namespace['_block_undock_input'], joy)
+    assert rig.runtime.reserve_reverse()
+    assert rig.runtime.prepare_reverse(rig.hardware_goal) == ''
+    rig.node._undock_request_id = str(uuid4())
+    joy.pub.publish.side_effect = rig.runtime.manual
+    for _ in range(3):
+        namespace['_base_state_cb'](joy, NS(undock_active=True, link_connected=True,
+                                          session_generation=7))
+    assert joy._last_joy is None
+    assert joy.manual_pub.publish.call_args.args[0].data is False
+    assert rig.runtime.reason == '' and rig.runtime.phase == 'reverse'
+    assert rig.runtime.token is None and not rig.runtime.drive_allowed
+    rig.node._send_undock_cancel.assert_not_called()
+    rig.node.get_logger().warn.assert_not_called()
+
+
+@pytest.mark.parametrize('phase', ['reverse', 'handoff', 'turn'])
+def test_neutral_does_not_grant_or_restore_ownership(rig, phase):
+    reverse(rig)
+    runtime = rig.runtime
+    runtime.phase = phase
+    runtime.revoke('hardware telemetry expired')
+    for _ in range(3):
+        runtime.manual(twist())
+    assert runtime.reason == 'hardware telemetry expired'
+    assert runtime.token is None and not runtime.spin_active and not runtime.drive_allowed
+    assert runtime.behavior_at is None and runtime.collision_at is None
+
+
+@pytest.mark.parametrize('fault,reason', [
+    ('_estop_pressed', 'E-stop or hardware fault'),
+    ('_fault_flags', 'E-stop or hardware fault'),
+    ('_link_connected', 'hardware or odometry is stale'),
+    ('_flags_at', 'hardware or odometry is stale'),
+])
+def test_neutral_does_not_bypass_independent_reverse_guards(rig, fault, reason):
+    assert rig.runtime.reserve_reverse()
+    command = twist()
+    command.linear.x = command.angular.z = -0.0
+    rig.runtime.manual(command)
+    assert not rig.runtime.reason
+    setattr(rig.node, fault, False if fault == '_link_connected' else (
+        rig.clock.now - 1.0 if fault == '_flags_at' else 1))
+    rig.runtime.tick()
+    assert rig.runtime.reason == reason
+    rig.runtime.manual(command)
+    assert rig.runtime.reason == reason and not rig.runtime.drive_allowed
+
+
+def test_revocation_log_escapes_untrusted_text(rig):
+    assert rig.runtime.reserve_reverse()
+    rig.runtime.revoke('failed\nforged log line')
+    log = rig.node.get_logger().warn.call_args.args[0]
+    assert '\n' not in log
+    assert r'failed\nforged log line' in log
+
+
+@pytest.mark.parametrize('vector', ['linear', 'angular'])
+@pytest.mark.parametrize('axis', ['x', 'y', 'z'])
+@pytest.mark.parametrize('value', [1e-300, -0.1, math.nan, math.inf, -math.inf, None, '0'])
+def test_each_nonzero_or_invalid_component_revokes(rig, vector, axis, value):
+    assert rig.runtime.reserve_reverse()
+    rig.node._undock_request_id = str(uuid4())
+    message = twist()
+    setattr(getattr(message, vector), axis, value)
+    rig.runtime.manual(message)
+    assert rig.runtime.reason == 'manual command took ownership'
+    assert rig.runtime.token is None and not rig.runtime.drive_allowed
+    rig.node._send_undock_cancel.assert_called_once_with(rig.node._undock_request_id)
+    rig.runtime.revoke('later fault')
+    rig.node.get_logger().warn.assert_called_once()
+    log = rig.node.get_logger().warn.call_args.args[0]
+    assert rig.node._undock_request_id in log
+    assert "phase='reverse'" in log and 'manual command took ownership' in log
+    assert 'later fault' not in log
+
+
+@pytest.mark.parametrize('message', [None, NS(), NS(linear=NS(x=0.0))])
+def test_malformed_manual_message_still_revokes(rig, message):
+    assert rig.runtime.reserve_reverse()
+    rig.runtime.manual(message)
+    assert rig.runtime.reason == 'manual command took ownership'
 
 
 def test_unknown_turn_acceptance_retains_local_owner(rig):

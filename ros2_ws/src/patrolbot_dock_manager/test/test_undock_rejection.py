@@ -19,7 +19,7 @@ def manager_class():
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == 'DockManager'
     )
     manager.bases = []  # Omit ROS Node construction, not the production methods.
-    methods = {'_run_hardware_undock', '_undock_result_code', '_execute_callback'}
+    methods = {'_run_hardware_undock', '_undock_result_code', '_execute_callback', '_abort'}
     manager.body = [
         node for node in manager.body if isinstance(node, ast.FunctionDef) and node.name in methods
     ]
@@ -143,6 +143,37 @@ def test_real_ros_success_status_is_accepted(manager):
     manager._hardware_undock_client.send_goal_async.return_value.result.return_value = accepted
     goal = NS(is_cancel_requested=False, request=NS(validation_mode=False))
     assert manager._run_hardware_undock(goal, 'offline-test') == (True, '', result)
+
+
+@pytest.mark.parametrize('status', [5, 6])
+def test_canceled_sbc_result_without_public_cancel_aborts_with_reason(manager, status):
+    accepted = Mock(accepted=True)
+    reason = 'SBC canceled; local revocation: hardware telemetry expired'
+    result = NS(success=False, code=13, message=reason,
+                distance_traveled=0.0, release_attempts=1)
+    accepted.get_result_async.return_value.result.return_value = NS(status=status, result=result)
+    manager._hardware_undock_client.send_goal_async.return_value.result.return_value = accepted
+    goal = Mock(is_cancel_requested=False, request=NS(validation_mode=False))
+    assert manager._run_hardware_undock(goal, 'offline-test') == (False, reason, result)
+    code = manager._undock_result_code(goal, result, reason)
+    assert code == 12  # Undock.SAFETY_FAULT: dashboard accepts ABORTED with this code.
+    manager._transition = Mock()
+    manager._active_correlation_id = 'offline-test'
+    manager._result = Mock()
+    manager._abort(goal, code, reason, 2, manual_recovery=True, distance=0.0)
+    goal.abort.assert_called_once_with()
+    goal.canceled.assert_not_called()
+    manager._transition.assert_called_once_with('FAULT', 'offline-test')
+    manager._result.assert_called_once_with(False, 12, reason, 2, True, 0.0)
+
+
+def test_public_cancel_keeps_operator_cancel_transition(manager):
+    goal = Mock(is_cancel_requested=True)
+    code = manager._undock_result_code(goal, NS(code=13), 'canceled')
+    assert code == 9
+    manager._canceled = Mock()
+    manager._abort(goal, code, 'canceled', 2, manual_recovery=True, distance=0.0)
+    manager._canceled.assert_called_once_with(goal, 2, 0.0)
 
 
 def test_execute_relays_rejection_code_and_preserves_manual_recovery(manager):

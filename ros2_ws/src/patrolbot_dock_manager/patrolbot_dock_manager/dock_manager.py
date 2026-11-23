@@ -656,7 +656,9 @@ class DockManager(Node):
             return Undock.Result.MOTION_FAILED
         code = hardware_result.code
         mapping = {
-            HardwareUndock.Result.CANCELED: Undock.Result.CANCELED,
+            # The drive base stopped after a bridge-side revocation. The public
+            # action was not canceled by its caller and cannot report CANCELED.
+            HardwareUndock.Result.CANCELED: Undock.Result.SAFETY_FAULT,
             HardwareUndock.Result.TIMEOUT: Undock.Result.TIMEOUT,
             HardwareUndock.Result.SESSION_CHANGED: Undock.Result.SESSION_CHANGED,
             HardwareUndock.Result.RELEASE_FAILED: Undock.Result.RELEASE_FAILED,
@@ -1301,7 +1303,7 @@ class DockManager(Node):
         return result
 
     def _abort(self, goal_handle, code, message, initial_charge, manual_recovery, distance=0.0):
-        if goal_handle.is_cancel_requested or code == Undock.Result.CANCELED:
+        if goal_handle.is_cancel_requested:
             return self._canceled(goal_handle, initial_charge, distance)
         self._transition(
             (

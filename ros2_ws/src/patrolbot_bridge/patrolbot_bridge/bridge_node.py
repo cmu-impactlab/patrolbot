@@ -1771,8 +1771,8 @@ class PatrolBotBridge(Node):
                 return self._undock_abort(
                     goal_handle, TIMEOUT, 'no terminal result from the SBC', started, session
                 )
-            self._undock_turn.reverse_result(goal_handle, result)
-            return self._undock_finish(goal_handle, result, started, session)
+            reason = self._undock_turn.reverse_result(goal_handle, result)
+            return self._undock_finish(goal_handle, result, started, session, reason)
         finally:
             with self._undock_lock:
                 self._undock_request_id = None
@@ -1811,11 +1811,16 @@ class PatrolBotBridge(Node):
         feedback.dock_state = event.dock_state
         goal_handle.publish_feedback(feedback)
 
-    def _undock_finish(self, goal_handle, reply, started, session):
+    def _undock_finish(self, goal_handle, reply, started, session, revocation_reason):
         result = HardwareUndock.Result()
         result.success = bool(reply.success)
         result.code = int(reply.code)
         result.message = reply.message
+        if (not reply.success and reply.code == CANCELED
+                and revocation_reason and revocation_reason != reply.message):
+            result.message = (f'{reply.message}; ' if reply.message else '') + (
+                f'local revocation: {revocation_reason}'
+            )
         result.distance_traveled = float(reply.distance_traveled)
         result.lateral_error = float(reply.lateral_error)
         result.heading_error = float(reply.heading_error)
@@ -1828,13 +1833,13 @@ class PatrolBotBridge(Node):
         result.session_generation = session
         if reply.success:
             goal_handle.succeed()
-        elif reply.code == CANCELED:
+        elif reply.code == CANCELED and goal_handle.is_cancel_requested:
             goal_handle.canceled()
         else:
             goal_handle.abort()
         self.get_logger().info(
             f'Hardware undock finished: success={reply.success} '
-            f'code={reply.code} message={reply.message} '
+            f'code={reply.code} message={result.message!r} '
             f'distance={reply.distance_traveled:.3f} '
             f'attempts={reply.release_attempts} '
             f'dock_state={reply.dock_state} motors={reply.motors_enabled}'

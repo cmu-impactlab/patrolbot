@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import time
 
+from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
 from nav2_msgs.action import Spin
 from nav_msgs.msg import Odometry
@@ -659,7 +660,26 @@ def test_cancel_is_forwarded_to_the_hardware_operation(harness):
     goal_handle.cancel_goal_async()
     wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
     assert not wrapped.result.success
+    assert wrapped.status == GoalStatus.STATUS_CANCELED
     assert wrapped.result.code == Undock.Result.CANCELED
+    assert world.spin_calls == 0
+
+
+def test_bridge_revocation_preserves_reason_and_aborts_public_undock(harness):
+    _manager, world, client_node = harness
+    world.undock_should_succeed = False
+    world.undock_failure_code = HardwareUndock.Result.CANCELED
+    world.undock_failure_message = 'canceled; local revocation: hardware or odometry is stale'
+    goal_handle = send_undock(client_node)
+    assert goal_handle.accepted
+    wrapped = wait_future(goal_handle.get_result_async(), timeout=15.0)
+    assert wrapped.status == GoalStatus.STATUS_ABORTED
+    assert not wrapped.result.success
+    assert wrapped.result.code == Undock.Result.SAFETY_FAULT
+    assert wrapped.result.message == world.undock_failure_message
+    assert wrapped.result.manual_recovery_required
+    assert wrapped.result.distance_traveled == pytest.approx(0.12)
+    assert wrapped.result.release_attempts == 1
     assert world.spin_calls == 0
 
 

@@ -601,7 +601,8 @@ def collision_simulation():
         message = Twist()
         message.linear.x, message.angular.z = linear, angular
         node.receive(message, SimpleNamespace(
-            source_timestamp=clock.source if source is None else source))
+            source_timestamp=int(clock.now * 1e9) + clock.source
+            if source is None else source))
 
     def publish(message):
         linear, angular = message.linear.x, message.angular.z
@@ -619,7 +620,8 @@ def collision_simulation():
             clock.stopped = False
             suppressed = False
         if clock.reply and not suppressed and clock.now >= clock.transport_at:
-            clock.pending.append((clock.now + 0.01, linear, angular))
+            clock.pending.append((clock.now + 0.01, linear, angular,
+                                  int((clock.now + 0.000158) * 1e9)))
 
     class Node:
         def __init__(self, name):
@@ -847,7 +849,39 @@ def test_collision_stale_output_cannot_satisfy_scenario(collision_simulation):
     node.command_pub.publish = stale_only
     with pytest.raises(AssertionError, match='scenario output timed out'):
         node.command(0.05, scan_obstacle=True)
-    assert clock.now < 2.0
+    assert 4.0 <= clock.now < 5.0
+
+
+@pytest.mark.parametrize('production_delay, observation_delay, error', [
+    (0.000158, 2.201, None),
+    (1.001, 2.201, 'produced after 1s deadline'),
+    (0.000158, 4.1, 'output timed out after 4s receive window'),
+    (None, None, 'output timed out after 4s receive window'),
+])
+def test_collision_production_deadline_is_separate_from_receive_window(
+        collision_simulation, production_delay, observation_delay, error):
+    node, clock, _, _ = collision_simulation
+    publish = node.command_pub.publish
+
+    def delayed_observation(message):
+        if message.linear.x == 0.037:
+            publish(message)
+        elif production_delay is not None:
+            clock.pending.append((clock.now + observation_delay,
+                                  message.linear.x, message.angular.z,
+                                  int((clock.now + production_delay) * 1e9)))
+
+    node.command_pub.publish = delayed_observation
+    if error:
+        with pytest.raises(AssertionError, match=error):
+            node.command(-0.05, 0.4)
+    else:
+        output = node.command(-0.05, 0.4)
+        assert (output.linear.x, output.angular.z) == (-0.05, 0.4)
+    scenario = [e for e in node.evidence if e['event'] == 'command' and
+                e['phase'] == 'scenario']
+    assert len(scenario) == 1
+    assert clock.now - scenario[0]['monotonic'] <= 4.02
 
 
 def test_collision_wrong_current_output_is_returned_without_retry(collision_simulation):

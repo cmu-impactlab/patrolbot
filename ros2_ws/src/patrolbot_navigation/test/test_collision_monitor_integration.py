@@ -124,8 +124,11 @@ class CollisionHarness(Node):
             message = Twist()
             message.linear.x = linear
             message.angular.z = angular
+            published_ns = self.get_clock().now().nanoseconds
             self.command_pub.publish(message)
-            return count
+            self.record('command-published', identity=self.sequence,
+                        published_ns=published_ns)
+            return count, published_ns
 
     def clear_precondition(self, timeout=4.0):
         self.set_world()
@@ -138,7 +141,7 @@ class CollisionHarness(Node):
         while time.monotonic() < deadline:
             angular = 0.123 + (self.sequence + 1) * 0.000001
             self.probes.add((0.037, angular))
-            count = self.publish_command(0.037, angular, 'precondition')
+            count, _ = self.publish_command(0.037, angular, 'precondition')
             if wait_until(lambda: any(
                     (m.linear.x, m.angular.z) == (0.037, angular)
                     for m in self.outputs[count:]),
@@ -196,16 +199,25 @@ class CollisionHarness(Node):
             # Disable the timer's sonar before aging it; scan continues throughout.
             started = time.monotonic()
             assert wait_until(lambda: time.monotonic() - started >= 0.6, timeout=1.0)
-        count = self.publish_command(linear, angular, 'scenario')
+        count, published_ns = self.publish_command(linear, angular, 'scenario')
         def response():
             with self.lock:
-                return next((m for m, source in zip(
+                return next(((m, source) for m, source in zip(
                     self.outputs[count:], self.output_sources[count:])
-                    if source > self.ack_source and
+                    if source > max(self.ack_source, published_ns) and
                     (m.linear.x, m.angular.z) not in self.probes), None)
-        assert wait_until(lambda: response() is not None, timeout=1.0), (
-            'Collision Monitor scenario output timed out', self.graph())
-        return response()
+        # Hosted executor stalls can delay observation without delaying production.
+        assert wait_until(lambda: response() is not None, timeout=4.0), (
+            'Collision Monitor scenario output timed out after 4s receive window',
+            dict(published_ns=published_ns, ack_source=self.ack_source,
+                 output_sources=self.output_sources[count:], graph=self.graph()))
+        message, source_ns = response()
+        assert source_ns - published_ns <= 1_000_000_000, (
+            'Collision Monitor scenario output produced after 1s deadline',
+            dict(published_ns=published_ns, source_ns=source_ns,
+                 production_seconds=(source_ns - published_ns) / 1e9,
+                 graph=self.graph()))
+        return message
 
 
 @pytest.fixture(scope='module')

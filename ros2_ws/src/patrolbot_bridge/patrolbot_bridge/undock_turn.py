@@ -414,13 +414,14 @@ class UndockTurnRuntime:
             return self.reason
 
     def reverse_result(self, goal, reply):
+        """Finish the reverse and return any revocation that preceded its result."""
         with self.epoch.lock:
             if (
                 self.phase != 'reverse'
                 or self.hardware_goal_id != bytes(goal.goal_id.uuid)
                 or self.bound is None
             ):
-                return
+                return ''
             if (
                 reply.success
                 and not self.reason
@@ -438,9 +439,11 @@ class UndockTurnRuntime:
             ):
                 self.token = (self.hardware_goal_id, *self.bound, time.monotonic())
                 self.phase = 'handoff'
-                return
+                return ''
+            reason = self.reason
             self.revoke('hardware undock did not produce a clear handoff')
         self.finish()
+        return reason
 
     def reverse_unknown(self, goal, reason):
         with self.epoch.lock:
@@ -699,6 +702,7 @@ class UndockTurnRuntime:
         with self.epoch.lock:
             if not self.busy:
                 return
+            first_revocation = not self.reason
             self.reason = self.reason or reason
             self.token = None
             self.spin_active = False
@@ -711,6 +715,12 @@ class UndockTurnRuntime:
                 if request_id is not None:
                     self.hardware_cancel_sent = self.node._send_undock_cancel(request_id)
             self.node.cmd_vel_callback(Twist())
+            if first_revocation:
+                self.node.get_logger().warn(
+                    f'Undock revoked: request_id={self.node._undock_request_id!r} '
+                    f'hardware_goal_id={(self.hardware_goal_id or b"").hex()} '
+                    f'phase={self.phase!r} reason={reason!r}'
+                )
 
     def zeros(self):
         self.docking_pub.publish(Twist())
@@ -758,8 +768,18 @@ class UndockTurnRuntime:
             self.collision_at = time.monotonic()
             self.final_pub.publish(message if self.drive_allowed else Twist())
 
-    def manual(self, _message):
-        self.revoke('manual command took ownership')
+    def manual(self, message):
+        # Teleop emits neutral stops while hardware owns undocking, even without a joystick.
+        try:
+            neutral = all(
+                math.isfinite(value) and value == 0.0
+                for vector in (message.linear, message.angular)
+                for value in (vector.x, vector.y, vector.z)
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            neutral = False
+        if not neutral:
+            self.revoke('manual command took ownership')
 
     def controller(self, message):
         if message.linear.x != 0.0 or message.angular.z != 0.0:

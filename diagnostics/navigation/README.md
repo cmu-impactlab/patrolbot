@@ -114,3 +114,29 @@ including any attachments, rather than assuming the configured footprint
 matches the measured robot. Score the candidate against PatrolBot's
 measured detection and stopping bounds, including deceleration into the
 shorter fields. Until those bounds are supplied, the candidate is unevaluated.
+
+## Shared forward-speed transition model
+
+`shared_forward_speed.py` models navigation, dashboard manual drive, and the
+physical controller as three independent selections and one owner at a time.
+It has no hardware or ROS adapter, does not estimate braking or sensor coverage,
+and is not installed as a robot node. The 1.8 m/s and 2.8 m values are scenario
+inputs, not authorization. Its two-zone crossover is the lowest current
+mode default, chosen conservatively so a handoff cannot shrink the zone.
+The simulated short zone and receipt timeout are explicit fixture inputs.
+
+`test_shared_forward_speed.py` exercises the first acceptance scenario in all
+three modes: faster selection while driving, a lower turning limit, then a
+lower operator selection or a stop while measured speed is still high. It
+also exercises independent selections at takeover, reconnect reset, and
+stale samples. A single zero limit in the simulation really is a stop; a
+future Nav2 adapter must translate a zero `SpeedLimit` message as **no route
+restriction**, not a stop or permission to override another cap. Manual
+obstacle stops and invalid samples require new motion authority. Navigation
+obstacle auto-resume is tested as a policy option, not a safety sign-off.
+
+The output is a **bounded command intent**, not a guaranteed actual speed or
+an acceleration setpoint. Later integration must prove the source and age
+of samples and preserve the wider zone through both smoothers and the hardware
+response. It must also preserve existing reverse, recovery and undock routes,
+and verify independent personnel protection before shared-hallway release.

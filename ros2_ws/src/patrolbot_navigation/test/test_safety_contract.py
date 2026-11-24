@@ -458,17 +458,18 @@ class SafetyContractTest(unittest.TestCase):
             'smoother.yaml').read_text(encoding='utf-8'))[
                 'teleop_velocity_smoother']['ros__parameters']
         protocol = PROTOCOL_FILE.read_text(encoding='utf-8')
-        match = re.search(
-            r'std::fabs\(linear\) <= ([0-9.]+)', protocol)
-        self.assertIsNotNone(match)
-        hardware_cap = float(match.group(1))
-
         self.assertIn(
             "self.declare_parameter('max_linear', 0.30)", teleop)
         self.assertIn(
             "self.declare_parameter('max_linear_cap', 0.30)", teleop)
-        self.assertEqual(smoother['max_velocity'][0], hardware_cap)
-        self.assertEqual(smoother['min_velocity'][0], -hardware_cap)
+        for direction, limit_key, sign in (
+            ('Forward', 'max_velocity', 1), ('Reverse', 'min_velocity', -1)
+        ):
+            with self.subTest(direction=direction):
+                match = re.search(
+                    rf'constexpr double kNormalDrive{direction}LimitMps = ([0-9.]+);', protocol)
+                self.assertIsNotNone(match)
+                self.assertEqual(smoother[limit_key][0], sign * float(match.group(1)))
         self.assertIn(
             '*"[0.3, 0.0, 0.7]"*',
             STATUS_FILE.read_text(encoding='utf-8'))

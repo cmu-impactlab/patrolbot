@@ -1,18 +1,15 @@
 # Advanced tuning: contract and read-only runtime foundation
 
-Slice 1 adds development-only contract artifacts under `contracts/`. Subsequent
-work adds a bounded YAML revision store, active-only startup resolver, policy
-backstop, activation state machine and read-only `/patrolbot/tuning` inspection.
-The coordinator now has a fixed-node lifecycle backend with exact readback and
-explicit enablement. DDS actor claims alone remain insufficient: mutations require
-a current server signature bound to robot, request and authenticated actor.
-Actual write/apply capabilities require their keys, initialized store, supporting
-services and fresh safe-idle evidence. Defaults remain disabled.
+`/patrolbot/tuning` supports read-only inspection and historical job status.
+Save, apply, redeploy, and restore are not runtime operations. A legacy signing
+key or enablement flag cannot re-enable them. Existing revisions are not changed
+or migrated: boot still resolves the committed ACTIVE revision, existing motion
+policy remains enforced, and an unsettled historical job still holds motion.
 
 **Starting values:** use the current packaged YAML configuration, not library
 example defaults or guessed input ranges. Existing saved state takes precedence
-after initialization. User edits must meet Nav2 Jazzy documented domains and
-cross-parameter constraints as well as the robot's narrower edit policy. See
+after initialization. The retained registry describes Nav2 Jazzy parameter
+domains and the robot's narrower policy for the versioned configuration. See
 [parameter rules and references](tuning-parameter-rules.md).
 
 Do not set `PATROLBOT_TUNING_ENABLED=1` on an uninitialized deployment: startup intentionally
@@ -35,7 +32,7 @@ promoting startup configuration. See [bootstrap preflight](tuning-bootstrap.md).
 Baseline-aware persistence is implemented as an internal, unit-tested library
 path: [baseline import](tuning-baseline-import.md). It requires complete,
 representable observations and refuses unpreservable lower settings. This does
-not provide a browser initialization endpoint or permit unsigned ROS mutations.
+not provide a browser initialization endpoint or permit ROS mutations.
 
 The paired `patrolbot-dashboard` repository contains the cross-stack source
 inventory, threat model and verification record:
@@ -57,12 +54,9 @@ to increase lower producer-specific settings. Source defaults are not runtime
 readback. Usable lower speed bounds and installed/native parameter mutability
 remain unverified; no candidate is approved for activation by this work.
 
-Further activation work must use the existing core mutation owner,
-preserve emergency release/watchdog behavior and arbitrate against both physical
-and web manual evidence. Unknown ownership, hardware or odometry is not safe idle.
 Startup must use committed **active**, never merely **desired**, configuration.
-No edit, read, save, apply, restart or restore may re-arm teleop, resume a goal,
-enable motors, undock or publish a pose.
+Inspection does not re-arm teleop, resume a goal, enable motors, undock or publish
+a pose.
 
 No robot contact or deployment inventory is authorized by this document. Native
 behavior proofs belong in an isolated lab with pinned artifacts; physical tests

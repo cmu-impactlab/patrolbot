@@ -1,5 +1,9 @@
 # Advanced tuning: code/unit readiness, not deployment acceptance
 
+Historical verification record. Save/Apply was removed from the runtime; see
+[the current read-only behavior](advanced-tuning.md). The old write capabilities
+and signing/activation instructions below do not apply to current releases.
+
 Updated 2026-10-20. The current work implements the guarded runtime path on
 `feat/advanced-tuning-contract` in both repositories. **The operator's hard rule
 is code and unit tests first; deployment/environment tests are deferred.** No

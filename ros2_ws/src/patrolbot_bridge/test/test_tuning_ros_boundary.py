@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from patrolbot_bridge.tuning_authorization import AuthorizationError, sign, verify
+from patrolbot_bridge.tuning_authorization import sign
 from patrolbot_bridge.tuning_service import ServiceError, strict_json_loads
 import pytest
 
@@ -20,9 +20,7 @@ def _callback():
     method = next(method for method in node.body if isinstance(method, ast.FunctionDef)
                   and method.name == '_tuning_callback')
     namespace = {'json': json, 'ServiceError': ServiceError,
-                 'strict_json_loads': strict_json_loads,
-                 'AuthorizationError': AuthorizationError,
-                 'verify_tuning_authorization': verify}
+                 'strict_json_loads': strict_json_loads}
     code = ast.Module(body=[method], type_ignores=[])
     exec(compile(ast.fix_missing_locations(code), str(SOURCE), 'exec'), namespace)
     return namespace['_tuning_callback']
@@ -80,7 +78,7 @@ def test_malformed_payload_cannot_bypass_read_only_boundary(payload):
     assert calls == []
 
 
-def test_only_a_current_server_signature_reaches_the_mutation_dispatch():
+def test_even_a_current_server_signature_cannot_dispatch_a_mutation():
     key = b'unit-test-only-private-key-material'
     calls = []
     body = {'request': {'operation': 'save'},
@@ -93,9 +91,5 @@ def test_only_a_current_server_signature_reaches_the_mutation_dispatch():
     response = SimpleNamespace(result_json='')
     signed = sign(body, key, 'robot-1')
     _callback()(bridge, SimpleNamespace(payload_json=json.dumps(signed)), response)
-    assert json.loads(response.result_json)['outcome'] == 'ok'
-    assert calls == [body]
-    signed['actor']['id'] = 99
-    _callback()(bridge, SimpleNamespace(payload_json=json.dumps(signed)), response)
     assert json.loads(response.result_json)['outcome'] == 'refused'
-    assert calls == [body]
+    assert calls == []

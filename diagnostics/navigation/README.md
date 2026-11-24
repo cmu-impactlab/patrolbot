@@ -104,3 +104,13 @@ and has safety laser scanners and a safety PLC that monitors braking. PatrolBot
 uses commanded velocity for field selection and does not have that protection
 chain. Do not enter the MiR field length as PatrolBot detection clearance or
 stopping distance; those inputs describe measurements of the tested system.
+
+**PatrolBot study candidate:** 2.80 m of forward reach measured from the
+leading edge of the robot, at the 1.80 m/s study target. This is a hypothesis
+to check, not a value for `nav2_params.yaml`. Nav2 polygon coordinates are
+relative to `base_link`, so an x coordinate of 2.80 m would give less than
+2.80 m of clearance ahead of the robot. Use the actual leading edge,
+including any attachments, rather than assuming the configured footprint
+matches the measured robot. Score the candidate against PatrolBot's
+measured detection and stopping bounds, including deceleration into the
+shorter fields. Until those bounds are supplied, the candidate is unevaluated.

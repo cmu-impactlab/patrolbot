@@ -9,6 +9,10 @@
 namespace patrolbot {
 namespace {
 
+// Magnitudes for ordinary DRIVE requests only; UNDOCK owns its own limits.
+constexpr double kNormalDriveForwardLimitMps = 0.30;
+constexpr double kNormalDriveReverseLimitMps = 0.30;
+
 bool isHex(char value) {
   return (value >= '0' && value <= '9') ||
          (value >= 'a' && value <= 'f');
@@ -258,6 +262,8 @@ DriveDisposition classifyDrive(double linear, double angular,
                                unsigned int fault_flags,
                                unsigned int critical_fault_mask,
                                bool undock_active, bool lidar_ready) {
+  // Classifier precedence only: the dispatcher leaves an active UNDOCK's
+  // velocity untouched, even when it receives an ordinary zero DRIVE.
   const bool zero =
       std::fabs(linear) < 1e-9 && std::fabs(angular) < 1e-9;
   if (zero) return DRIVE_ALLOWED_ZERO;
@@ -266,8 +272,10 @@ DriveDisposition classifyDrive(double linear, double angular,
   // the robot. This is a state, not a window, so there is nothing to expire.
   if (undock_active) return DRIVE_REJECTED;
 
-  const bool bounded =
-      std::fabs(linear) <= 0.30 && std::fabs(angular) <= 1.20;
+  // Closed interval checks also reject nonfinite inputs.
+  const bool bounded = linear >= -kNormalDriveReverseLimitMps &&
+                       linear <= kNormalDriveForwardLimitMps &&
+                       std::fabs(angular) <= 1.20;
   if (!bounded || control_pending || !lidar_ready || !motors_enabled || estop_pressed ||
       (fault_flags & critical_fault_mask) != 0) {
     return DRIVE_REJECTED;

@@ -7,8 +7,10 @@
 
 #include <cmath>
 #include <cstdio>
-#include <string>
+#include <initializer_list>
+#include <limits>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace {
@@ -95,8 +97,14 @@ void test_drive_command_parsing() {
   CHECK(drive.type == COMMAND_DRIVE);
   CHECK(std::fabs(drive.linear + 0.05) < 1e-9);
   CHECK(parseCommand("DRIVE:nan:0").type == COMMAND_INVALID);
-  CHECK(parseCommand("DRIVE:inf:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0:nan").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:+inf:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0:-inf").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:1e999:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0:-1e999").type == COMMAND_INVALID);
   CHECK(parseCommand("DRIVE:0.1abc:0").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0:0.1abc").type == COMMAND_INVALID);
+  CHECK(parseCommand("DRIVE:0:").type == COMMAND_INVALID);
   CHECK(parseCommand("DRIVE:0.1").type == COMMAND_INVALID);
 }
 
@@ -132,74 +140,102 @@ void test_undock_cancel_names_its_target() {
   CHECK(parseCommand("UNDOCK_CANCEL:not-a-uuid").type == COMMAND_INVALID);
 }
 
+DriveDisposition classifyClearDrive(double linear, double angular) {
+  return classifyDrive(linear, angular, false, DOCK_CLEAR_CONFIRMED, true,
+                       false, 0, kCritical, false, true);
+}
+
+void test_drive_linear_and_angular_bounds() {
+  // Pin the limits independently of the implementation's constants. Exactly
+  // at each limit and one representable step inside are allowed; outside is not.
+  for (double linear : {0.30, -0.30}) {
+    CHECK(classifyClearDrive(std::nextafter(linear, 0.0), 0.0) ==
+          DRIVE_ALLOWED_NORMAL);
+    CHECK(classifyClearDrive(linear, 0.0) == DRIVE_ALLOWED_NORMAL);
+    CHECK(classifyClearDrive(std::nextafter(linear, linear * 2), 0.0) ==
+          DRIVE_REJECTED);
+  }
+  for (double angular : {1.20, -1.20}) {
+    CHECK(classifyClearDrive(0.0, angular) == DRIVE_ALLOWED_NORMAL);
+    CHECK(classifyClearDrive(0.0, std::nextafter(angular, angular * 2)) ==
+          DRIVE_REJECTED);
+  }
+  CHECK(classifyClearDrive(0.30, 1.20) == DRIVE_ALLOWED_NORMAL);
+  CHECK(classifyClearDrive(-0.30, -1.20) == DRIVE_ALLOWED_NORMAL);
+}
+
+void test_drive_rejects_nonfinite_values() {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double inf = std::numeric_limits<double>::infinity();
+  for (double invalid : {nan, inf, -inf}) {
+    // A zero on the other axis must not make an invalid request a stop.
+    CHECK(classifyClearDrive(invalid, 0.0) == DRIVE_REJECTED);
+    CHECK(classifyClearDrive(0.0, invalid) == DRIVE_REJECTED);
+  }
+}
+
+void test_drive_zero_takes_precedence_in_classifier() {
+  const double near_zero = std::nextafter(1e-9, 0.0);
+  for (double linear : {0.0, near_zero, -near_zero}) {
+    for (bool undock_active : {false, true}) {
+      CHECK(classifyDrive(linear, -linear, true, DOCK_DOCKED_CONFIRMED, false,
+                          true, 0xffff, kCritical, undock_active, false) ==
+            DRIVE_ALLOWED_ZERO);
+    }
+  }
+  // Both axes must be strictly below the existing zero threshold.
+  for (double threshold : {1e-9, -1e-9}) {
+    CHECK(classifyClearDrive(threshold, 0.0) == DRIVE_ALLOWED_NORMAL);
+    CHECK(classifyClearDrive(0.0, threshold) == DRIVE_ALLOWED_NORMAL);
+  }
+}
+
 void test_drive_requires_a_proven_clear_dock_state() {
-  // Zero is always accepted so a stop can never be refused.
-  CHECK(classifyDrive(0.0, 0.0, true, DOCK_DOCKED_CONFIRMED, false, true,
-                      0xffff, kCritical, true, true) == DRIVE_ALLOWED_ZERO);
-
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
-  CHECK(classifyDrive(0.0, 0.70, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
-
-  // Every state other than CLEAR_CONFIRMED refuses motion, including UNKNOWN
-  // at process start.
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_UNKNOWN, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_DOCKED_CONFIRMED, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_DEPARTING, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_FAULT_STOPPED, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
+  for (double linear : {0.10, -0.10}) {
+    CHECK(classifyClearDrive(linear, 0.0) == DRIVE_ALLOWED_NORMAL);
+    for (DockPhysicalState state : {DOCK_UNKNOWN, DOCK_DOCKED_CONFIRMED,
+                                    DOCK_DEPARTING, DOCK_FAULT_STOPPED}) {
+      CHECK(classifyDrive(linear, 0.0, false, state, true, false, 0,
+                          kCritical, false, true) == DRIVE_REJECTED);
+    }
+  }
 }
 
 void test_drive_is_refused_while_undock_owns_motion() {
-  // The exact reverse the undock itself commands is still refused when it
-  // arrives as an ordinary DRIVE, in every dock state.
-  CHECK(classifyDrive(-0.10, 0.0, false, DOCK_DEPARTING, true, false, 0,
-                      kCritical, true, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.10, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, true, true) == DRIVE_REJECTED);
+  // Even the exact reverse commanded by UNDOCK cannot arrive as ordinary DRIVE.
+  for (double linear : {0.10, -0.10}) {
+    for (DockPhysicalState state : {DOCK_DEPARTING, DOCK_CLEAR_CONFIRMED}) {
+      CHECK(classifyDrive(linear, 0.0, false, state, true, false, 0,
+                          kCritical, true, true) == DRIVE_REJECTED);
+    }
+  }
   CHECK(classifyDrive(0.0, 0.5, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
                       kCritical, true, true) == DRIVE_REJECTED);
-  // A stop is still honoured during an undock.
-  CHECK(classifyDrive(0.0, 0.0, false, DOCK_DEPARTING, true, false, 0,
-                      kCritical, true, true) == DRIVE_ALLOWED_ZERO);
 }
 
-void test_drive_bounds_and_hardware_gates() {
-  CHECK(classifyDrive(0.31, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(0.0, 1.21, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, true, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, false, false, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, true, 0,
-                      kCritical, false, true) == DRIVE_REJECTED);
-
-  // Critical faults block; a non-critical flag such as low_battery (bit 3)
-  // does not, because a robot that has just left the dock reports it normally.
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
-                      0x0100, kCritical, false, true) == DRIVE_REJECTED);
-  CHECK(classifyDrive(-0.05, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
-                      0x0008, kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
-}
-
-void test_lidar_gates_motion_but_never_stop() {
-  CHECK(classifyDrive(.05, 0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
-                      kCritical, false, false) == DRIVE_REJECTED);
-  CHECK(classifyDrive(0, 0, true, DOCK_UNKNOWN, false, true, 0xffff,
-                      kCritical, false, false) == DRIVE_ALLOWED_ZERO);
-  CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, false));
-  CHECK(motorEnableAllowed(DOCK_UNKNOWN, false, false));
+void test_drive_hardware_gates() {
+  for (double linear : {0.05, -0.05}) {
+    CHECK(classifyDrive(linear, 0.0, true, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                        kCritical, false, true) == DRIVE_REJECTED);
+    CHECK(classifyDrive(linear, 0.0, false, DOCK_CLEAR_CONFIRMED, false, false, 0,
+                        kCritical, false, true) == DRIVE_REJECTED);
+    CHECK(classifyDrive(linear, 0.0, false, DOCK_CLEAR_CONFIRMED, true, true, 0,
+                        kCritical, false, true) == DRIVE_REJECTED);
+    CHECK(classifyDrive(linear, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false, 0,
+                        kCritical, false, false) == DRIVE_REJECTED);
+    // Critical faults block; low battery (bit 3) does not.
+    CHECK(classifyDrive(linear, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
+                        0x0100, kCritical, false, true) == DRIVE_REJECTED);
+    CHECK(classifyDrive(linear, 0.0, false, DOCK_CLEAR_CONFIRMED, true, false,
+                        0x0008, kCritical, false, true) == DRIVE_ALLOWED_NORMAL);
+  }
 }
 
 void test_motor_enable_is_decoupled_from_charging() {
   // Motor power does not release charging or authorize movement.
   CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, true));
+  CHECK(motorEnableAllowed(DOCK_CLEAR_CONFIRMED, false, false));
+  CHECK(motorEnableAllowed(DOCK_UNKNOWN, false, false));
   CHECK(motorEnableAllowed(DOCK_UNKNOWN, false, true));
   CHECK(motorEnableAllowed(DOCK_DOCKED_CONFIRMED, false, true));
   CHECK(motorEnableAllowed(DOCK_DEPARTING, false, true));
@@ -317,10 +353,12 @@ int main() {
   RUN(test_drive_command_parsing);
   RUN(test_undock_command_parsing);
   RUN(test_undock_cancel_names_its_target);
+  RUN(test_drive_linear_and_angular_bounds);
+  RUN(test_drive_rejects_nonfinite_values);
+  RUN(test_drive_zero_takes_precedence_in_classifier);
   RUN(test_drive_requires_a_proven_clear_dock_state);
   RUN(test_drive_is_refused_while_undock_owns_motion);
-  RUN(test_drive_bounds_and_hardware_gates);
-  RUN(test_lidar_gates_motion_but_never_stop);
+  RUN(test_drive_hardware_gates);
   RUN(test_motor_enable_is_decoupled_from_charging);
   RUN(test_line_buffer_reassembles_fragments);
   RUN(test_control_frame_formatting);

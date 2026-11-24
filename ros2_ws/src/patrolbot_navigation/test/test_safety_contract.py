@@ -1,6 +1,7 @@
 """Static safety-contract tests for PatrolBot navigation configuration."""
 
 import ast
+import json
 import math
 import re
 import stat
@@ -129,24 +130,54 @@ class SafetyContractTest(unittest.TestCase):
         collision = self.params['collision_monitor']['ros__parameters']
         self.assertIs(collision['base_shift_correction'], False)
 
-    def test_autonomous_speed_baseline_matches_protected_forward_bands(self):
-        """Do not widen cruise or the smoother without reviewing protection."""
-        controller = self.params['controller_server']['ros__parameters']['FollowPath']
-        self.assertEqual(controller['desired_linear_vel'], 0.22)
-        smoother = self.params['velocity_smoother']['ros__parameters']
-        self.assertEqual(smoother['max_velocity'][0], 0.26)
+    def test_ordinary_path_following_baseline(self):
+        controller = self.params['controller_server']['ros__parameters']
+        follow_path = controller['FollowPath']
+        self.assertEqual(follow_path['desired_linear_vel'], 0.22)
+        self.assertIs(follow_path['allow_reversing'], False)
+        self.assertEqual(follow_path['rotate_to_heading_angular_vel'], 0.90)
+        cap = 'patrolbot_output_cap'
+        self.assertIs(follow_path.get(cap, {}).get('enabled', False), False)
+        self.assertIs(follow_path.get(f'{cap}.enabled', False), False)
+        self.assertIs(controller.get(f'FollowPath.{cap}.enabled', False), False)
+
+    def test_collision_monitor_filters_nav_commands_before_final_smoothing(self):
         collision = self.params['collision_monitor']['ros__parameters']
-        for name in ('front_velocity_stop', 'rear_velocity_stop'):
-            with self.subTest(polygon=name):
-                bands = collision[name]
-                self.assertEqual(bands['rotation_or_stopped']['linear_max'],
-                                 bands['forward']['linear_min'])
-                self.assertEqual(bands['forward']['linear_max'], smoother['max_velocity'][0])
-                # The monitor is upstream of the final 0.70 rad/s clamp.
-                self.assertGreaterEqual(bands['forward']['theta_max'],
-                                        smoother['max_velocity'][2])
-                self.assertLessEqual(bands['forward']['theta_min'],
-                                     smoother['min_velocity'][2])
+        final_params = yaml.safe_load((
+            LAUNCH_PACKAGE_ROOT / 'param/defaults/mux.yaml').read_text())[
+                'cmd_vel_mux']['ros__parameters']
+        self.assertEqual(collision['cmd_vel_in_topic'], 'cmd_vel_smoothed')
+        self.assertEqual(collision['cmd_vel_out_topic'], 'input/navi')
+        self.assertEqual(final_params['topics']['navigation']['topic'],
+                         collision['cmd_vel_out_topic'])
+        self.assertIs(collision['enable_stamped_cmd_vel'], False)
+        final_node = ET.parse(LAUNCH_PACKAGE_ROOT / 'launch/smoother.xml').find(
+            "node[@name='teleop_velocity_smoother']")
+        self.assertEqual(
+            {remap.get('from'): remap.get('to') for remap in final_node.findall('remap')},
+            {'/cmd_vel': '/cmd_vel_out', 'cmd_vel_smoothed': 'cmd_vel'})
+
+    def test_nav_smoother_has_a_separate_open_loop_envelope(self):
+        smoother = self.params['velocity_smoother']['ros__parameters']
+        self.assertEqual(smoother['feedback'], 'OPEN_LOOP')
+        self.assertEqual(smoother['smoothing_frequency'], 20.0)
+        self.assertEqual(smoother['max_velocity'], [0.26, 0.0, 1.0])
+        self.assertEqual(smoother['min_velocity'], [-0.26, 0.0, -1.0])
+        self.assertEqual(smoother['max_accel'], [2.5, 0.0, 3.2])
+        self.assertEqual(smoother['max_decel'], [-2.5, 0.0, -3.2])
+
+    def test_costmap_freshness_is_separate_from_unknown_cell_policy(self):
+        planner = self.params['planner_server']['ros__parameters']['GridBased']
+        self.assertIs(planner['allow_unknown'], True)
+        for name in ('local_costmap', 'global_costmap'):
+            with self.subTest(costmap=name):
+                costmap = self.params[name][name]['ros__parameters']
+                # Jazzy defaults to treating unknown cells as free. This is
+                # not permission to move on stale/missing sensor evidence.
+                self.assertIs(costmap.get('track_unknown_space', False), False)
+                scan = costmap['obstacle_layer']['scan']
+                self.assertEqual(scan['topic'], '/scan')
+                self.assertEqual(scan['expected_update_rate'], 0.5)
 
     def test_undock_spin_matches_hardware_turn_cap(self):
         behavior = self.params['behavior_server']['ros__parameters']
@@ -386,6 +417,9 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIn("'/cmd_vel_out'", watchdog)
         config = self.params['patrolbot_safety_watchdog']['ros__parameters']
         self.assertEqual(config['battery_stop_voltage'], 23.0)
+        self.assertEqual(config['scan_timeout'], 0.5)
+        self.assertEqual(config['odom_timeout'], 0.5)
+        self.assertEqual(config['base_state_timeout'], 0.75)
         self.assertEqual(config['battery_timeout'], 1.0)
         self.assertIs(config['stop_on_faults'], True)
         self.assertIs(config['stop_on_estop'], True)
@@ -406,6 +440,8 @@ class SafetyContractTest(unittest.TestCase):
             'speed_lim_v', 'speed_lim_w', 'accel_lim_v', 'accel_lim_w',
             'frequency', 'decel_factor', 'robot_feedback'}
         self.assertFalse(obsolete & smoother.keys())
+        self.assertEqual(smoother['feedback'], 'OPEN_LOOP')
+        self.assertEqual(smoother['smoothing_frequency'], 20.0)
         self.assertEqual(smoother['max_velocity'], [0.30, 0.0, 0.7])
         self.assertEqual(smoother['min_velocity'], [-0.30, 0.0, -0.7])
         self.assertEqual(smoother['max_accel'], [1.0, 0.0, 1.5])
@@ -795,12 +831,16 @@ class SafetyContractTest(unittest.TestCase):
         self.assertIn('An SSH disconnect by itself is not proof', guide)
         self.assertNotIn('chronyd -p', guide)
 
-    def test_rear_sonar_is_a_fail_closed_collision_source(self):
+    def test_scan_and_sonar_are_fail_closed_collision_sources(self):
         collision = self.params['collision_monitor']['ros__parameters']
         self.assertEqual(collision['observation_sources'], ['scan', 'sonar'])
         self.assertEqual(collision['source_timeout'], 0.5)
-        self.assertEqual(collision['scan']['source_timeout'], 0.5)
-        self.assertEqual(collision['sonar']['source_timeout'], 0.5)
+        for source in ('scan', 'sonar'):
+            with self.subTest(source=source):
+                self.assertIs(collision[source]['enabled'], True)
+                self.assertEqual(collision[source]['source_timeout'], 0.5)
+        self.assertEqual(collision['scan']['type'], 'scan')
+        self.assertEqual(collision['scan']['topic'], '/scan')
         self.assertEqual(collision['sonar']['type'], 'pointcloud')
         self.assertEqual(collision['sonar']['topic'], '/sonar')
         self.assertEqual(collision['front_velocity_stop']['sources_names'], ['scan'])
@@ -820,40 +860,39 @@ class SafetyContractTest(unittest.TestCase):
         self.assertNotIn('message->current', plugin_text)
         self.assertIn('"/patrolbot/charge_release"', plugin_text)
 
-    @staticmethod
-    def _select_subpolygon(polygon, linear, angular):
-        """Mirror Jazzy's ordered first-match VelocityPolygon selection."""
-        for name in polygon['velocity_polygons']:
-            candidate = polygon[name]
-            if (
-                candidate['linear_min'] <= linear <= candidate['linear_max']
-                and candidate['theta_min'] <= angular <= candidate['theta_max']
-            ):
-                return name
-        return None
-
-    def test_velocity_polygon_full_envelope_has_no_holes(self):
+    def test_velocity_polygons_cover_the_full_command_envelope_with_shipped_geometry(self):
+        """Check exact intervals (no sampling gaps) and geometry, not braking."""
+        smoother = self.params['velocity_smoother']['ros__parameters']
+        min_x, _, min_yaw = smoother['min_velocity']
+        max_x, _, max_yaw = smoother['max_velocity']
+        # Jazzy takes the first inclusive match: the stop/rotation zone wins
+        # at ±0.01 m/s even when there is a simultaneous yaw command.
+        bands = {'rotation_or_stopped': (-0.01, 0.01),
+                 'forward': (0.01, max_x), 'reverse': (min_x, -0.01)}
         collision = self.params['collision_monitor']['ros__parameters']
-        for polygon_name in ('front_velocity_stop', 'rear_velocity_stop'):
-            polygon = collision[polygon_name]
-            # Exhaustive millimeter-per-second by centiradian-per-second sweep,
-            # including combined arcs and the +/-0.01 boundary bands.
-            for linear_mm in range(-260, 261):
-                linear = linear_mm / 1000.0
-                for angular_centirad in range(-100, 101):
-                    angular = angular_centirad / 100.0
-                    selected = self._select_subpolygon(polygon, linear, angular)
-                    self.assertIsNotNone(
-                        selected,
-                        f'{polygon_name} hole at v={linear}, w={angular}',
-                    )
-                    if -0.01 <= linear <= 0.01:
-                        expected = 'rotation_or_stopped'
-                    elif linear > 0.01:
-                        expected = 'forward'
-                    else:
-                        expected = 'reverse'
-                    self.assertEqual(selected, expected)
+        self.assertEqual(collision['base_frame_id'], 'base_link')
+        rotation_x, reverse_x = (-0.30, 0.30), (-0.55, -0.20)
+        forward_x = {
+            'front_velocity_stop': rotation_x,
+            'rear_velocity_stop': (0.20, 0.55),
+        }
+        self.assertEqual(collision['polygons'], list(forward_x))
+        for name, forward in forward_x.items():
+            polygon = collision[name]
+            shapes = {'rotation_or_stopped': rotation_x, 'forward': forward, 'reverse': reverse_x}
+            self.assertEqual(polygon['type'], 'velocity_polygon')
+            self.assertEqual(polygon['action_type'], 'stop')
+            self.assertIs(polygon.get('enabled', True), True)
+            self.assertIs(polygon['holonomic'], False)
+            self.assertEqual(polygon['velocity_polygons'], list(bands))
+            for band, interval in bands.items():
+                with self.subTest(polygon=name, band=band):
+                    config = polygon[band]
+                    self.assertEqual((config['linear_min'], config['linear_max']), interval)
+                    self.assertEqual((config['theta_min'], config['theta_max']), (min_yaw, max_yaw))
+                    lo, hi = shapes[band]
+                    self.assertEqual(json.loads(config['points']),
+                                     [[hi, 0.30], [hi, -0.30], [lo, -0.30], [lo, 0.30]])
 
     def test_rear_sonar_geometry_mirrors_the_sbc_profile(self):
         """PB-AUDIT-004. The Pi validates published sonar points against the

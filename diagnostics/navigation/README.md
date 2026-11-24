@@ -93,3 +93,14 @@ crash; motion during scan and TF age still need to be accounted for. Reverse,
 rear sensing, undock, manual motion, hardware ceilings and safety gates are
 unchanged and outside this study. The rear velocity polygon is not extended
 or checked for higher commands, so the study does not cover the whole monitor.
+
+### Published comparison: MiR250
+
+The [MiR250 Technical Guide, “Field set when driving forward”](https://download.astor.com.pl/dokumentacja/Mobile%20Industrial%20Robots/Roboty%20MIR/MiR250/Podr%C4%99czniki/mir250-technical-guide-10-en.pdf)
+reports a **2.85 m** forward protective field for **1.70–2.10 m/s**, the band
+that includes the PatrolBot study target. This is a comparison, not PatrolBot
+evidence or a Nav2 parameter. The MiR250 switches fields using encoder speed
+and has safety laser scanners and a safety PLC that monitors braking. PatrolBot
+uses commanded velocity for field selection and does not have that protection
+chain. Do not enter the MiR field length as PatrolBot detection clearance or
+stopping distance; those inputs describe measurements of the tested system.

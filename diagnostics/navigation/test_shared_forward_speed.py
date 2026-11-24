@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from shared_forward_speed import DriveMode, ForwardSpeedStudy, Sample
+from shared_forward_speed import DriveMode, ForwardSpeedStudy, Intent, Sample
 
 
 def frame(study, lease, *, now=10.0, command=1.8, measured=0.0, clearance=3.0,
@@ -12,8 +12,9 @@ def frame(study, lease, *, now=10.0, command=1.8, measured=0.0, clearance=3.0,
     def sample(value):
         return Sample(value, now) if type(value) in (int, float) else value
 
+    intent = Intent(command, now, lease) if type(command) in (int, float) else command
     return study.evaluate(
-        lease, now=now, command=sample(command), measured=sample(measured),
+        lease, now=now, command=intent, measured=sample(measured),
         clearance=sample(clearance), route_cap=route_cap, turn_cap=turn_cap,
         robot_cap=robot_cap,
     )
@@ -87,6 +88,15 @@ def test_handoffs_keep_profiles_separate_and_connection_reset_clears_them(study)
     assert frame(study, study.take_control(DriveMode.DASHBOARD)).bounded_intent_m_s == 0.30
 
 
+def test_queued_command_cannot_be_rebound_to_the_new_owner(study):
+    nav = study.take_control(DriveMode.NAVIGATION)
+    queued = Intent(1.8, 10.0, nav)
+    controller = study.take_control(DriveMode.CONTROLLER)
+    decision = frame(study, controller, now=10.1, command=queued, measured=1.4)
+    assert decision.reason == 'no_fresh_forward_intent'
+    assert (decision.bounded_intent_m_s, decision.required_zone_m) == (0.0, 2.8)
+
+
 @pytest.mark.parametrize(('changes', 'reason'), [
     ({'measured': Sample(0.0, 9.75)}, 'unknown_measured_speed'),
     ({'measured': Sample(0.0, 10.1)}, 'unknown_measured_speed'),
@@ -94,7 +104,6 @@ def test_handoffs_keep_profiles_separate_and_connection_reset_clears_them(study)
     ({'measured': 1.81}, 'unknown_measured_speed'),
     ({'clearance': Sample(5.0, 9.75)}, 'unknown_clearance'),
     ({'clearance': math.inf}, 'unknown_clearance'),
-    ({'command': Sample(1.8, 9.75)}, 'no_fresh_forward_intent'),
     ({'command': -0.1}, 'no_fresh_forward_intent'),
     ({'robot_cap': None}, 'unknown_cap'),
     ({'route_cap': 2.0}, 'unknown_cap'),
@@ -106,6 +115,11 @@ def test_unverified_inputs_stop_and_cannot_automatically_resume(study, changes, 
     held = frame(study, lease, **samples)
     assert (held.bounded_intent_m_s, held.required_zone_m, held.reason) == (0.0, 2.8, reason)
     assert frame(study, lease).reason == 'no_current_owner'
+
+
+def test_fresh_owner_does_not_accept_a_stale_command(study):
+    lease = study.take_control(DriveMode.NAVIGATION)
+    assert frame(study, lease, command=Intent(1.8, 9.75, lease)).reason == 'no_fresh_forward_intent'
 
 
 @pytest.mark.parametrize('auto_resume', [False, True])

@@ -27,6 +27,13 @@ class Sample:
 
 
 @dataclass(frozen=True)
+class Intent(Sample):
+    """Bind the queued request to its owner at ingress, not at evaluation."""
+
+    lease: object
+
+
+@dataclass(frozen=True)
 class Decision:
     requested_m_s: float
     bounded_intent_m_s: float
@@ -39,10 +46,10 @@ def _in_range(value, maximum):
     return type(value) in (int, float) and 0 <= value <= maximum
 
 
-def _fresh(sample, now, max_age):
+def _fresh(sample, now, max_age, expected_type=Sample):
     # These are simulator timestamps; reject bad/future samples without restamping.
     return (
-        type(sample) is Sample
+        type(sample) is expected_type
         and _in_range(now, 1e12)
         and _in_range(sample.received_at, now)
         and now - sample.received_at < max_age
@@ -110,7 +117,8 @@ class ForwardSpeedStudy:
         occupied_zone = STUDY_LONG_ZONE_M if measured.value > low_speed else self._short_zone
         if self._lease is None or lease is not self._lease:
             return Decision(request, 0.0, occupied_zone, 'no_current_owner')
-        if not _fresh(command, now, self._max_age) or not _in_range(command.value, STUDY_MAX_M_S):
+        if (not _fresh(command, now, self._max_age, Intent) or command.lease is not self._lease
+                or not _in_range(command.value, STUDY_MAX_M_S)):
             return self._stop(request, occupied_zone, 'no_fresh_forward_intent')
         caps = (route_cap, turn_cap, robot_cap)
         if not all(_in_range(cap, STUDY_MAX_M_S) for cap in caps):

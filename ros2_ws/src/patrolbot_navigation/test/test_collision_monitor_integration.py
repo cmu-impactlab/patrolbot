@@ -287,6 +287,26 @@ def test_stale_rear_source_stops_reverse(monitor):
     assert_velocity(output, 0.0)
 
 
+def test_shadow_replay_retains_long_zone_after_monitor_requests_stop(monitor, monkeypatch):
+    """Observe a real Jazzy zero; the remaining speed is a simulated lag."""
+    monkeypatch.syspath_prepend(str(PACKAGE_ROOT.parents[2] / 'diagnostics/navigation'))
+    from forward_speed_shadow import ShadowTrace
+
+    limited = monitor.command(0.05, scan_obstacle=True)
+    assert_velocity(limited, 0.0)
+    shadow = ShadowTrace(short_zone_m=0.4, max_age_s=0.25)
+    shadow.consume(dict(event='owner', at=1.0, epoch=1, mode='navigation'))
+    report = shadow.consume(dict(
+        event='frame', at=1.1, route_cap=0.26, turn_cap=0.26, robot_cap=0.30,
+        command=dict(value=limited.linear.x, received_at=1.1, epoch=1),
+        measured=dict(value=1.2, received_at=1.1),  # synthetic, not SBC telemetry
+        clearance=dict(value=0.25, received_at=1.1),
+    ))
+    assert report['would_apply']['bounded_intent_m_s'] == 0.0
+    assert report['would_apply']['required_zone_m'] == 2.8
+    assert report['shadow_only']
+
+
 @pytest.mark.parametrize(
     ('linear', 'angular'),
     [

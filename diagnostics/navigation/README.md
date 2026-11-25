@@ -140,3 +140,22 @@ an acceleration setpoint. Later integration must prove the source and age
 of samples and preserve the wider zone through both smoothers and the hardware
 response. It must also preserve existing reverse, recovery and undock routes,
 and verify independent personnel protection before shared-hallway release.
+
+### Read-only trace replay
+
+`forward_speed_shadow.py` replays normalized JSON lines and prints shadow
+reports; it cannot connect to ROS or the SBC. Use a common monotonic clock for
+`at` (event time) and `received_at` (original receipt time). Record `owner`
+events with `mode` (`navigation`, `dashboard`, `controller`) and a strictly
+increasing integer `epoch`; record `selection` with its `epoch` and
+`selected_m_s`; record `reset` on connection replacement. A `frame` carries
+`command`, `measured`, and `clearance` samples as `{value, received_at}` or
+`null`, plus `route_cap`, `turn_cap`, and `robot_cap` as numbers or `null` if
+unknown. The command must also carry the original `epoch`. Every record includes
+`event` and `at`. Caps are normalized (do not pass Nav2's zero sentinel as a
+route cap). Reports separate the received measurement from `would_apply`;
+neither a report nor a captured owner label is authorization to drive.
+
+PatrolBot's final `Twist` and SBC `DRIVE` line do not identify the producer.
+A future live observer must obtain ownership from a trusted source; it must
+not infer the producer from the final command or from deadman activity alone.

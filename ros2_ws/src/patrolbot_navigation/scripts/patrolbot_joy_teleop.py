@@ -117,6 +117,9 @@ class JoyTeleop(Node):
         self.prev_btns = []
         self.was_pub = False
         self._last_joy = None                     # time of last /joy msg (safety)
+        self._joy_rearm_after_ns = self.get_clock().now().nanoseconds
+        self._joy_neutral_stamp_ns = None
+        self._base_motion_blocked = False
         # Manual takeover is fail-closed on release: until Nav2 accepts the
         # cancel-all request, keep publishing priority-8 zero rather than let a
         # previous autonomous goal resume underneath the operator.
@@ -246,17 +249,43 @@ class JoyTeleop(Node):
         if (getattr(message, 'undock_active', False) or
                 getattr(message, 'dock_state', '') == 'FAULT_STOPPED'):
             self._block_undock_input()
-        if ((self._lidar_generation is not None and
-             message.session_generation != self._lidar_generation) or
-                not message.link_connected):
-            self._lidar_toggle_pending = False
-            self._lidar_chord.reset()
-            self.active = False
-            self.deadman_was_down = False
-            self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
+        generation_changed = (self._lidar_generation is not None
+                              and message.session_generation != self._lidar_generation)
+        link_was_connected = self._base_state is None or self._base_state.link_connected
+        link_changed = message.link_connected != link_was_connected
+        blocked = (not message.link_connected or getattr(message, 'estop_pressed', False)
+                   or bool(getattr(message, 'fault_flags', 0)))
+        now_ns = self.get_clock().now().nanoseconds
+        if generation_changed or link_changed or blocked != self._base_motion_blocked:
+            self._suspend_joy(
+                now_ns, reset_trims=generation_changed or link_changed, immediate_zero=True)
+        self._base_motion_blocked = blocked
         self._lidar_generation = message.session_generation
         self._base_state = message
-        self._base_state_at = self.get_clock().now().nanoseconds / 1e9
+        self._base_state_at = now_ns / 1e9
+
+    def _suspend_joy(self, rearm_after_ns, *, reset_trims, immediate_zero):
+        self._joy_rearm_after_ns = rearm_after_ns
+        self._joy_neutral_stamp_ns = None
+        self._last_joy = None
+        self.active = self.deadman_was_down = False
+        self.lin_tgt = self.ang_tgt = 0.0
+        if immediate_zero:
+            self.lin_cmd = self.ang_cmd = 0.0
+        self.prev_btns = []
+        self._lidar_toggle_pending = False
+        self._lidar_chord.reset()
+        if reset_trims:
+            self.max_lin = max(0.0, min(self.get_parameter('max_linear').value, self.lin_cap))
+            self.max_ang = max(0.0, min(self.get_parameter('max_angular').value, self.ang_cap))
+            self._operator_linear_trim = self._operator_angular_trim = False
+
+    def _expire_joy(self, now_ns):
+        now = now_ns / 1e9
+        if self._last_joy is not None and not 0 <= now - self._last_joy <= JOY_TIMEOUT:
+            # A queued release from before the outage is not evidence of a
+            # release after it. Leave existing coasting/ramp behavior intact.
+            self._suspend_joy(now_ns, reset_trims=True, immediate_zero=False)
 
     def _block_undock_input(self):
         self.active = self.deadman_was_down = False
@@ -445,18 +474,30 @@ class JoyTeleop(Node):
             if not self._tuning_hold and not self._tuning_deadman_held:
                 self._tuning_require_release = False
             return
-        now = self.get_clock().now().nanoseconds / 1e9
-        if self._last_joy is None or not 0 <= now - self._last_joy <= JOY_TIMEOUT:
-            self._lidar_toggle_pending = False
-        self._last_joy = now
+        now_ns = self.get_clock().now().nanoseconds
+        now = now_ns / 1e9
+        self._expire_joy(now_ns)
         stamp = m.header.stamp.sec + m.header.stamp.nanosec / 1e9
+        if self._base_motion_blocked:
+            return
+        if self._joy_rearm_after_ns is not None:
+            if (stamp_ns > self._joy_rearm_after_ns
+                    and 0 <= now_ns - stamp_ns <= int(JOY_TIMEOUT * 1e9)
+                    and neutral_input(a, b)):
+                self._joy_rearm_after_ns = None
+                self._joy_neutral_stamp_ns = stamp_ns
+                self._last_joy = now
+                self._lidar_chord.update(a, b, now=now, stamp=stamp)
+            return
+        if self._joy_neutral_stamp_ns is not None and stamp_ns <= self._joy_neutral_stamp_ns:
+            self._suspend_joy(now_ns, reset_trims=False, immediate_zero=True)
+            return
+        self._last_joy = now
         toggle = self._lidar_chord.update(a, b, now=now, stamp=stamp)
         if not self._lidar_chord.all_pressed:
             self._lidar_toggle_pending = False
         if not self._lidar_chord.valid:
-            self.active = False
-            self.deadman_was_down = False
-            self.lin_tgt = self.ang_tgt = self.lin_cmd = self.ang_cmd = 0.0
+            self._suspend_joy(now_ns, reset_trims=False, immediate_zero=True)
             return
         if toggle:
             self._lidar_toggle_pending = not self._lidar_in_flight
@@ -510,16 +551,7 @@ class JoyTeleop(Node):
         # Joy-loss safety: if /joy stopped arriving (controller unplugged or
         # joy_node died) while RB was held, drop the deadman and zero the target
         # so we ramp to a stop instead of republishing the last command forever.
-        now = self.get_clock().now().nanoseconds / 1e9
-        if self._last_joy is None or not 0 <= now - self._last_joy <= JOY_TIMEOUT:
-            self.active = False
-            # A fresh held-RB report after a receiver outage must be treated as
-            # a new takeover and issue a new cancellation request.
-            self.deadman_was_down = False
-            self._lidar_toggle_pending = False
-            self._lidar_chord.reset()
-            self.lin_tgt = 0.0
-            self.ang_tgt = 0.0
+        self._expire_joy(self.get_clock().now().nanoseconds)
 
         self._request_navigation_cancel()
 

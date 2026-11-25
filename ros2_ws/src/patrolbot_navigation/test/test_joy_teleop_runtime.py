@@ -21,7 +21,7 @@ def stamp(seconds):
 def joy(now, lb=False, rb=False, lt=False, rt=False, linear=0.0):
     return SimpleNamespace(
         header=SimpleNamespace(stamp=stamp(now)),
-        buttons=[0, 0, 0, 0, int(lb), int(rb)],
+        buttons=[0, 0, 0, 0, int(lb), int(rb), 0, 0, 0, 0, 0],
         axes=[0.0, linear, -1.0 if lt else 1.0, 0.0, 0.0,
               -1.0 if rt else 1.0, 0.0, 0.0])
 
@@ -143,7 +143,11 @@ def teleop(monkeypatch):
     spec = importlib.util.spec_from_file_location('teleop_under_test', SCRIPTS / 'patrolbot_joy_teleop.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.JoyTeleop()
+    node = module.JoyTeleop()
+    node.now += .01
+    node.joy_cb(joy(node.now))
+    node.now += .01
+    return node
 
 
 def chord(teleop):
@@ -236,9 +240,28 @@ def test_tuning_enabled_restart_does_not_replay_an_already_held_controller(teleo
     restarted.tick()
     assert not restarted.active and restarted.lin_cmd == 0
     restarted.joy_cb(joy(restarted.now, rb=False))
+    restarted.now += .02
+    restarted.joy_cb(joy(restarted.now, rb=False))
+    restarted.now += .02
     restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
     restarted.tick()
     assert restarted.active and restarted.lin_cmd > 0
+
+
+def test_standalone_restart_requires_fresh_neutral_and_new_press(teleop):
+    restarted = type(teleop)()
+    restarted.now += .02
+    restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
+    assert not restarted.active and not restarted.nav_cancel.calls
+    restarted.joy_cb(joy(restarted.now))
+    restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))  # timestamp did not advance
+    assert not restarted.active and not restarted.nav_cancel.calls
+    restarted.now += .02
+    restarted.joy_cb(joy(restarted.now))
+    restarted.now += .02
+    restarted.joy_cb(joy(restarted.now, rb=True, linear=1.))
+    restarted.tick()
+    assert restarted.active and 0 < restarted.lin_cmd < .30
 
 
 def test_tuning_policy_updates_cached_caps_only_under_acknowledged_idle_hold(teleop):
@@ -360,7 +383,10 @@ def test_delayed_cancel_cannot_toggle_an_abandoned_chord(teleop, abandon):
 def test_toggle_requires_fresh_known_commissioned_state(teleop, changes):
     teleop._base_state_cb(state(teleop.now, **changes))
     chord(teleop)
-    cancel_done(teleop)
+    if changes.get('link_connected') is False:
+        assert not teleop.nav_cancel.calls
+    else:
+        cancel_done(teleop)
     assert not power_client(teleop).calls
 
 
@@ -416,12 +442,93 @@ def test_reconnect_or_joy_timeout_cannot_rearm_a_held_chord(teleop):
     teleop.now += 0.5
     teleop.tick()
     teleop.joy_cb(joy(teleop.now, True, True, True, True))
-    cancel_done(teleop)
+    assert not teleop.nav_cancel.calls
     assert not power_client(teleop).calls
     teleop._base_state_cb(state(teleop.now, generation=2))
     teleop.joy_cb(joy(teleop.now, True, True, True, True))
     teleop.tick()
     assert not power_client(teleop).calls
+
+
+@pytest.mark.parametrize('timer_detects_gap', [False, True])
+def test_receiver_gap_resets_trim_and_requires_a_fresh_neutral_frame(teleop, timer_detects_gap):
+    message = joy(teleop.now, rb=True, linear=1.0)
+    message.buttons[0] = 1
+    teleop.joy_cb(message)
+    teleop.tick()
+    assert teleop.active and teleop.max_lin == .25 and teleop.lin_cmd > 0.
+    before = teleop.now
+    teleop.now += .55
+    if timer_detects_gap:
+        teleop.tick()
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.joy_cb(joy(before))  # a queued pre-gap release
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.tick()
+    assert not teleop.active and teleop.lin_tgt == 0.
+    assert teleop.max_lin == .30 and not teleop._operator_linear_trim
+    assert len(teleop.nav_cancel.calls) == 1
+    cancel_done(teleop)
+
+    teleop.now += .1
+    teleop.joy_cb(joy(teleop.now))
+    assert not teleop.active
+    teleop.now += .1
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.tick()
+    assert teleop.active and 0. < teleop.lin_cmd < .30
+    assert len(teleop.nav_cancel.calls) == 2
+
+
+@pytest.mark.parametrize('blocked', [
+    {'link_connected': False}, {'estop_pressed': True}, {'fault_flags': 1},
+])
+def test_hardware_recovery_does_not_admit_input_until_new_neutral_and_rb(teleop, blocked):
+    teleop._base_state_cb(state(teleop.now))
+    message = joy(teleop.now, rb=True, linear=1.0)
+    message.buttons[0] = 1
+    teleop.joy_cb(message)
+    teleop.tick()
+    assert teleop.max_lin == .25 and teleop.lin_cmd > 0.
+    teleop.now += .1
+    teleop._base_state_cb(state(teleop.now, **blocked))
+    teleop.joy_cb(joy(teleop.now))  # release while hardware is still blocked
+    assert not teleop.active and teleop.lin_cmd == 0.
+    teleop.now += .1
+    generation = 2 if blocked.get('link_connected') is False else 1
+    teleop._base_state_cb(state(teleop.now, generation=generation))
+    teleop.joy_cb(joy(teleop.now - .05))  # delayed release from before recovery
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.tick()
+    assert not teleop.active and teleop.lin_cmd == 0.
+    assert teleop.max_lin == (.30 if generation == 2 else .25)
+    teleop.now += .1
+    teleop.joy_cb(joy(teleop.now))
+    teleop.now += .1
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    teleop.tick()
+    assert teleop.active and teleop.lin_cmd > 0.
+
+
+def test_live_controller_trim_changes_targets_but_not_deadman_or_angular_axis(teleop):
+    idle = joy(teleop.now)
+    idle.buttons[0] = 1
+    teleop.joy_cb(idle)
+    teleop.tick()
+    assert teleop.max_lin == .25 and not teleop.active and not teleop.nav_cancel.calls
+    teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
+    for _ in range(30):
+        teleop.tick()
+    assert teleop.lin_cmd == .25 and teleop.ang_cmd == 0.
+    trimmed = joy(teleop.now, rb=True, linear=1.0)
+    trimmed.buttons[0] = 1
+    teleop.joy_cb(trimmed)
+    teleop.tick()
+    assert teleop.active and teleop.max_lin == .20
+    assert .20 < teleop.lin_cmd < .25 and teleop.ang_cmd == 0.
+    teleop.joy_cb(trimmed)
+    assert teleop.max_lin == .20  # autorepeat is not a new press
+    assert len(teleop.nav_cancel.calls) == 1
 
 
 def test_existing_rb_takeover_retries_cancel_and_holds_zero_after_release(teleop):
@@ -471,6 +578,7 @@ def test_gap_without_timer_cannot_preserve_an_old_pending_chord(teleop):
 
 def test_input_acquisition_age_is_rechecked_in_delayed_cancel_callback(teleop):
     teleop._base_state_cb(state(teleop.now))
+    teleop.now += .38
     teleop.joy_cb(joy(teleop.now - 0.36))
     teleop.joy_cb(joy(teleop.now - 0.35, True, True, True, True))
     teleop.now += 0.1
@@ -529,7 +637,9 @@ def test_abandoned_chord_cannot_restore_rb_drive_before_full_release(teleop, aba
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
     teleop.tick()
     assert teleop.messages[-1].linear.x == 0.0
+    teleop.now += .02
     teleop.joy_cb(joy(teleop.now))
+    teleop.now += .02
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))
     teleop.tick()
     assert teleop.messages[-1].linear.x > 0.0

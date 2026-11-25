@@ -97,6 +97,11 @@ Two consequences matter operationally:
 
 The joystick's 0.5 s timeout sits just above the teleop receiver's 0.4 s watchdog, so once its
 final zero lands, manual ownership releases promptly without reviving a prior Nav2 goal.
+The controller receiver requires a newly timestamped neutral report before another RB press
+can start input after startup, a receiver outage, an invalid report, an SBC connection change, or a reported
+hardware E-stop or fault. A reconnect discards temporary controller trims and restores the
+configured defaults, still bounded by the configured caps. An ordinary trim change while RB
+is held affects the proportional ramp target, not the deadman or the hardware ceilings.
 
 The dashboard channel is the same deadman shape at a lower priority: the Pi-side
 `patrolbot_web_bridge` publishes `input/teleop` only while the browser deadman is held and zeroes

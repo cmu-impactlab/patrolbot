@@ -258,7 +258,8 @@ def test_base_state_without_joystick_does_not_cancel_reverse(rig):
                and n.name in ('_base_state_cb', '_block_undock_input')]
     namespace = dict(Twist=twist, Bool=NS)
     exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), namespace)
-    joy = NS(_last_joy=None, _lidar_generation=None, pub=Mock(), manual_pub=Mock(),
+    joy = NS(_last_joy=None, _lidar_generation=None, _base_state=None,
+             _base_motion_blocked=False, _suspend_joy=Mock(), pub=Mock(), manual_pub=Mock(),
              get_clock=rig.node.get_clock)
     joy._block_undock_input = partial(namespace['_block_undock_input'], joy)
     assert rig.runtime.reserve_reverse()
@@ -268,6 +269,7 @@ def test_base_state_without_joystick_does_not_cancel_reverse(rig):
     for _ in range(3):
         namespace['_base_state_cb'](joy, NS(undock_active=True, link_connected=True,
                                           session_generation=7))
+    joy._suspend_joy.assert_not_called()
     assert joy._last_joy is None
     assert joy.manual_pub.publish.call_args.args[0].data is False
     assert rig.runtime.reason == '' and rig.runtime.phase == 'reverse'

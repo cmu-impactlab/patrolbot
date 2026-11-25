@@ -68,6 +68,22 @@ def test_selected_source_fixtures_are_copied(tmp_path):
     assert '!docker/nav2-patches/**' in ignore
 
 
+def test_shadow_fixtures_survive_docker_context_but_not_runtime_image(tmp_path):
+    copy_sources(IMAGE, tmp_path)
+    ignore = (ROOT / '.dockerignore').read_text().splitlines()
+    production = (ROOT / 'docker/Dockerfile').read_text()
+    assert '!diagnostics/' in ignore
+    assert '!diagnostics/navigation/' in ignore
+    assert '!diagnostics/**' not in ignore
+    assert '!diagnostics/navigation/**' not in ignore
+    for module in ('autonomous_stop_budget', 'forward_speed_shadow',
+                   'observe_forward_speed', 'shared_forward_speed'):
+        path = f'diagnostics/navigation/{module}.py'
+        assert (tmp_path / path).is_file(), path
+        assert f'!{path}' in ignore
+        assert path not in production
+
+
 def test_rosdep_sees_built_manifests_and_local_dependencies(tmp_path):
     copy_sources(DEPS, tmp_path)
     manifests = {ET.parse(path).findtext('name'): ET.parse(path).getroot()

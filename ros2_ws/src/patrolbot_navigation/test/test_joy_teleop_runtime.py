@@ -531,6 +531,24 @@ def test_live_controller_trim_changes_targets_but_not_deadman_or_angular_axis(te
     assert len(teleop.nav_cancel.calls) == 1
 
 
+def test_controller_trim_rounding_cannot_exceed_a_fractional_cap_or_floor(teleop):
+    teleop.lin_cap, teleop.max_lin = .297, .285
+    teleop.ang_cap, teleop.max_ang = .694, .66
+    up = joy(teleop.now, rb=True, linear=1.)
+    up.buttons[3] = up.buttons[1] = 1
+    up.axes[0] = 1.
+    teleop.joy_cb(up)
+    assert teleop.lin_tgt == .297 and teleop.ang_tgt == .694
+
+    teleop.min_lin, teleop.min_ang = .054, .104
+    teleop.max_lin, teleop.max_ang = .076, .16
+    down = joy(teleop.now, rb=True, linear=1.)
+    down.buttons[0] = down.buttons[2] = 1
+    down.axes[0] = 1.
+    teleop.joy_cb(down)
+    assert teleop.lin_tgt == .054 and teleop.ang_tgt == .104
+
+
 def test_existing_rb_takeover_retries_cancel_and_holds_zero_after_release(teleop):
     teleop.nav_cancel.ready = False
     teleop.joy_cb(joy(teleop.now, rb=True, linear=1.0))

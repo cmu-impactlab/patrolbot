@@ -112,6 +112,11 @@ def ramp_toward(current, target, step):
     return current
 
 
+def adjust_trim(current, delta, minimum, ceiling):
+    """Round the display-sized step, but never round through a tighter cap."""
+    return min(ceiling, max(minimum, round(current + delta, 2)))
+
+
 def drive_intent(axes, buttons, deadzone):
     """Return ``(attempting, linear, angular)`` for an RB-held drive input."""
     if not button_pressed(buttons, BTN_DEADMAN):

@@ -52,6 +52,7 @@ from joystick_policy import (
     JOY_TIMEOUT,
     LIN_SIGN,
     LidarChord,
+    adjust_trim,
     apply_deadzone,
     axis_value,
     button_pressed,
@@ -508,16 +509,20 @@ class JoyTeleop(Node):
         changed = False
         if self._edge(b, BTN_LIN_UP):
             self._operator_linear_trim = True
-            self.max_lin = round(min(self.max_lin + self.lin_step, self.lin_cap), 2); changed = True
+            self.max_lin = adjust_trim(self.max_lin, self.lin_step, self.min_lin, self.lin_cap)
+            changed = True
         if self._edge(b, BTN_LIN_DOWN):
             self._operator_linear_trim = True
-            self.max_lin = round(max(self.max_lin - self.lin_step, self.min_lin), 2); changed = True
+            self.max_lin = adjust_trim(self.max_lin, -self.lin_step, self.min_lin, self.lin_cap)
+            changed = True
         if self._edge(b, BTN_ANG_UP):
             self._operator_angular_trim = True
-            self.max_ang = round(min(self.max_ang + self.ang_step, self.ang_cap), 2); changed = True
+            self.max_ang = adjust_trim(self.max_ang, self.ang_step, self.min_ang, self.ang_cap)
+            changed = True
         if self._edge(b, BTN_ANG_DOWN):
             self._operator_angular_trim = True
-            self.max_ang = round(max(self.max_ang - self.ang_step, self.min_ang), 2); changed = True
+            self.max_ang = adjust_trim(self.max_ang, -self.ang_step, self.min_ang, self.ang_cap)
+            changed = True
         if changed:
             self.get_logger().info(f'max_linear={self.max_lin} m/s   max_angular={self.max_ang} rad/s')
         self.prev_btns = list(b)

@@ -157,5 +157,17 @@ route cap). Reports separate the received measurement from `would_apply`;
 neither a report nor a captured owner label is authorization to drive.
 
 PatrolBot's final `Twist` and SBC `DRIVE` line do not identify the producer.
-A future live observer must obtain ownership from a trusted source; it must
-not infer the producer from the final command or from deadman activity alone.
+The separate opt-in `observe_forward_speed.py` tool reads `/odom`,
+`/patrolbot/base_state`, and `/cmd_vel` and writes bounded JSONL output to stdout
+only. It is not installed with bringup or started by any launch file. In a
+sourced, isolated Jazzy test workspace, invoke it with `--duration`,
+`--short-zone-m`, and `--max-age-s` for the test scenario. It never attributes
+the downstream command to a drive owner or claims an effective cap. The
+reported hardware generation is observed link context, not a control lease.
+Sample ages are measured from local observation; they do not certify
+acquisition age, odometry accuracy, or physical stopping distance. Candidate
+zone output is from the study only, not a sensor field or configuration.
+Unknown or stale observations are not filled in with a fabricated zero.
+
+Use the [review and rollback checklist](forward-speed-review.md) to keep local
+results separate from any later hardware acceptance.

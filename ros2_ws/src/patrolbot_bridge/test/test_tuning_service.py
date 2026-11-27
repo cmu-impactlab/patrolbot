@@ -11,6 +11,7 @@ from patrolbot_bridge.tuning_activation import (
     UnavailableBackend,
 )
 from patrolbot_bridge.tuning_store import RevisionStore
+import pytest
 
 REPO = Path(__file__).resolve().parents[4]
 REGISTRY = json.loads((REPO / 'contracts' / 'robot-tuning.registry.json').read_text())
@@ -57,8 +58,7 @@ def make(tmp_path, backend=None):
     store.initialize(actor=ADMIN, reason='test')
     owner = type('Owner', (), {'set_tuning_hold': lambda self, h, r='': None})()
     coordinator = ActivationCoordinator(store, owner, backend or UnavailableBackend())
-    return svc.TuningService(store, coordinator, session_id=SESSION, mutations_enabled=True,
-                             write_admission=lambda: (True, ''))
+    return svc.TuningService(store, coordinator, session_id=SESSION)
 
 
 def test_operator_can_read(tmp_path):
@@ -101,88 +101,25 @@ def test_read_does_not_hide_revision_corruption_after_a_successful_snapshot(tmp_
     assert result['snapshot'] is None
 
 
-def test_operator_cannot_mutate(tmp_path):
-    service = make(tmp_path)
-    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': 0.06}]), OPERATOR))
+@pytest.mark.parametrize('actor', [ADMIN, OPERATOR])
+@pytest.mark.parametrize('operation,fields', [
+    ('save', {'base_revision': 1, 'changes': [{'id': 'amcl.alpha1', 'value': .06}]}),
+    ('apply', {'expected_revision': 1}),
+    ('redeploy', {'expected_revision': 1}),
+    ('restore', {'expected_revision': 1, 'restore_revision': 1, 'target': 'last_known_good'}),
+])
+def test_removed_operations_never_dispatch_or_change_existing_state(
+        tmp_path, monkeypatch, actor, operation, fields):
+    service = make(tmp_path, backend=FakeBackend(Evidence()))
+    def must_not_run(*args, **kwargs):
+        pytest.fail('read-only service dispatched a mutation')
+    monkeypatch.setattr(service.store, 'save', must_not_run)
+    monkeypatch.setattr(service.coordinator, 'request', must_not_run)
+    result = service.handle(wrap(dict(read_request(), operation=operation, **fields), actor))
     assert result['outcome'] == 'refused'
-    assert result['detail'] == 'not_administrator'
+    assert result['detail'] == 'unsupported_operation'
     assert service.store.snapshot_state()['desired_revision'] == 1
-
-
-def test_disconnected_sbc_refuses_save_without_mutating_revision(tmp_path):
-    service = make(tmp_path)
-    service.write_admission = lambda: (False, 'SBC link disconnected')
-    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
-    assert result['outcome'] == 'refused'
-    assert result['detail'] == 'SBC link disconnected'
-    assert result['snapshot']['writable'] is False
-    assert service.store.snapshot_state()['desired_revision'] == 1
-
-
-def test_missing_sbc_admission_provider_fails_closed_for_saves(tmp_path):
-    service = make(tmp_path)
-    service.write_admission = None
-    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
-    assert result['outcome'] == 'refused'
-    assert service.store.snapshot_state()['desired_revision'] == 1
-
-
-def test_save_rechecks_sbc_link_after_writer_admission(tmp_path):
-    service = make(tmp_path)
-    calls = [0]
-
-    def admission():
-        calls[0] += 1
-        return calls[0] == 1, 'SBC link changed before persistence'
-
-    service.write_admission = admission
-    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
-    assert result['outcome'] == 'refused'
-    assert service.store.snapshot_state()['desired_revision'] == 1
-
-
-def test_administrator_save_creates_desired_revision(tmp_path):
-    service = make(tmp_path)
-    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': 0.06}]), ADMIN))
-    assert result['outcome'] == 'ok'
-    snapshot = result['snapshot']
-    assert snapshot['desired_revision'] == 2
-    assert snapshot['active_revision'] is None
-    assert snapshot['committed_active_revision'] == 1
-    assert snapshot['pending_keys'] == ['amcl.alpha1']
-    assert snapshot['desired']['amcl.alpha1'] == 0.06
-    assert snapshot['active']['amcl.alpha1'] is None
-    assert snapshot['committed_active']['amcl.alpha1'] == 0.05
-
-
-def test_persistence_failure_after_save_reports_unknown_without_replaying(tmp_path, monkeypatch):
-    service = make(tmp_path)
-
-    def audit_unavailable(*args):
-        raise OSError('simulated audit disk failure')
-
-    monkeypatch.setattr(service.store, '_audit', audit_unavailable)
-    request = wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN)
-    result = service.handle(request)
-    assert result['outcome'] == 'unknown'
-    assert result['request_id'] == REQ
-    assert service.store.snapshot_state()['desired_revision'] == 2
-    result = service.handle(request)
-    assert result['outcome'] == 'unknown'
-    assert service.store.snapshot_state()['desired_revision'] == 2
-
-
-def test_lost_snapshot_after_durable_save_is_not_reported_as_refused(tmp_path, monkeypatch):
-    service = make(tmp_path)
-
-    def unavailable():
-        raise OSError('simulated readback disk failure')
-
-    monkeypatch.setattr(service, 'runtime_snapshot', unavailable)
-    result = service.handle(wrap(save_request([{'id': 'amcl.alpha1', 'value': .06}]), ADMIN))
-    assert result['outcome'] == 'unknown'
-    assert result['snapshot'] is None
-    assert service.store.snapshot_state()['desired_revision'] == 2
+    assert service.store.latest_job() is None
 
 
 def test_actor_with_extra_fields_is_rejected(tmp_path):
@@ -242,25 +179,16 @@ def test_no_path_or_ros_input_is_accepted(tmp_path):
     assert result['outcome'] in ('refused', 'conflict')
 
 
-def test_activation_unavailable_is_reported_honestly(tmp_path):
-    service = make(tmp_path)
+def test_readback_never_advertises_writes_or_activation(tmp_path):
+    service = make(tmp_path, backend=FakeBackend(Evidence()))
     result = service.handle(wrap(read_request(), ADMIN))
     snapshot = result['snapshot']
     assert snapshot['activation_supported'] is False
+    assert snapshot['writable'] is False
+    assert snapshot['save_supported'] is False
+    assert all(not entry['activatable'] for entry in snapshot['catalog'])
     assert snapshot['safe_apply']['allowed'] is False
-    assert 'activation_unavailable' in snapshot['safe_apply']['reason']
-
-
-def test_activation_with_approved_backend_requires_admin(tmp_path):
-    backend = FakeBackend(Evidence())
-    service = make(tmp_path, backend=backend)
-    request = {
-        'contract': svc.tuning_spec.CONTRACT, 'version': 1, 'operation': 'apply',
-        'request_id': REQ, 'generation': generation(), 'expected_revision': 1,
-    }
-    result = service.handle(wrap(request, OPERATOR))
-    assert result['outcome'] == 'refused'
-    assert result['detail'] == 'not_administrator'
+    assert 'read-only' in snapshot['safe_apply']['reason']
 
 
 def test_snapshot_never_infers_active_from_desired(tmp_path):

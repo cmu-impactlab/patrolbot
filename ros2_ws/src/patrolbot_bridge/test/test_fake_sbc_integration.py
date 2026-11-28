@@ -564,6 +564,66 @@ def test_velocity_is_not_replayed_after_hardware_reconnect(harness):
     )
 
 
+def test_forward_speed_observer_leaves_loopback_drive_unchanged(harness, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[4] / 'diagnostics/navigation'))
+    from observe_forward_speed import ForwardSpeedObservation, attach, snapshot
+
+    fake, bridge, client_node, _executor = harness
+    publisher = client_node.create_publisher(Twist, '/cmd_vel', 10)
+    assert wait_until(lambda: publisher.get_subscription_count() == 1)
+    command = Twist()
+    command.linear.x = 0.04
+    publisher.publish(command)
+    assert wait_until(lambda: (1, 'DRIVE:0.04:0.0') in fake.received)
+
+    def drives():
+        with fake._lock:
+            return [(session, line) for session, line in fake.received if line.startswith('DRIVE:')]
+
+    before = drives()
+    observer = Node('test_forward_speed_observer', enable_rosout=False, start_parameter_services=False)
+    observation = ForwardSpeedObservation(short_zone_m=0.4, max_age_s=0.25)
+    executor = rclpy.executors.SingleThreadedExecutor()
+
+    def wait_for_report(predicate):
+        deadline = time.monotonic() + 2.0
+        report = None
+        while time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.02)
+            report = snapshot(observer, observation, time.monotonic())
+            if predicate(report):
+                return report
+        pytest.fail(f'Observer did not reach expected state: {report}')
+
+    try:
+        attach(observer, observation)
+        executor.add_node(observer)
+        idle = wait_for_report(lambda report: report['measured_sample'] is not None)
+        assert idle['observed_hardware_generation'] == bridge._session_generation
+        assert idle['measured_sample']['value'] == 0.0  # Simulated SBC odometry, not motion feedback.
+        assert idle['downstream_command_sample'] is None
+        assert drives() == before
+
+        assert wait_until(lambda: publisher.get_subscription_count() == 2)
+        publisher.publish(command)
+        observed = wait_for_report(lambda report: report['downstream_command_sample'] is not None)
+        assert observed['downstream_command_sample']['value'] == 0.04
+        assert observed['reason'] == 'no_current_owner'
+        assert observed['effective_cap_m_s'] is None
+        assert wait_until(lambda: drives() == before + [(1, 'DRIVE:0.04:0.0')])
+        wait_for_report(lambda report: report['downstream_command_sample'] is None)
+
+        generation = bridge._session_generation
+        fake.drop_connection()
+        wait_for_report(lambda report: report['observed_hardware_generation'] == generation + 1
+                        and report['measured_sample'] is not None)
+        assert drives() == before + [(1, 'DRIVE:0.04:0.0')]
+    finally:
+        executor.remove_node(observer)
+        executor.shutdown()
+        observer.destroy_node()
+
+
 def test_manual_deadman_admits_drive_on_the_wire_while_localization_is_held(harness):
     """
     Exercise the extra-return regression end to end.

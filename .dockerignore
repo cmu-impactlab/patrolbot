@@ -20,6 +20,14 @@
 !contracts/
 !contracts/**
 
+# Native shadow test fixtures only; do not admit captures or reports.
+!diagnostics/
+!diagnostics/navigation/
+!diagnostics/navigation/autonomous_stop_budget.py
+!diagnostics/navigation/forward_speed_shadow.py
+!diagnostics/navigation/observe_forward_speed.py
+!diagnostics/navigation/shared_forward_speed.py
+
 !ros2_ws/
 !ros2_ws/src/
 !ros2_ws/src/patrolbot_bridge/

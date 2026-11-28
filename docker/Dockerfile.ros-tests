@@ -71,6 +71,10 @@ COPY hardware/patrolbot_hw_server hardware/patrolbot_hw_server
 COPY docker/Dockerfile docker/docker-compose.yml docker/status.sh \
      docker/source-tree-digest.sh docker/capture-nav-goal.sh docker/
 COPY docker/nav2-patches docker/nav2-patches
+# Source-only replay and observer fixtures for the fake SBC and Nav2 suites.
+COPY diagnostics/navigation/autonomous_stop_budget.py diagnostics/navigation/forward_speed_shadow.py \
+     diagnostics/navigation/observe_forward_speed.py diagnostics/navigation/shared_forward_speed.py \
+     diagnostics/navigation/
 
 COPY docker/run-ros-tests.sh docker/native_ci_gate.py /usr/local/bin/
 

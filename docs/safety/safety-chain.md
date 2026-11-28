@@ -6,14 +6,16 @@ description: Every layer between a velocity command and the motors — the prior
 # Safety Chain
 
 This page describes what stops PatrolBot and in what order. It is reference material: it states
-what each layer does and what it cannot do.
+what each layer does and what it cannot do. Values below describe checked-in defaults, not
+readback or physical acceptance of a particular robot.
 
 The key words **MUST**, **MUST NOT**, and **SHOULD** are to be interpreted as described in
 [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
 
 ## The command path
 
-Every velocity command reaches the motors through the same chain. Nothing bypasses it.
+Ordinary `DRIVE` and the Pi-owned undock turn share the final mux, smoother and bridge.
+Exclusive SBC undock moves the wheels directly with its own guards; it does not use ROS velocity topics.
 
 ```mermaid
 flowchart LR
@@ -23,6 +25,8 @@ flowchart LR
     NMUX -->|/cmd_vel_nav| VS["velocity_smoother"]
     VS -->|/cmd_vel_smoothed| CM["collision_monitor"]
     CM -->|input/navi p5| MUX["cmd_vel_mux"]
+    CM -->|input/navi| TURN["bridge-owned turn relay"]
+    TURN -->|input/undock_turn p9| MUX
     JOY["joy teleop"] -->|input/joy p8| MUX
     TEL["dashboard teleop"] -->|input/teleop p7| MUX
     WD["safety_watchdog"] -->|input/safety_controller p10| MUX
@@ -77,6 +81,7 @@ stops publishing releases its claim after its timeout.
 | Input topic | Priority | Timeout (s) | Source |
 |---|---|---|---|
 | `input/safety_controller` | 10 | 0.2 | Safety watchdog |
+| `input/undock_turn` | 9 | 0.25 | Bridge relay of collision-filtered owned Spin only |
 | `input/joy` | 8 | 0.5 | Joystick |
 | `input/teleop` | 7 | 1.0 | Dashboard deadman teleop (`patrolbot_web_bridge`) |
 | `input/switch` | 6 | 1.0 | Mode switching |
@@ -84,40 +89,57 @@ stops publishing releases its claim after its timeout.
 
 Two consequences matter operationally:
 
-- **The joystick outranks all of Nav2 — and the dashboard teleop.** Picking up the controller
-  takes ownership mid-goal, regardless of which Nav2 source was driving; with both manual
-  channels held, `input/joy` (8) wins over `input/teleop` (7).
-- **The watchdog outranks everything.** When it publishes a stop, nothing else can drive.
+- **The joystick outranks ordinary Nav2 and dashboard teleop.** `input/joy` (8) wins over
+  `input/teleop` (7); the bridge supervises and revokes the exclusive Pi-owned turn on foreign
+  nonzero motion input rather than letting it compete.
+- **The watchdog outranks every final-mux source.** Its zero is still an input to the final
+  smoother, not a direct cut of motor power.
 
 The joystick's 0.5 s timeout sits just above the teleop receiver's 0.4 s watchdog, so once its
 final zero lands, manual ownership releases promptly without reviving a prior Nav2 goal.
+The controller receiver requires a newly timestamped neutral report before another RB press
+can start input after startup, a receiver outage, an invalid report, an SBC connection change, or a reported
+hardware E-stop or fault. A reconnect discards temporary controller trims and restores the
+configured defaults, still bounded by the configured caps. An ordinary trim change while RB
+is held affects the proportional ramp target, not the deadman or the hardware ceilings.
 
 The dashboard channel is the same deadman shape at a lower priority: the Pi-side
 `patrolbot_web_bridge` publishes `input/teleop` only while the browser deadman is held and zeroes
-it within 0.3 s of the last frame. Like the joystick it can move the robot while localization is
-held, because `patrolbot_bridge` admits manual `DRIVE` on fresh deadman evidence; unlike the
-joystick it never outranks it.
+it within 0.3 s of the last frame. Like the joystick it can move the robot while localization
+is held, because `patrolbot_bridge` admits manual `DRIVE` on fresh deadman evidence
+(0.5 s); this bypass still needs usable LiDAR, known origin, fresh raw odometry and no
+incompatible motion, tuning or unresolved mutation owner. The optional dashboard service
+ships with commands disabled by default.
 
 ## Collision monitor
 
 The collision monitor sits between Nav2 and the mux, reading `/cmd_vel_smoothed` and publishing
 to `input/navi`. It only governs Nav2 motion; it does not filter joystick or teleop commands.
 
-It selects a polygon based on the **commanded velocity**, so protection follows the direction of
-travel:
+Each polygon selects its shape from the **incoming** `/cmd_vel_smoothed` command,
+not measured `/odom`, Collision Monitor output, or the command sent to hardware. These are
+`base_link` coordinates in metres; every shape spans −0.30 to +0.30 m laterally.
 
-| Polygon | Source | `min_points` | Governs |
-|---|---|---|---|
-| `front_velocity_stop` | `/scan` | 8 | Forward and rotating motion |
-| `rear_velocity_stop` | `/sonar` | 1 | Reverse motion |
+| Commanded linear x (m/s) | Scan stop x range (8 points) | Sonar stop x range (1 point) |
+|---|---|---|
+| `rotation_or_stopped`: −0.01 to +0.01 | −0.30 to +0.30 | −0.30 to +0.30 |
+| `forward`: +0.01 to +0.26 | −0.30 to +0.30 | +0.20 to +0.55 (rear sonar cannot see this area) |
+| `reverse`: −0.26 to −0.01 | −0.55 to −0.20 | −0.55 to −0.20 |
 
-Each polygon defines three velocity bands — `rotation_or_stopped` (±0.01 m/s), `forward`
-(0.01 to 0.26 m/s), and `reverse` (−0.26 to −0.01 m/s). The bands share their boundaries so
-selection is deterministic at the edges.
+All bands cover ±1.0 rad/s before the final clamp; the first match wins at ±0.01 m/s
+(`rotation_or_stopped`). In [Nav2 1.3.12's selector](https://github.com/ros-navigation/navigation2/blob/1.3.12/nav2_collision_monitor/src/velocity_polygon.cpp),
+an unmatched command warns and leaves the previous shape in place (or unset at startup);
+it is **not** an out-of-envelope stop. Keep the full upstream command range covered.
 
-The design lets a front-docked robot reverse away from the dock wall without disabling front
-safety: during reverse, the wall ahead falls outside the selected front zone, while rotation or
-forward motion immediately restores the full front envelope.
+Both smoothers run at 20 Hz in `OPEN_LOOP` (last smoothed command, not odometry).
+Their input timeouts are 1.0 s for Nav2 and 0.5 s for the final stage. A lower or zero
+command, reversal, or handoff can select a different zone while the final smoother
+and the base are still slowing in the previous direction. For example, the reverse
+field contracts at −0.01 m/s commanded, regardless of measured speed. The baseline
+has no longer forward field for higher speeds. A monitor zero is not proof of physical
+stop, and switching a smoother to odometry feedback alone would not change the monitor's
+selection input. The +0.30 m edge is only 0.045 m beyond the configured unpadded +0.255 m
+footprint; that difference is not a reliable detection or stopping distance.
 
 ### Settings that MUST NOT change
 
@@ -129,9 +151,11 @@ filter, so the uncaught throw SIGABRTs the entire composed `nav2_container` — 
 dies at once. `False` uses the latest transform instead, which at this robot's 0.26 m/s top
 speed costs about 1 cm of motion per scan.
 
-`source_timeout` **MUST NOT** be zero for either source. Both automatic-motion sources are
-fail-closed: at ~20–25 Hz for `/scan` and ~5 Hz for `/sonar`, 0.5 s tolerates one missed sonar
-period but stops after roughly two to three missed samples.
+`source_timeout` **MUST NOT** be zero for either source. Missing, stale or untransformable
+data from either enabled source forces a zero when the monitor processes a Nav2 command,
+regardless of direction. Global and per-source limits are 0.5 s. A fresh empty sonar cloud or scan
+without usable returns does **not** certify clear space. The scan is filtered below
+0.10 m and has blind regions; sonar is sparse and has a known rear-right gap.
 
 ## Safety watchdog
 
@@ -144,7 +168,7 @@ conditions trip. It is the layer that reacts to *missing* data rather than to ob
 | `odom_timeout` | 0.5 s | `/odom` goes stale |
 | `base_state_timeout` | 0.75 s | SBC base state goes stale |
 | `battery_timeout` | 1.0 s | `/battery` goes stale |
-| `battery_stop_voltage` | 23.0 V | Battery falls to or below this |
+| `battery_stop_voltage` | 23.0 V | Battery falls below this or is non-finite |
 | `stop_on_estop` | `True` | E-stop is asserted |
 | `stop_on_faults` | `True` | The base reports a fault |
 
@@ -153,13 +177,21 @@ link trips several of these at once. That is intended: the robot holds still thr
 highest-priority mux input until fresh data returns.
 
 !!! warning "Bumper enforcement is disabled"
-    `bumper_enforcement_enabled` is `False` in the deployed configuration. Bumper contact does
+    `bumper_enforcement_enabled` is `False` in the shipped configuration. Bumper contact does
     **not** stop the robot through this watchdog. Do not rely on bumpers as a protective layer.
 
-The costmap layer applies the same 0.5 s staleness rule independently
-(`expected_update_rate: 0.5` on the scan observation source), so a stale laser both stops the
-robot and prevents planning on an old obstacle snapshot. This duplication is deliberate defence
-in depth and **SHOULD NOT** be removed.
+Both costmaps use `/scan` with `expected_update_rate: 0.5` seconds (not Hz); stale observations
+mark the obstacle layer not current. The log-throttling patch does not change that decision.
+This is separate from *map-cell* policy: NavFn has `allow_unknown: true` and neither costmap
+overrides Jazzy's `track_unknown_space: false` default. A plan through an unknown cell, or a
+cleared costmap during recovery, is not evidence of fresh sensors or physical clearance.
+
+The bridge additionally holds autonomous `DRIVE` for unready navigation/LiDAR, stale odometry,
+unknown origin and unresolved map, tuning or undock ownership. A lost undock terminal result
+is not permission to hand motion back. The SBC rejects ordinary nonzero `DRIVE` unless its own
+hardware and dock gates agree; it stops on disconnect or after 0.75 s without commands.
+Exclusive undock has its own independent lease watchdog. These timers are not additive,
+nor are they physical stopping-time guarantees.
 
 ## Velocity limits
 
@@ -177,7 +209,7 @@ monitor:
 | Maximum deceleration | −2.5 m/s² | −3.2 rad/s² |
 
 `teleop_velocity_smoother` is the final stage, downstream of the mux, so it bounds **every**
-source including the joystick:
+mux source including the joystick:
 
 | Limit | Linear x | Angular z |
 |---|---|---|
@@ -186,14 +218,26 @@ source including the joystick:
 | Maximum acceleration | 1.0 m/s² | 1.5 rad/s² |
 | Maximum deceleration | −1.4 m/s² | −2.0 rad/s² |
 
-The effective limits are therefore the tighter of the two at each stage:
+The source-specific limits are not interchangeable:
 
-- **Nav2 motion:** 0.26 m/s linear (capped upstream), 0.7 rad/s angular (capped downstream —
-  Nav2's own 1.0 rad/s is never reached).
-- **Manual motion:** 0.3 m/s linear and 0.7 rad/s angular, with the gentler teleop
-  acceleration profile.
+| Producer | Checked-in command limits and scope |
+|---|---|
+| Ordinary RPP `FollowPath` | 0.22 m/s cruise target (not a hard cap; route `SpeedLimit` can change the request), reversing disabled, 0.90 rad/s rotate-to-heading target. RPP's own collision check is disabled; the separate native RPP output cap ships **off**. Nav smoothing caps at 0.26 m/s and 1.0 rad/s before Collision Monitor. |
+| Nav2 behaviors | Both shipped trees request a 0.10 m `BackUp` at 0.05 m/s; this is a recovery request, not a general reverse-velocity cap. `Spin` caps at 0.70 rad/s; `DriveOnHeading` is also loaded, separate from RPP. All behavior commands pass through Nav smoothing and Collision Monitor. |
+| Physical controller | ±0.30 m/s and ±0.70 rad/s stick ceilings (trim may lower them); RB deadman, 0.4 s receiver timeout, then final mux/smoother. No Collision Monitor obstacle filtering. |
+| Dashboard deadman | ±0.30 m/s and ±0.70 rad/s per the web contract (`contracts/web-teleop.json`), 0.3 s producer zero watchdog, below joystick priority, no Collision Monitor obstacle filtering. Not the dashboard Undock action. |
+| Guarded dashboard/manager Undock | SBC contact separation requests 0.53 m at 0.10 m/s reverse (45 s Pi backstop). After confirmed clear handoff, the bridge owns a pure-angular Nav2 `Spin` (0.70 rad/s, 20 s), relaying through `/input/docking` and then the **filtered** `/input/navi` output to `/input/undock_turn`. Generic `docking_server` stays unlaunched. |
+| Physical controller Start Undock | Separate SBC operation: fixed 0.53 m at 0.10 m/s reverse, then local encoder-based turn capped at 0.70 rad/s. It does not require AMCL/Nav2 or go through either ROS smoother; see [Controller manual undocking](../operations/controller-undocking.md). |
 
-The robot is non-holonomic; the y axis is unused and its limits are zero.
+For ordinary `DRIVE`, the final smoother and bridge cap angular output at 0.70 rad/s;
+an active tuning policy can narrow the bridge's symmetric linear and angular bounds.
+The shared `/cmd_vel` Twist and ordinary `DRIVE` line do not carry authenticated
+producer identity. Neither a shared clamp nor fresh deadman evidence can establish
+that a command came from ordinary autonomous path following.
+The Pi-owned turn bypasses the tuning clamp, not the final smoother or the SBC interlock.
+The SBC's ordinary `DRIVE` message rejection ceilings (±0.30 m/s, ±1.20 rad/s) are
+backstops, not additional permission. Lateral speed is zero in both smoothers. During a
+handoff, inspect the final smoother's retained output, not just the new producer's ceiling.
 
 ## Hardware E-stop
 
@@ -206,15 +250,43 @@ this page:
 - Motors additionally require an explicit enable afterwards. A `DRIVE` line cannot enable
   motors — the robot does not silently return to a drivable state.
 
-The E-stop is the only layer that removes power rather than commanding zero velocity. Every
-other stop on this page leaves the motors energized and holding.
+The E-stop cuts power independently of software. A mux or monitor stop requests zero velocity;
+it does not disable the motors. The SBC can also disable motors on control or fault paths.
 
 ## What this chain does not protect against
 
 - Obstacles outside the laser plane, for any Nav2 motion (see
   [Limitations](../reference/limitations.md)).
-- Anything at all during direct manual driving, beyond the velocity limits — joystick commands
-  do not pass through the collision monitor.
+- Automatic obstacle avoidance for direct joystick or dashboard teleop; the watchdog and
+  hardware interlocks are not substitutes for Collision Monitor.
 - Bumper contact, while `bumper_enforcement_enabled` is `False`.
+
+## Coordinated review and rollback checklist
+
+1. **Record the baseline tuple.** Save Pi revision/image digest, resolved startup and active
+   parameters (including tuning revision), exact Nav2 packages, SBC binary/firmware and profile
+   identity, and dashboard revision. Compare the actual publisher graph, lifecycle state and
+   parameter readback with this page. Do not infer deployment from the source tree.
+2. **Review each owner separately.** Compare ordinary forward/turn, recovery reverse, both
+   deadmen, and both undock variants. Preserve priorities, limits, freshness and stop gates.
+   Run the [portable safety contract](../development/testing.md#portable-regression-runner)
+   and use the existing isolated Collision Monitor,
+   recovery/closed-loop, outage and undock tests for runtime checks. Include missed/late inputs,
+   lost terminal replies, reconnects, and owner handoffs; a mixed revision is not a pass.
+3. **Require transition evidence.** On a common timebase, compare `/cmd_vel_smoothed`, selected
+   polygon and monitor state, `/input/navi`, final `/cmd_vel`, SBC request and independently
+   verified speed/stop. Check deceleration into a shorter band, zero, direction reversal, and
+   manual-to-auto handoff; cover straight and curved swept footprints. Any future wider
+   envelope would need an explicit safe treatment for unmatched commands and stale, invalid,
+   implausible or missing measured motion; never contract a field based on unproven slowdown.
+4. **Use evidence from this unit.** Verify sensor coverage, detection-to-brake delay and
+   braking distance on this robot under approved conditions. The offline stop budget
+   (`diagnostics/navigation/README.md`) helps review straight-line measurements.
+   Study `b12f65e` records an unevaluated zone, not usable settings; a same-model
+   benchmark cannot establish this unit's firmware, sensors or braking.
+5. **Keep a matched rollback point.** Retain the previous Pi/SBC/dashboard tuple and matching
+   startup/active policy. If readback, safety coverage or ownership is unknown, hold motion.
+   A separately authorized rollback must restore and verify the whole tuple while stopped;
+   it must not clear unknown ownership by timeout, enable motors or resume a prior goal.
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->

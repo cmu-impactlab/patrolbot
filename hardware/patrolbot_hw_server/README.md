@@ -49,3 +49,31 @@ live base connection. Deployment requires a binary/config backup and rollback,
 then supervised stationary OFF/ON, scan-age/10 Hz telemetry checks, blocked
 motion/pose/goal checks, reconnect/process-restart OFF retention, boot-on, and
 fresh localization/re-arm acceptance.
+
+## Ordinary DRIVE request limits
+
+`DRIVE:<linear m/s>:<angular rad/s>` rejects requests outside the inclusive
+limits of `+0.30 m/s` forward, `-0.30 m/s` reverse, and `±1.20 rad/s` angular.
+These are SBC command-admission limits, not guarantees of measured speed.
+The classifier gives zero precedence; the server applies no DRIVE targets
+during active UNDOCK, even when it receives zero DRIVE.
+
+### What a future approved forward-only path would need
+
+- **Source and lifetime.** The single TCP connection carries no source,
+  sequence, expiry, or approval in a DRIVE frame. Define how the SBC can verify
+  an eligible source and fresh authorization, and reject or revoke it on source
+  switch, stale input, disconnect, restart, or loss of an interlock. Ordinary
+  DRIVE, reverse, angular, and undock behavior stay on their existing paths.
+- **Command outcome.** The server writes accepted targets to ARIA in mm/s and
+  deg/s. A parsed but refused DRIVE outside undock ownership writes zero
+  targets; a malformed frame is only logged and does not refresh the
+  loop-based 750 ms DRIVE watchdog. There is no DRIVE ACK or command-correlated
+  target, inhibit, or stop-reason feedback. ODOM is ARIA-reported motion, not
+  command readback, and does not report base packet age.
+- **Hardware evidence.** LiDAR readiness confirms freshness, not forward path
+  clearance. Define how fresh base and clearance data must be and how loss of
+  either stops motion. Verify effective speed and acceleration/deceleration
+  limits on the deployed ARIA/controller, then measure peak speed, braking
+  latency and distance, and safe stop and re-arm after interlock loss, stalled
+  updates, and disconnect. Host protocol tests cannot establish those properties.

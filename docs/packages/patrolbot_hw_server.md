@@ -155,6 +155,24 @@ resolves the serial conflict cleanly.
 The user service needs `loginctl enable-linger ros` once to start without a login. The architecture
 notes record this as done.
 
+### Read-only base motion inventory
+
+After a normal server start, read the existing logs on the SBC:
+
+```bash
+journalctl -b _SYSTEMD_USER_UNIT=patrolbot-server.service --no-pager \
+  | grep -E 'uARCS MOTION CONFIG:|ARIA MOTION LIMITS:'
+```
+
+`uARCS MOTION CONFIG` reports the firmware version and the controller-reported
+speed, acceleration, and deceleration fields cached during connection.
+`ARIA MOTION LIMITS` reports ARIA's effective host-side settings at startup.
+Neither line changes or measures motion. The firmware ceiling is not a rated
+operating speed or evidence of braking performance. If the packet was missing,
+the server reports the inventory unavailable; do not substitute model defaults
+for missing evidence. Do not restart the service or connect a second client
+merely to obtain this log.
+
 ## Building (on the SBC)
 
 ```bash

@@ -1,6 +1,6 @@
 import math
 
-from patrolbot_bridge.odom_validation import OdomSample, OdomValidator
+from patrolbot_bridge.odom_validation import OdomSample, OdomSource, OdomValidator, parse_odom_source
 import pytest
 
 
@@ -102,3 +102,130 @@ def test_queue_delay_must_not_be_used_as_motion_time():
     # Its socket receipt at 10.05 only admits 0.03 m.
     rejected = check.check_and_accept(sample(x=0.6), 10.05)
     assert rejected.reason == 'position-discontinuity'
+
+
+def test_replay_shape_repeated_frames_do_not_shrink_the_pose_allowance():
+    timed = validator()
+    legacy = validator()
+    # Reconstruct the 29.2 mm step / 44.1 ms receive interval from passive
+    # replay. The capture did not have SIP time; these source times are a fixture.
+    for received, stamp, age, x in [
+        (10.0000, 1000, 5, 0.0),
+        (10.0441, 1000, 49, 0.0),
+        (10.0882, 1000, 93, 0.0),
+        (10.1323, 1100, 38, 0.0292),
+    ]:
+        result = timed.check_and_accept(sample(x=x), received, source=OdomSource(stamp, age))
+        assert result.accepted
+        if stamp == 1000:
+            assert result.fresh_at == pytest.approx(9.995)
+            assert result.repeated == (received != 10.0)
+        legacy_result = legacy.check_and_accept(sample(x=x), received)
+    assert legacy_result.reason == 'position-discontinuity'
+    assert not result.repeated
+
+
+def test_new_stationary_sip_is_not_a_repeat_and_burst_cannot_mint_motion_time():
+    check = validator()
+    assert check.check_and_accept(sample(), 10.0, source=OdomSource(1000, 0)).accepted
+    # Two queued frames can have the same receipt time; a truly new stationary
+    # update remains valid but can't add any Pi elapsed time or freshness.
+    result = check.check_and_accept(sample(), 10.0, source=OdomSource(1100, 0))
+    assert result.accepted and not result.repeated and result.fresh_at == 10.0
+    bad = check.check_and_accept(sample(x=0.22), 10.01, source=OdomSource(2000, 0))
+    assert bad.reason == 'position-discontinuity'
+    assert 'limit_m=0.018' in bad.detail
+    assert 'source_elapsed_s=0.9' in bad.detail
+
+
+def test_transport_delay_does_not_mint_motion_time_either():
+    check = validator()
+    assert check.check_and_accept(sample(), 10.0, source=OdomSource(1000, 0)).accepted
+    bad = check.check_and_accept(sample(x=.20), 10.8, source=OdomSource(1020, 0))
+    assert bad.reason == 'position-discontinuity'
+    assert 'limit_m=0.021' in bad.detail
+
+
+def test_wrapped_heading_is_valid_but_a_real_jump_keeps_bounded_evidence():
+    check = validator()
+    yaw = math.pi - .01
+    assert check.check_and_accept(sample(yaw=yaw), 10, source=OdomSource(1000, 0)).accepted
+    yaw = -math.pi + .01
+    assert check.check_and_accept(sample(yaw=yaw), 10.1, source=OdomSource(1100, 0)).accepted
+    bad = check.check_and_accept(sample(yaw=yaw + 1), 10.2, source=OdomSource(1200, 0))
+    assert bad.reason == 'heading-discontinuity'
+    assert 'step_rad=1' in bad.detail and 'limit_rad=0.18' in bad.detail
+    good = check.check_and_accept(sample(yaw=yaw), 10.3, source=OdomSource(1300, 0))
+    assert good.accepted
+
+
+@pytest.mark.parametrize('s, reason', [
+    (sample(linear=.33), 'linear-speed-limit'),
+    (sample(angular=-1.21), 'angular-speed-limit'),
+])
+def test_source_timing_never_waives_twist_limits(s, reason):
+    check = validator()
+    assert check.check_and_accept(sample(), 10, source=OdomSource(1000, 0)).accepted
+    assert check.check_and_accept(s, 10.1, source=OdomSource(1100, 0)).reason == reason
+    # Repeating the invalid stamp with a different payload can't rehabilitate it.
+    result = check.check_and_accept(sample(), 10.2, source=OdomSource(1100, 100))
+    assert result.reason == 'conflicting-odometry-source'
+
+
+@pytest.mark.parametrize('parts,reason', [
+    ([], 'missing-odometry-source'),
+    (['ODOM_SOURCE_MS:1,0', 'ODOM_SOURCE_MS:1,0'], 'malformed-odometry-source'),
+    (['ODOM_SOURCE_MS=1,0'], 'malformed-odometry-source'),
+    (['ODOM_SOURCE_MS:-1,-1'], 'unavailable-odometry-source'),
+    (['ODOM_SOURCE_MS:1,-1'], 'malformed-odometry-source'),
+    (['ODOM_SOURCE_MS:1,nan'], 'malformed-odometry-source'),
+    (['ODOM_SOURCE_MS:1,0,0'], 'malformed-odometry-source'),
+    (['ODOM_SOURCE_MS:' + '9' * 4096 + ',0'], 'malformed-odometry-source'),
+])
+def test_advertised_source_metadata_is_required_and_strict(parts, reason):
+    with pytest.raises(ValueError, match=reason):
+        parse_odom_source(parts, required=True)
+
+
+def test_legacy_metadata_is_explicit_and_cannot_switch_clock_mid_epoch():
+    assert parse_odom_source([], required=False) is None
+    parts = ['ODOM_SOURCE_MS:12340,12']
+    with pytest.raises(ValueError, match='unadvertised-odometry-source'):
+        parse_odom_source(parts, required=False)
+    source = parse_odom_source(parts, required=True)
+    check = validator()
+    assert check.check_and_accept(sample(), 10, source=source).accepted
+    assert check.check_and_accept(sample(), 10.1).reason == 'odometry-source-mode-changed'
+    assert not check.check_and_accept(sample(), 10.2, source=OdomSource(12, 0)).accepted
+    check.reset_epoch()
+    assert check.check_and_accept(sample(x=50), 10.2, source=OdomSource(12, 0)).accepted
+
+
+def test_source_and_assembly_regression_and_stale_age_fail_closed():
+    check = validator()
+    assert check.check_and_accept(sample(), 10, source=OdomSource(1000, 80)).accepted
+    for stamp, age in [(990, 150), (1000, 0), (1050, 0)]:
+        result = check.check_and_accept(sample(), 10.01, source=OdomSource(stamp, age))
+        assert result.reason == 'odometry-source-time-regressed'
+    result = check.check_and_accept(sample(), 10.1, source=OdomSource(1100, 400), queue_age=.2)
+    assert result.reason == 'stale-or-future-odometry-source'
+    result = check.check_and_accept(sample(), 10.5, source=OdomSource(1100, 400))
+    assert result.reason == 'unaccepted-odometry-source'
+    # A distinct, locally fresh observation with forward assembly time recovers.
+    assert check.check_and_accept(sample(), 10.6, source=OdomSource(1501, 0)).accepted
+
+
+def test_repeated_pose_expires_even_if_repeated_reported_age_remains_young():
+    check = validator()
+    assert check.check_and_accept(sample(), 10, source=OdomSource(1000, 10)).accepted
+    gentle = check.check_and_accept(sample(), 10.1, source=OdomSource(1000, 10))
+    assert gentle.repeated and gentle.fresh_at == pytest.approx(9.99)
+    result = check.check_and_accept(sample(), 10.49, source=OdomSource(1000, 10), queue_age=.001)
+    assert result.reason == 'stale-repeated-odometry-source'
+
+
+def test_locally_older_source_projection_cannot_refresh_pose():
+    check = validator()
+    assert check.check_and_accept(sample(), 10, source=OdomSource(1000, 0)).accepted
+    result = check.check_and_accept(sample(), 10.05, source=OdomSource(1050, 60))
+    assert result.reason == 'odometry-source-freshness-regressed'

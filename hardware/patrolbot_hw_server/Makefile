@@ -12,12 +12,13 @@ SOURCES = patrolbot_server.cpp protocol.cpp undock.cpp
 PROBE = patrolbot_commission_probe
 PROBE_SOURCES = patrolbot_commission_probe.cpp
 
-HEADERS = protocol.hpp undock.hpp scan_timing.hpp lidar_power.hpp encoder_capture.hpp manual_turn_scan.hpp
+HEADERS = protocol.hpp undock.hpp scan_timing.hpp lidar_power.hpp encoder_capture.hpp manual_turn_scan.hpp sip_odometry.hpp
 
-# Neither test binary links ARIA, so both build and run on a workstation.
+# Portable tests do not link ARIA.
 TESTS = tests/protocol_test tests/undock_test tests/scan_timing_test tests/lidar_power_test tests/encoder_capture_test
+ARIA_TEST = tests/sip_odometry_test
 
-.PHONY: all clean test probe
+.PHONY: all clean test test-aria probe
 
 all: $(TARGET)
 
@@ -44,6 +45,12 @@ tests/lidar_power_test: tests/lidar_power_test.cpp lidar_power.hpp scan_timing.h
 tests/encoder_capture_test: tests/encoder_capture_test.cpp encoder_capture.hpp
 	$(CXX) $(CXXFLAGS) tests/encoder_capture_test.cpp -o $@
 
+$(ARIA_TEST): tests/sip_odometry_test.cpp sip_odometry.hpp
+	$(CXX) $(CXXFLAGS) $(ARIA_CXXFLAGS) $< -o $@ $(ARIA_LDFLAGS) $(ARIA_LIBS)
+
+test-aria: $(ARIA_TEST)
+	./$(ARIA_TEST)
+
 test: $(TESTS)
 	./tests/protocol_test
 	./tests/undock_test
@@ -52,4 +59,4 @@ test: $(TESTS)
 	./tests/encoder_capture_test
 
 clean:
-	rm -f $(TARGET) $(PROBE) $(TESTS)
+	rm -f $(TARGET) $(PROBE) $(TESTS) $(ARIA_TEST)

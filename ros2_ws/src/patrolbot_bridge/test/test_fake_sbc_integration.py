@@ -17,6 +17,7 @@ from nav_msgs.msg import Odometry
 from nav_msgs.srv import GetMap
 from patrolbot_bridge.bridge_node import PatrolBotBridge
 from patrolbot_bridge.manual_active import MANUAL_ACTIVE_TIMEOUT
+from patrolbot_bridge.odom_validation import SOURCE_TIMING_FEATURE
 from patrolbot_interfaces.action import HardwareUndock
 from patrolbot_interfaces.srv import ChargeRelease, MotorEnable, SetLidarPower
 import pytest
@@ -41,7 +42,7 @@ pytestmark = pytest.mark.skipif(
 class FakeSbc:
     """Small protocol peer which never opens the real hardware port."""
 
-    def __init__(self, advertise_undock=True):
+    def __init__(self, advertise_undock=True, source_timing=False):
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             self.listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -61,6 +62,8 @@ class FakeSbc:
         self.received = []
         self.malformed_ids = set()
         self.advertise_undock = advertise_undock
+        self.source_timing = source_timing
+        self.omit_source_metadata = False
         self.lidar_state = 'READY'
         self.lidar_supported = True
         self.lidar_scan_age_ms = 0
@@ -115,6 +118,8 @@ class FakeSbc:
                 self._connection = connection
             try:
                 features = 'UNDOCK,LIDAR_POWER' if self.advertise_undock else 'LIDAR_POWER'
+                if self.source_timing:
+                    features += ',' + SOURCE_TIMING_FEATURE
                 self._send(
                     connection,
                     f'HELLO:PROTOCOL=2:FEATURES={features}:ODOM_EPOCH={self.odom_epoch}\n'.encode(
@@ -172,10 +177,13 @@ class FakeSbc:
             # Mirrors the SBC: relative acquisition age beside the scan and -1
             # (with no ranges) whenever the lidar is not ready.
             laser_age = self.lidar_scan_age_ms if lidar_ready else -1
+        source = ''
+        if self.source_timing and not self.omit_source_metadata:
+            source = f'|ODOM_SOURCE_MS:{time.monotonic_ns() // 1_000_000},0'
         return (
             f'ODOM:{odom_x},{odom_y},{odom_th},0,0|LASER:{laser_field}'
             f'|LASER_AGE_MS:{laser_age}'
-            f'|ODOM_EPOCH:{self.odom_epoch}\n'
+            f'|ODOM_EPOCH:{self.odom_epoch}{source}\n'
             f'AUX:SONAR=|BATT=24.0,80,{charge_state},25.0|'
             f'FLAGS=0,0,0,{int(motors_enabled)},{int(estop_pressed)}|'
             f'DOCK={dock}|LIDAR={self.lidar_state},{int(self.lidar_supported)},'
@@ -467,9 +475,9 @@ def seed_harness(bridge, client_node):
 
 
 @contextmanager
-def build_harness(advertise_undock=True):
+def build_harness(advertise_undock=True, source_timing=False):
     with NativeFixture(rclpy) as lifetime:
-        fake = FakeSbc(advertise_undock=advertise_undock)
+        fake = FakeSbc(advertise_undock=advertise_undock, source_timing=source_timing)
         lifetime.cleanups.append(fake.close)
         lifetime.init()
         amcl = lifetime.node(FakeAmcl())
@@ -1057,6 +1065,19 @@ def test_invalid_odometry_cannot_refresh_pose_and_valid_stream_recovers(harness,
     assert bridge._pose_at == before
     fake.telemetry_paused = False
     assert wait_until(lambda: bridge._pose_at > before)
+
+
+def test_advertised_sip_timing_never_falls_back_to_legacy_on_missing_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv('PATROLBOT_STATE_DIR', str(tmp_path))
+    with build_harness(source_timing=True) as (fake, bridge, _client, _executor):
+        assert bridge._epoch.guard.source_timing
+        fake.omit_source_metadata = True
+        assert wait_until(lambda: bridge._odom_rejections.get('missing-odometry-source', 0) >= 2)
+        before = bridge._pose_at
+        assert wait_until(lambda: not bridge._epoch.commands_allowed)
+        assert bridge._pose_at == before
+        fake.omit_source_metadata = False
+        assert wait_until(lambda: bridge._pose_at > before and bridge._epoch.commands_allowed)
 
 
 @pytest.mark.parametrize(

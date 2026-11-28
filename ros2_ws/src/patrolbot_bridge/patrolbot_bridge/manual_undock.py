@@ -68,7 +68,7 @@ class ManualUndockRuntime:
         e = self.node._epoch
         if e.guard.ready and session == e.guard.session:
             self.raw.observe(line, received, now=time.monotonic(), session=session,
-                             epoch=e.guard.epoch)
+                             epoch=e.guard.epoch, source_timing=e.guard.source_timing)
 
     def web_session(self, message, info):
         """Keep an active web session busy until an explicit local release."""

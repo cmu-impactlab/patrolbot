@@ -5,3 +5,4 @@
 /tests/scan_timing_test
 /tests/lidar_power_test
 /tests/encoder_capture_test
+/tests/sip_odometry_test

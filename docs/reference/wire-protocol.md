@@ -254,6 +254,34 @@ barrier. Origin association does not waive existing covariance/freshness gates.
 The runtime coordinator and consumers below implement these gates; the pure
 contract itself never publishes a seed or releases navigation.
 
+### Motor odometry sample timing (optional protocol-2 capability)
+
+`ODOM_SOURCE_TIMING_V1` in HELLO requires one
+`|ODOM_SOURCE_MS:<sip_ms>,<age_ms>` section per navigation frame. Both fields
+are unsigned decimal milliseconds (1–16 digits, no leading zeroes except
+`0`). `sip_ms` is ARIA's monotonic receive timestamp for the applied motor
+SIP (`0x32`/`0x33`), adjusted by ARIA's configured kinematics delay. `age_ms`
+is the elapsed time from that timestamp to SBC frame assembly. If the stamp
+is unconfirmed, non-monotonic-clock-based or in the future, the SBC sends
+`-1,-1` and the bridge rejects the navigation frame. This is not a controller
+hardware clock or a synchronized SBC/Pi wall timestamp.
+
+An already-accepted stamp with identical odometry does not refresh pose,
+covariance, history or `/odom`; eligible scans on that frame can still publish
+while the accepted pose is fresh. An identical pose with a new stamp is not a
+duplicate. Conflicting payloads for the same stamp, regressed source/assembly
+time and expired acquisition-plus-queue age fail closed. Continuity uses the
+smaller of elapsed SIP time and elapsed Pi receipt time from the last distinct
+accepted sample, with the existing one-period margin and unchanged speed
+limits. Pose freshness discounts reported source age; TCP transit/short-write
+delay is not measured, and ROS message timestamps remain on the existing
+receipt-time path.
+
+Timing mode stays fixed across TCP reconnects for the same `ODOM_EPOCH`.
+Missing or malformed timing on an advertised stream never falls back to
+receipt-time validation. An older SBC with an explicit epoch but without the
+capability keeps receipt-time behavior; older bridges ignore the extension.
+
 ### Runtime recovery
 
 The bridge now associates every queued navigation and auxiliary frame with its

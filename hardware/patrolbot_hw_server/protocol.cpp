@@ -376,7 +376,7 @@ std::string formatHello(const std::string& odom_epoch) {
   }
   std::stringstream stream;
   stream << "HELLO:PROTOCOL=" << kProtocolVersion << ":FEATURES=UNDOCK,LIDAR_POWER,MOTOR_DISABLE,MANUAL_UNDOCK_V1";
-  if (!odom_epoch.empty()) stream << ":ODOM_EPOCH=" << odom_epoch;
+  if (!odom_epoch.empty()) stream << ",ODOM_SOURCE_TIMING_V1:ODOM_EPOCH=" << odom_epoch;
   stream << "\n";
   return stream.str();
 }

@@ -65,9 +65,6 @@ services:
       RMW_FASTRTPS_PUBLICATION_MODE: ASYNCHRONOUS
       PATROLBOT_ROLE: bridge
       PATROLBOT_TUNING_ENABLED: "${PATROLBOT_TUNING_ENABLED:-0}"
-      PATROLBOT_TUNING_RUNTIME_ENABLED: "${PATROLBOT_TUNING_RUNTIME_ENABLED:-0}"
-      PATROLBOT_TUNING_AUTH_KEY_FILE: /run/patrolbot-secrets/tuning.key
-      PATROLBOT_ROBOT_ID: "${PATROLBOT_ROBOT_ID:-patrolbot-01}"
     command:
       - ros2
       - run
@@ -78,7 +75,6 @@ services:
       - /opt/patrolbot_ws/src/patrolbot_bridge/config/bridge_params.yaml
     volumes:
       - patrolbot-state:/var/lib/patrolbot
-      - patrolbot-secrets:/run/patrolbot-secrets:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/ros2_ws/src/patrolbot_bridge:/opt/patrolbot_ws/src/patrolbot_bridge:ro
       - ${PATROLBOT_ROOT:-/home/ubuntu/patrolbot-repo}/logs/bridge:/root/.ros/log
 
@@ -157,4 +153,3 @@ services:
 
 volumes:
   patrolbot-state:
-  patrolbot-secrets:

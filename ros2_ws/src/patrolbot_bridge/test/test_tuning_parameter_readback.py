@@ -30,7 +30,7 @@ def test_uninitialized_store_returns_real_observations_without_claiming_saved_ac
     assert snapshot['desired_revision'] is None and snapshot['active_revision'] is None
     assert snapshot['active_known'] is False and snapshot['writable'] is False
     assert snapshot['activation_supported'] is False
-    assert snapshot['write_disabled_reason'] == 'Robot tuning has not been initialized.'
+    assert snapshot['write_disabled_reason'] == 'Robot tuning is read-only.'
     assert not store.base.exists()
 
 
@@ -84,19 +84,6 @@ def bridge_method(name, namespace):
     exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])),
                  str(source), 'exec'), namespace)
     return namespace[name]
-
-
-def test_save_admission_only_needs_fresh_sbc_not_motors_pose_or_idle():
-    method = bridge_method('_tuning_save_admission', {'time': NS(monotonic=lambda: 10.)})
-    # Deliberately has no motors, pose, odometry-valid or autonomy-idle attributes.
-    owner = NS(_state_lock=threading.Lock(), _link_connected=True, _flags_at=9.8)
-    assert method(owner) == (True, '')
-    owner._link_connected = False
-    assert method(owner)[0] is False
-    owner._link_connected, owner._flags_at = True, 9.
-    assert method(owner)[0] is False
-    owner._flags_at = 11.
-    assert method(owner)[0] is False
 
 
 def test_verified_committed_readback_is_independent_of_activation_enablement():

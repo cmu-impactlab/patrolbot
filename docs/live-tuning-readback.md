@@ -24,13 +24,8 @@ This observation does **not** establish `active_known` or a committed revision.
 Those still require exact revision/digest/parameter verification. That read-only
 verification no longer depends on permission to activate nodes.
 
-Desired saves require administrator-derived signed authorization, an initialized
-store and a fresh SBC link. They require neither motors enabled, localization,
-stationarity nor navigation idle. Link evidence is checked again after writer
-admission. Saves do not activate the desired values. Applying/redeploying retains
-the existing safe-idle/lifecycle ownership and explicit localization-seed gates.
-
-`write_disabled_reason` reports the precise store/key/link refusal. An
-uninitialized snapshot remains readable with null session/revision and false
-writable/activation flags. Enabling editing still requires separately reviewed
-private-key provisioning and initialization against the actual deployed baseline.
+Save, apply, redeploy, and restore are no longer supported runtime operations.
+`write_disabled_reason` reports that the service is read-only; the compatibility
+write and activation flags are always false. An uninitialized snapshot remains
+readable with null session/revision, and existing ACTIVE configuration and motion
+limits remain in force.

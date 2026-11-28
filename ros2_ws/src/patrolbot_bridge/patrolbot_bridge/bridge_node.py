@@ -40,11 +40,6 @@ from patrolbot_bridge.safety_telemetry import (
 )
 from patrolbot_bridge.scan_timing import compute_scan_stamp_ns, parse_laser_age
 from patrolbot_bridge.tuning_activation import ActivationCoordinator
-from patrolbot_bridge.tuning_authorization import (
-    AuthorizationError,
-    load_key as load_tuning_key,
-    verify as verify_tuning_authorization,
-)
 from patrolbot_bridge.tuning_backend import LifecycleBackend, RosParameterTransport
 from patrolbot_bridge.tuning_initialize import marker_path, RuntimeGuard
 from patrolbot_bridge.tuning_policy import clamp_drive, limits_from_store, PolicyCache
@@ -1894,8 +1889,6 @@ class PatrolBotBridge(Node):
             Twist, '/cmd_vel_out', lambda msg, info: self._tuning_velocity_observed(
                 '/cmd_vel_out', 'cmd_vel_mux', msg, info), 10)
         self.create_timer(.1, self._tuning_publisher_health, callback_group=self._callbacks)
-        self._tuning_authorization_key = None
-        self._tuning_robot_id = os.environ.get('PATROLBOT_ROBOT_ID', 'patrolbot-01')
         self._tuning_runtime_guard = None
         try:
             self._tuning_runtime_guard = RuntimeGuard(self._tuning_dir())
@@ -1911,19 +1904,13 @@ class PatrolBotBridge(Node):
             self._tuning_error = 'tuning state volume unavailable'
             return
         try:
-            self._tuning_authorization_key = load_tuning_key(
-                os.environ.get('PATROLBOT_TUNING_AUTH_KEY_FILE', ''))
-        except (AuthorizationError, OSError):
-            self.get_logger().warning(
-                'Tuning mutations disabled: private signing key unavailable.')
-        try:
             registry_path = self._tuning_registry_path()
             if not registry_path:
                 raise RuntimeError('tuning registry is not installed')
             registry = _read_registry(registry_path)
             store = RevisionStore(self._tuning_dir(), registry)
-            # No verified native parameter mutability and no approved fixed
-            # backend yet: every activation request is refused, never faked.
+            # The backend is retained for readback and existing recovery holds,
+            # not activation.
             self._tuning_transport = RosParameterTransport(self)
             from patrolbot_bridge.tuning_readback import ParameterObserver
             self._parameter_observer = ParameterObserver(
@@ -1932,7 +1919,7 @@ class PatrolBotBridge(Node):
             backend = LifecycleBackend(
                 store, self._tuning_transport, self._tuning_evidence,
                 self._tuning_require_seed,
-                enabled=os.environ.get('PATROLBOT_TUNING_RUNTIME_ENABLED', '0') == '1',
+                enabled=False,
                 selected_map=self._tuning_selected_map,
                 generation=lambda: (self._session_generation, self._epoch.guard.generation))
             coordinator = ActivationCoordinator(store, self._epoch, backend)
@@ -1943,10 +1930,8 @@ class PatrolBotBridge(Node):
             self._tuning_store = store
             self._tuning_service = TuningService(
                 store, coordinator,
-                mutations_enabled=self._tuning_authorization_key is not None,
                 runtime_readback=self._current_tuning_readback,
-                parameter_readback=self._parameter_observer.current,
-                write_admission=self._tuning_save_admission)
+                parameter_readback=self._parameter_observer.current)
             try:
                 job = coordinator.recover()
             except StoreUnavailable as exc:
@@ -1981,15 +1966,6 @@ class PatrolBotBridge(Node):
             return False
         except OSError:
             return True
-
-    def _tuning_save_admission(self):
-        # Saving desired state neither commands motion nor changes live nodes.
-        # It requires a fresh SBC link, not motors, localization or safe idle.
-        now = time.monotonic()
-        with self._state_lock:
-            linked = bool(self._link_connected and self._flags_at
-                          and 0 <= now - self._flags_at <= .5)
-        return linked, '' if linked else 'The SBC link is disconnected or stale.'
 
     @staticmethod
     def _tuning_dir():
@@ -2253,12 +2229,7 @@ class PatrolBotBridge(Node):
             self._tuning_readback_lock.release()
 
     def _tuning_callback(self, request, response):
-        """
-        Serve inspection and short-lived server-authorized tuning mutations.
-
-        A DDS actor claim alone is never authority: mutations require a valid
-        signature from the authenticated server bound to this robot and request.
-        """
+        """Serve inspection only, including for clients with old signing keys."""
         request_id = None
         try:
             if self._tuning_service is not None:
@@ -2273,12 +2244,7 @@ class PatrolBotBridge(Node):
                           and isinstance(payload.get('request'), dict) else None)
                 request_id = raw_id if isinstance(raw_id, str) and len(raw_id) <= 128 else None
                 if operation not in ('read', 'status'):
-                    try:
-                        payload = verify_tuning_authorization(
-                            payload, getattr(self, '_tuning_authorization_key', None),
-                            getattr(self, '_tuning_robot_id', 'patrolbot-01'))
-                    except AuthorizationError as exc:
-                        raise ServiceError('refused', 'read_only: ' + str(exc)) from exc
+                    raise ServiceError('refused', 'read_only: tuning changes have been removed')
                 elif payload.get('authorization') is None:
                     payload = {k: v for k, v in payload.items() if k != 'authorization'}
                 response.result_json = self._tuning_service.result_json(
